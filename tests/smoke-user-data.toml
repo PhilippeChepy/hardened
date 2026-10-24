@@ -1,0 +1,11 @@
+# User-data of `cargo builder test`: one short-lived workload whose output dust-init forwards to the
+# console, where the test looks for it.
+
+[settings.network]
+hostname = "smoke"
+
+[settings.containers.hello]
+image = "docker.io/library/busybox:1.37"
+command = ["sh", "-c", "echo hello from a hardened workload; cat /proc/self/cgroup"]
+restart = "never"
+console = true

@@ -1,0 +1,22 @@
+[package]
+name = "dust-proto"
+description = "gRPC API contract between dust-init, dust-api and clients"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[lib]
+# Generated code: proto comments are not Rust doctests.
+doctest = false

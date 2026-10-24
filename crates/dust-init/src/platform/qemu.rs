@@ -1,0 +1,23 @@
+//! Local qemu: user-data is passed with
+//! `-fw_cfg name=opt/hardened/user-data,file=user-data.toml` and read from sysfs.
+
+use super::Metadata;
+
+pub const FW_CFG_USER_DATA: &str = "/sys/firmware/qemu_fw_cfg/by_name/opt/hardened/user-data/raw";
+
+pub async fn fetch() -> anyhow::Result<Metadata> {
+    let user_data = match tokio::fs::read(FW_CFG_USER_DATA).await {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(anyhow::Error::new(e).context(FW_CFG_USER_DATA)),
+    };
+    let instance_id = std::fs::read_to_string("/sys/class/dmi/id/product_uuid")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    Ok(Metadata {
+        instance_id,
+        user_data,
+        ..Metadata::default()
+    })
+}

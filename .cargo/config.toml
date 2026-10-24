@@ -1,0 +1,2 @@
+[alias]
+builder = "run --quiet --package dust-builder --"

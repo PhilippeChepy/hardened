@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package hardened.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Machine inventory, logs and power management.
+service Machine {
+  rpc Version(google.protobuf.Empty) returns (VersionResponse);
+  // Streams dust's own log, optionally following new entries.
+  rpc Logs(LogsRequest) returns (stream LogEntry);
+  // Effective settings (user-data merged with API changes), secrets redacted, as TOML.
+  rpc GetSettings(google.protobuf.Empty) returns (SettingsResponse);
+  rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+message VersionResponse {
+  string os_name = 1;
+  string os_version = 2;
+  string kernel = 3;
+  string platform = 4;
+  string instance_id = 5;
+  string hostname = 6;
+  string boot_id = 7;
+  google.protobuf.Timestamp booted_at = 8;
+}
+
+message LogsRequest {
+  bool follow = 1;
+  // Number of past entries to return first; 0 means all retained entries.
+  uint32 tail = 2;
+}
+
+message LogEntry {
+  google.protobuf.Timestamp time = 1;
+  string level = 2;
+  string target = 3;
+  string message = 4;
+}
+
+message SettingsResponse {
+  string toml = 1;
+}
+
+// Containers run by dust through containerd.
+service Workloads {
+  rpc List(google.protobuf.Empty) returns (ListWorkloadsResponse);
+  // Creates or replaces a workload. API-managed workloads persist across reboots.
+  rpc Apply(ApplyWorkloadRequest) returns (Workload);
+  rpc Remove(WorkloadRef) returns (google.protobuf.Empty);
+  rpc Restart(WorkloadRef) returns (google.protobuf.Empty);
+  rpc Logs(WorkloadLogsRequest) returns (stream LogChunk);
+}
+
+enum RestartPolicy {
+  RESTART_POLICY_UNSPECIFIED = 0;  // defaults to ALWAYS
+  RESTART_POLICY_ALWAYS = 1;
+  RESTART_POLICY_ON_FAILURE = 2;
+  RESTART_POLICY_NEVER = 3;
+}
+
+enum WorkloadSource {
+  WORKLOAD_SOURCE_UNSPECIFIED = 0;
+  WORKLOAD_SOURCE_USER_DATA = 1;
+  WORKLOAD_SOURCE_API = 2;
+}
+
+message Mount {
+  string source = 1;
+  string destination = 2;
+  bool read_only = 3;
+}
+
+message WorkloadSpec {
+  string image = 1;
+  // Overrides the image entrypoint when non-empty.
+  repeated string command = 2;
+  // Overrides the image command (arguments) when non-empty.
+  repeated string args = 3;
+  map<string, string> env = 4;
+  bool privileged = 5;
+  RestartPolicy restart = 6;
+  repeated Mount mounts = 7;
+}
+
+message ApplyWorkloadRequest {
+  string name = 1;
+  WorkloadSpec spec = 2;
+}
+
+message WorkloadRef {
+  string name = 1;
+}
+
+message Workload {
+  string name = 1;
+  WorkloadSpec spec = 2;
+  WorkloadSource source = 3;
+  uint32 restarts = 4;
+  // Lifecycle state, with the data only meaningful in it.
+  oneof state {
+    Pending pending = 5;
+    Pulling pulling = 6;
+    Running running = 7;
+    Exited exited = 8;
+    Failed failed = 9;
+  }
+
+  // Preparing, or waiting to restart.
+  message Pending {}
+  message Pulling {}
+  message Running {
+    uint32 pid = 1;
+  }
+  message Exited {
+    int32 exit_code = 1;
+  }
+  // Could not be started; retried with backoff.
+  message Failed {
+    string reason = 1;
+  }
+}
+
+message ListWorkloadsResponse {
+  repeated Workload workloads = 1;
+}
+
+message WorkloadLogsRequest {
+  string name = 1;
+  bool follow = 2;
+  // Number of trailing bytes to send first; 0 means the whole log.
+  uint64 tail_bytes = 3;
+}
+
+message LogChunk {
+  bytes data = 1;
+}
+
+// Remote attestation evidence from the (v)TPM.
+service Attestation {
+  rpc Pcrs(PcrsRequest) returns (PcrsResponse);
+  // Raw TCG event log (firmware + systemd-stub measurements).
+  rpc EventLog(google.protobuf.Empty) returns (EventLogResponse);
+  // TPM2_Quote over the selected PCRs, signed by dust's attestation key.
+  rpc Quote(QuoteRequest) returns (QuoteResponse);
+}
+
+enum HashAlgorithm {
+  HASH_ALGORITHM_UNSPECIFIED = 0;  // defaults to SHA256
+  HASH_ALGORITHM_SHA1 = 1;
+  HASH_ALGORITHM_SHA256 = 2;
+  HASH_ALGORITHM_SHA384 = 3;
+}
+
+message PcrsRequest {
+  HashAlgorithm bank = 1;
+  // PCR indexes; empty means 0-23.
+  repeated uint32 pcrs = 2;
+}
+
+message PcrValue {
+  uint32 index = 1;
+  bytes digest = 2;
+}
+
+message PcrsResponse {
+  HashAlgorithm bank = 1;
+  repeated PcrValue values = 2;
+}
+
+message EventLogResponse {
+  bytes event_log = 1;
+}
+
+message QuoteRequest {
+  // Verifier-chosen freshness nonce (TPM2 qualifying data), at most 64 bytes.
+  bytes nonce = 1;
+  HashAlgorithm bank = 2;
+  repeated uint32 pcrs = 3;
+}
+
+message QuoteResponse {
+  // TPMS_ATTEST structure, marshalled (TPM2B contents).
+  bytes attest = 1;
+  // TPMT_SIGNATURE, marshalled.
+  bytes signature = 2;
+  // TPMT_PUBLIC of the attestation key, marshalled.
+  bytes ak_public = 3;
+  repeated PcrValue values = 4;
+}
