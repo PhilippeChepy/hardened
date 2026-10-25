@@ -99,7 +99,7 @@ fn esp_tree(out: &mut String, esp: &Path) -> anyhow::Result<()> {
     let mut tree = Tree::default();
     walk(&fs.root_dir(), &mut tree, "")?;
     let _ = writeln!(out, "\nESP (partition 1)");
-    tree.render(out);
+    tree.render(out, "  ");
     Ok(())
 }
 
@@ -122,7 +122,7 @@ fn rootfs_tree(out: &mut String, manifest: &Manifest) {
         tree.insert(path, node);
     }
     let _ = writeln!(out, "\nRoot filesystem (partitions 2 + 3, read-only, dm-verity)");
-    tree.render(out);
+    tree.render(out, "  ");
     let _ = writeln!(out, "\nBy component");
     for (component, (entries, bytes)) in totals {
         let _ = writeln!(
@@ -178,25 +178,19 @@ impl Node {
 struct Tree(BTreeMap<String, Node>);
 
 impl Tree {
+    /// Inserts `node` at `path`, keeping the children a directory may already have.
     fn insert(&mut self, path: &str, node: Node) {
+        let (parents, name) = path.rsplit_once('/').unwrap_or(("", path));
         let mut tree = self;
-        let mut segments = path.split('/').peekable();
-        while let Some(segment) = segments.next() {
-            if segments.peek().is_none() {
-                let slot = tree.0.entry(segment.to_owned()).or_default();
-                slot.dir = node.dir;
-                slot.label = node.label;
-                return;
-            }
-            tree = &mut tree.0.entry(segment.to_owned()).or_default().children;
+        for parent in parents.split('/').filter(|p| !p.is_empty()) {
+            tree = &mut tree.0.entry(parent.to_owned()).or_default().children;
         }
+        let slot = tree.0.entry(name.to_owned()).or_default();
+        slot.dir = node.dir;
+        slot.label = node.label;
     }
 
-    fn render(&self, out: &mut String) {
-        self.render_with(out, "  ");
-    }
-
-    fn render_with(&self, out: &mut String, indent: &str) {
+    fn render(&self, out: &mut String, indent: &str) {
         let count = self.0.len();
         for (i, (name, node)) in self.0.iter().enumerate() {
             let last = i + 1 == count;
@@ -204,7 +198,7 @@ impl Tree {
             let slash = if node.dir { "/" } else { "" };
             let _ = writeln!(out, "{indent}{branch}{name}{slash}{}", node.label);
             let deeper = format!("{indent}{}", if last { "    " } else { "│   " });
-            node.children.render_with(out, &deeper);
+            node.children.render(out, &deeper);
         }
     }
 }

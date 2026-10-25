@@ -1,0 +1,75 @@
+# LLVM's runtime libraries: libunwind, libc++abi and libc++ (what libgcc_s and libstdc++ are
+# with GCC). Built by the bootstrap clang against musl and compiler-rt, with ThinLTO; C++ programs
+# and Rust's panics use them. The image's programs link libunwind statically.
+
+version = "{llvm.version}"
+kind = "library"
+summary = "LLVM libunwind, libc++abi and libc++ (libunwind linked into the image's programs)"
+license = "Apache-2.0 WITH LLVM-exception"
+homepage = "https://libcxx.llvm.org"
+purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
+cpe = "llvm:libcxx"
+
+depends-on = ["compiler-rt", "musl"]
+
+[sources.src]
+from = "llvm"
+
+# What the bootstrap clang links against: musl, and its resource directory with compiler-rt (it
+# has none of its own yet).
+[[build]]
+copy.from = "{dep:tools/musl}/*"
+copy.into = "{work:sysroot}"
+
+[[build]]
+mkdir = "{work:resource}"
+
+[[build]]
+run.cmd = ["cp", "-a", "/cross/llvm/lib/clang/{llvm.major}/include", "{work:resource}"]
+
+[[build]]
+copy.from = "{dep:tools/compiler-rt}/{compiler-rt.resource-dir}/lib"
+copy.into = "{work:resource}"
+
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "cmake",
+    "-G",
+    "Unix Makefiles",
+    "-S",
+    "{src}/runtimes",
+    "-B",
+    "{work:build}",
+    "{compiler-rt.cross-options}",
+    "-DCMAKE_SYSROOT={work:sysroot}",
+    "-DCMAKE_C_FLAGS=-flto=thin -resource-dir={work:resource}",
+    "-DCMAKE_CXX_FLAGS=-flto=thin -resource-dir={work:resource}",
+    "-DCMAKE_ASM_FLAGS=-flto=thin -resource-dir={work:resource}",
+    "-DLLVM_ENABLE_RUNTIMES=libunwind;libcxxabi;libcxx",
+    # No C++ library to check the compilers with yet.
+    "-DCMAKE_C_COMPILER_WORKS=ON",
+    "-DCMAKE_CXX_COMPILER_WORKS=ON",
+    "-DCMAKE_ASM_COMPILER_WORKS=ON",
+    # /usr/lib, not /usr/lib/<target>.
+    "-DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF",
+    "-DLIBCXX_HAS_MUSL_LIBC=ON",
+    "-DLIBCXX_CXX_ABI=libcxxabi",
+    "-DLIBCXX_USE_COMPILER_RT=ON",
+    "-DLIBCXX_ENABLE_STATIC_ABI_LIBRARY=OFF",
+    "-DLIBCXX_HARDENING_MODE=fast",
+    "-DLIBCXX_INCLUDE_TESTS=OFF",
+    "-DLIBCXX_INCLUDE_BENCHMARKS=OFF",
+    "-DLIBCXXABI_USE_LLVM_UNWINDER=ON",
+    "-DLIBCXXABI_ENABLE_STATIC_UNWINDER=OFF",
+    "-DLIBCXXABI_USE_COMPILER_RT=ON",
+    "-DLIBCXXABI_INCLUDE_TESTS=OFF",
+    "-DLIBUNWIND_USE_COMPILER_RT=ON",
+    "-DLIBUNWIND_INCLUDE_TESTS=OFF",
+]
+
+[[build]]
+make.dir = "{work:build}"
+make.install = true

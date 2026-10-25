@@ -1,0 +1,16 @@
+version = "1.5.7"
+kind = "library"
+summary = "Zstandard compression library"
+license = "BSD-3-Clause OR GPL-2.0-only"
+homepage = "https://facebook.github.io/zstd/"
+cpe = "facebook:zstandard"
+
+depends-on = ["llvm", "zlib"]
+
+[sources.src]
+url = "https://github.com/facebook/zstd/releases/download/v{version}/zstd-{version}.tar.gz"
+sha256 = "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+
+[[build]]
+make.args = ["PREFIX=/usr"]
+make.install = ["install", "PREFIX=/usr"]

@@ -1,0 +1,17 @@
+# libucontext: `getcontext`, `makecontext` and `swapcontext`, which musl lacks and systemd's
+# musl build requires.
+
+version = "1.5.2"
+kind = "library"
+summary = "ucontext functions for musl"
+license = "ISC"
+homepage = "https://github.com/kaniini/libucontext"
+
+depends-on = ["llvm", "meson", "ninja", "pkgconf"]
+
+[sources.src]
+url = "https://github.com/kaniini/libucontext/archive/refs/tags/libucontext-{version}.tar.gz"
+sha256 = "9230397327bbf580e04c9456d1509e9af19599c7f6deca7f75969ece6e9d598e"
+
+[[build]]
+meson = {}

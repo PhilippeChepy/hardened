@@ -2,13 +2,13 @@
 //!
 //! Component outputs are merged into one tree; every path must be owned by exactly one component
 //! (directories may be shared). The result is checked before it is sealed with dm-verity:
-//! - every dynamically linked ELF file finds its interpreter, its `DT_NEEDED` libraries and the
-//!   symbol versions it requires inside the image (there is no package manager to fix it later);
+//! - every ELF file is a static executable or a kernel module: no dynamic loader, no shared
+//!   library, so nothing to resolve or preload at run time;
 //! - nothing is setuid/setgid or world-writable.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
 use serde::Serialize;
@@ -17,9 +17,6 @@ use walkdir::WalkDir;
 use crate::build::Built;
 use crate::recipe::ComponentName;
 use crate::sha256::Sha256;
-
-/// Library directory searched by the dynamic loader (glibc's `slibdir`).
-const LIBDIR: &str = "usr/lib";
 
 /// Every path of the root filesystem and the component that provides it.
 #[derive(Debug, Default, Serialize)]
@@ -105,13 +102,12 @@ impl Manifest {
         if let Some(existing) = self.entries.get(path) {
             bail!("/{path} is provided by both {} and {component}", existing.component());
         }
-        let parent = Path::new(path).parent().map(|p| p.to_string_lossy().into_owned());
-        ensure!(
-            parent
-                .as_ref()
-                .is_none_or(|p| p.is_empty() || matches!(self.entries.get(p), Some(Entry::Dir { .. }))),
-            "the directory of /{path} is not part of the root filesystem"
-        );
+        if let Some((parent, _)) = path.rsplit_once('/') {
+            ensure!(
+                matches!(self.entries.get(parent), Some(Entry::Dir { .. })),
+                "the directory of /{path} is not part of the root filesystem"
+            );
+        }
         let mode = Mode(mode & 0o777);
         let target = root.join(path);
         std::fs::write(&target, contents)?;
@@ -186,7 +182,7 @@ pub fn assemble(components: &[&Built], dest: &Path) -> anyhow::Result<Manifest> 
     }
 
     check_permissions(&manifest)?;
-    check_elf_closure(dest, &manifest)?;
+    check_static(dest, &manifest)?;
     Ok(manifest)
 }
 
@@ -206,138 +202,56 @@ fn check_permissions(manifest: &Manifest) -> anyhow::Result<()> {
             problems.push(format!("/{path} is world-writable ({mode:o})"));
         }
     }
-    if !problems.is_empty() {
-        bail!("root filesystem permission check failed:\n  {}", problems.join("\n  "));
-    }
+    ensure!(
+        problems.is_empty(),
+        "root filesystem permission check failed:\n  {}",
+        problems.join("\n  ")
+    );
     Ok(())
 }
 
-/// Dynamic linking information of one ELF file.
-#[derive(Debug, Default)]
-struct ElfInfo {
-    interpreter: Option<String>,
-    soname: Option<String>,
-    needed: Vec<String>,
-    /// Required symbol versions, per library.
-    version_needs: BTreeMap<String, BTreeSet<String>>,
-    /// Symbol versions this file defines.
-    version_defs: BTreeSet<String>,
-}
-
-fn parse_elf(bytes: &[u8]) -> anyhow::Result<Option<ElfInfo>> {
+/// Why an ELF file is not a static executable or a kernel module, if it is not.
+fn dynamic_linking(bytes: &[u8]) -> anyhow::Result<Option<String>> {
     if !bytes.starts_with(b"\x7fELF") {
         return Ok(None);
     }
     let elf = goblin::elf::Elf::parse(bytes)?;
-    if elf.dynamic.is_none() {
-        // Static executable (e.g. containerd, built without cgo).
-        return Ok(Some(ElfInfo::default()));
+    if let Some(interpreter) = elf.interpreter {
+        return Ok(Some(format!("dynamically linked (interpreter {interpreter})")));
     }
-
-    let strtab = &elf.dynstrtab;
-    let string = |offset: usize| strtab.get_at(offset).map(str::to_owned);
-    let mut info = ElfInfo {
-        interpreter: elf.interpreter.map(str::to_owned),
-        soname: elf.soname.map(str::to_owned),
-        needed: elf.libraries.iter().map(|s| (*s).to_owned()).collect(),
-        ..ElfInfo::default()
-    };
-    if let Some(verneed) = &elf.verneed {
-        for need in verneed.iter() {
-            let Some(file) = string(need.vn_file) else { continue };
-            let versions = info.version_needs.entry(file).or_default();
-            versions.extend(need.iter().filter_map(|aux| string(aux.vna_name)));
-        }
+    if !elf.libraries.is_empty() {
+        return Ok(Some(format!("needs shared libraries {}", elf.libraries.join(", "))));
     }
-    if let Some(verdef) = &elf.verdef {
-        for def in verdef.iter() {
-            info.version_defs
-                .extend(def.iter().filter_map(|aux| string(aux.vda_name)));
-        }
+    // A position-independent file without an interpreter: a static PIE (flagged as such by the
+    // linker) or a shared library.
+    let pie = elf
+        .dynamic
+        .as_ref()
+        .is_some_and(|dynamic| dynamic.info.flags_1 & goblin::elf::dynamic::DF_1_PIE != 0);
+    if elf.header.e_type == goblin::elf::header::ET_DYN && !pie {
+        return Ok(Some("is a shared library".to_owned()));
     }
-    Ok(Some(info))
+    Ok(None)
 }
 
-fn check_elf_closure(root: &Path, manifest: &Manifest) -> anyhow::Result<()> {
-    let mut elves = BTreeMap::new();
+/// Every ELF file is a static executable or a kernel module: the image holds no dynamic loader
+/// or shared library.
+fn check_static(root: &Path, manifest: &Manifest) -> anyhow::Result<()> {
+    let mut problems = Vec::new();
     for (path, entry) in &manifest.entries {
         if let Entry::File { .. } = entry {
             let bytes = std::fs::read(root.join(path))?;
-            if let Some(info) = parse_elf(&bytes).with_context(|| format!("parsing /{path}"))? {
-                elves.insert(path.clone(), info);
+            if let Some(problem) = dynamic_linking(&bytes).with_context(|| format!("parsing /{path}"))? {
+                problems.push(format!("/{path} {problem}"));
             }
         }
     }
-
-    let mut problems = Vec::new();
-    for (path, info) in &elves {
-        if let Some(interpreter) = &info.interpreter {
-            match resolve(root, interpreter) {
-                Some(target) if elves.contains_key(&target) => {}
-                _ => problems.push(format!("/{path}: interpreter {interpreter} not found")),
-            }
-        }
-        for lib in &info.needed {
-            let Some(provider) = resolve(root, &format!("/{LIBDIR}/{lib}")).and_then(|p| elves.get(&p)) else {
-                problems.push(format!("/{path}: needs {lib}, not found in /{LIBDIR}"));
-                continue;
-            };
-            if provider.soname.as_deref().is_some_and(|soname| soname != lib) {
-                problems.push(format!("/{path}: {lib} has soname {:?}", provider.soname));
-            }
-            for version in info.version_needs.get(lib).into_iter().flatten() {
-                if !provider.version_defs.contains(version) {
-                    problems.push(format!("/{path}: needs {lib} version {version}, not defined"));
-                }
-            }
-        }
-    }
-    if !problems.is_empty() {
-        bail!("ELF dependency closure check failed:\n  {}", problems.join("\n  "));
-    }
+    ensure!(
+        problems.is_empty(),
+        "static linking check failed:\n  {}",
+        problems.join("\n  ")
+    );
     Ok(())
-}
-
-/// Resolves an absolute path inside `root`, following symlinks (relative and absolute) within it.
-/// Returns the path relative to `root`, without a leading slash.
-fn resolve(root: &Path, path: &str) -> Option<String> {
-    let mut resolved = PathBuf::new();
-    let mut pending: Vec<String> = path.split('/').rev().map(str::to_owned).collect();
-    let mut hops = 0;
-    while let Some(part) = pending.pop() {
-        match part.as_str() {
-            "" | "." => continue,
-            ".." => {
-                resolved.pop();
-                continue;
-            }
-            _ => {}
-        }
-        let candidate = resolved.join(&part);
-        let full = root.join(&candidate);
-        match std::fs::symlink_metadata(&full) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                hops += 1;
-                if hops > 40 {
-                    return None;
-                }
-                let link = std::fs::read_link(&full).ok()?;
-                if link.is_absolute() {
-                    resolved = PathBuf::new();
-                }
-                for component in link.components().rev() {
-                    if let Component::Normal(c) = component {
-                        pending.push(c.to_string_lossy().into_owned());
-                    } else if component == Component::ParentDir {
-                        pending.push("..".into());
-                    }
-                }
-            }
-            Ok(_) => resolved = candidate,
-            Err(_) => return None,
-        }
-    }
-    Some(resolved.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -345,28 +259,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_symlinks_inside_root() {
-        let dir = std::env::temp_dir().join(format!("dust-builder-resolve-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
-        std::fs::write(dir.join("usr/lib/ld.so"), b"").unwrap();
-        symlink("usr/lib", dir.join("lib64")).unwrap();
-        symlink("/usr/lib/ld.so", dir.join("usr/lib/ld-abs.so")).unwrap();
-        symlink("../lib/ld.so", dir.join("usr/lib/ld-rel.so")).unwrap();
-
-        assert_eq!(resolve(&dir, "/lib64/ld.so").as_deref(), Some("usr/lib/ld.so"));
-        assert_eq!(resolve(&dir, "/usr/lib/ld-abs.so").as_deref(), Some("usr/lib/ld.so"));
-        assert_eq!(resolve(&dir, "/lib64/ld-rel.so").as_deref(), Some("usr/lib/ld.so"));
-        assert_eq!(resolve(&dir, "/missing"), None);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn parses_host_binary() {
-        // The test binary itself is a dynamically linked ELF on Linux hosts.
+    fn rejects_dynamic_binaries() {
+        // The test binary itself is dynamically linked on Linux hosts.
         let exe = std::fs::read(std::env::current_exe().unwrap()).unwrap();
-        let info = parse_elf(&exe).unwrap().unwrap();
-        assert!(info.needed.iter().any(|l| l.starts_with("libc.so")));
-        assert!(info.version_needs.values().flatten().any(|v| v.starts_with("GLIBC_")));
+        assert!(
+            dynamic_linking(&exe)
+                .unwrap()
+                .unwrap()
+                .starts_with("dynamically linked")
+        );
+        assert_eq!(dynamic_linking(b"#!/bin/false\n").unwrap(), None);
     }
 }

@@ -1,0 +1,24 @@
+version = "3.02"
+kind = "application"
+summary = "NASM assembler, for OVMF"
+license = "BSD-2-Clause"
+homepage = "https://www.nasm.us"
+cpe = "nasm:netwide_assembler"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://www.nasm.us/pub/nasm/releasebuilds/{version}/nasm-{version}.tar.xz"
+sha256 = "87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d"
+
+[[build]]
+run.cmd = ["./configure", "--prefix=/usr"]
+
+# The assembler only (the documentation needs tools we do not build).
+[[build]]
+make.args = ["nasm"]
+
+[[build]]
+install.from = "{src}/nasm"
+install.to = "{dest}/usr/bin/nasm"
+install.mode = 0o755

@@ -1,0 +1,21 @@
+version = "1.5.2"
+kind = "application"
+summary = "OCI container runtime"
+license = "Apache-2.0"
+homepage = "https://github.com/opencontainers/runc"
+purl = "pkg:golang/github.com/opencontainers/runc@v{version}"
+cpe = "linuxfoundation:runc"
+
+depends-on = ["go", "pkgconf"]
+
+[sources.src]
+url = "https://github.com/opencontainers/runc/archive/refs/tags/v{version}.tar.gz"
+sha256 = "b5af44864a830c7032cf4a72efa0c6d44f701873d9507b127be31ad4d1d42ff3"
+
+# runc needs cgo (nsexec, libseccomp).
+[[build]]
+go-build.commands = [[".", "/usr/bin/runc"]]
+go-build.cgo = true
+go-build.libraries = "{dep:standard/libseccomp/dev}"
+go-build.tags = ["seccomp", "urfave_cli_no_docs"]
+go-build.vars = [["main.version", "{version}"], ["main.gitCommit", "v{version}"]]

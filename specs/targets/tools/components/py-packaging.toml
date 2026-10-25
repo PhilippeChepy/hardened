@@ -1,0 +1,15 @@
+version = "26.3"
+kind = "library"
+summary = "packaging, for GLib's build"
+license = "Apache-2.0 OR BSD-2-Clause"
+homepage = "https://github.com/pypa/packaging"
+purl = "pkg:pypi/packaging@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/p/packaging/packaging-{version}-py3-none-any.whl"
+sha256 = "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

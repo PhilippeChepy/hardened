@@ -1,0 +1,18 @@
+# Python, static, under /cross: the bootstrap toolset's Python, built on StageX, for the CMake
+# builds of compiler-rt, libc++ and LLVM. Its extension modules are built in (those whose
+# libraries StageX lacks are left out).
+
+summary = "Python interpreter, static"
+# Built on the seed alone.
+depends-on = []
+
+[vars]
+prefix = "/cross"
+args = [
+    "--disable-shared",
+    "--without-ensurepip",
+    # StageX's static musl has its own mimalloc: two can't link into one program.
+    "--without-mimalloc",
+    "MODULE_BUILDTYPE=static",
+    "LDFLAGS=-static",
+]

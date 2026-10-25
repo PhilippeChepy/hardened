@@ -13,17 +13,23 @@
 
 | Component | Why it is there | Linking |
 | --- | --- | --- |
-| Linux 6.18 (longterm) | the kernel, booted as a UKI | — |
+| Linux 6.18 (longterm) | the kernel, booted as a UKI: KVM/QEMU guest drivers and what Kubernetes and its CNIs need (BTF included), built in from `allnoconfig` | ThinLTO |
 | systemd-stub | UEFI stub of the UKI (only the stub ships) | — |
-| glibc | C library for runc and the Rust binaries | shared |
-| libgcc_s (GCC) | unwinder, required by Rust std and by glibc's pthread cancellation | shared |
 | containerd + runc shim | container runtime | static Go, no libc |
-| runc | OCI runtime | dynamic (cgo, libseccomp) |
-| libseccomp | seccomp filters for runc | shared |
-| pause | PID 1 of pod sandboxes, shipped inside the bundled sandbox image | static |
+| runc | OCI runtime | static PIE (cgo: musl, libseccomp; C with LTO) |
+| pause | PID 1 of pod sandboxes, shipped inside the bundled sandbox image | static (musl, LTO) |
 | CA certificates | registry TLS | — |
-| dust-init | init/agent | dynamic (glibc) |
-| dust-api | mTLS API proxy, a sandboxed process of dust-init | dynamic (glibc) |
+| dust-init | init/agent | static PIE (musl, libunwind; Rust LTO) |
+| dust-api | mTLS API proxy, a sandboxed process of dust-init | static PIE (musl, libunwind; Rust LTO) |
+
+Everything is compiled by clang (LLVM), linked by lld, against musl and compiler-rt (no GCC,
+glibc or libgcc), and every program is statically linked: the image has no dynamic loader and no
+shared library. What ships is built with ThinLTO: musl (but its start files, its
+dynamic linker's entry and mimalloc), libunwind, libseccomp, runc's C code and pause
+(`-flto=thin`), the Rust binaries (the workspace's release profile, `lto = "thin"`) and the kernel
+(`CONFIG_LTO_CLANG_THIN`); Go has no LTO. musl's allocator is mimalloc 3 in its hardened mode
+(`MI_SECURE`), built into musl (patches and glue in [`specs/targets/tools/components/musl`](../specs/targets/tools/components/musl), after
+Chimera Linux's mimalloc 2 integration). The build tools link musl dynamically.
 
 The image has no shell, no coreutils, no package manager, no systemd (only its EFI stub) and no
 interpreters. `/etc` lives on the read-only root; the files that change at runtime are symlinks
@@ -141,7 +147,7 @@ between `fork` and `exec`; `api.rs` only adds its binds, limits and networking s
 
 - **Namespaces:** its own mount, IPC, UTS and cgroup namespaces; the host network, where it
   listens.
-- **Root:** a read-only tmpfs holding only `/usr/lib` (glibc, libgcc_s), its binary, the control
+- **Root:** a read-only tmpfs holding only its (static) binary, the control
   socket directory (socket mode 0660, group 65534) and its TLS material, entered with
   `pivot_root`. There is no
   `/proc`, `/sys`, `/dev`, `/etc` or `/var`, and nothing else to execute.
@@ -171,76 +177,164 @@ configfs-tsm.
 
 ## Build system
 
-`cargo builder` runs on the host and runs every step needing tools inside the builder image
-(`builder/Containerfile`). The base image is pinned by digest, Debian packages come from a
-snapshot.debian.org date, and Go and rustup are pinned by checksum.
+`cargo builder` runs on the host and runs every step needing tools in a container of the
+component's build environment.
 
-Each component is a Rust recipe, `components/<name>/recipe.rs`, compiled into dust-builder.
-A recipe declares metadata and pinned sources, and describes its build through a small API.
-Recipes never run anything themselves: the description is a plan, a list of steps (unpack, run
-a command, install, copy, write...) on locations such as `work:`, `root:/`, `out:` or
-`dep(<component>):`. `cargo builder plan <component>` prints it. dust-builder executes the
-steps itself: commands in the component's builder container through `podman exec`, with their
-arguments passed as they are (there is no shell script and no quoting); file steps on the
-mounted directories.
+### Pipeline
 
-1. **Load:** resolve every recipe and describe its plan. A misused build API (writing to
-   another component's output or a read-only location, an undeclared image, a pattern in a
-   command, an invalid environment variable) fails here.
-2. **Fetch:** download sources and verify their SHA-256.
+The build's specifications are in [`specs/`](../specs/): a recipe per component
+(`components/`) and a pipeline of **targets** (`targets/`,
+[`targets.rs`](../crates/dust-builder/src/targets.rs),
+[`pipeline.rs`](../crates/dust-builder/src/pipeline.rs)), from a **seed** (the pinned StageX
+images of `bootstrap`'s `[seed]`, from which dust-builder generates a Containerfile) to the
+image:
+
+Like the stages of a Dockerfile, each target builds on one other, its `environment`, and its
+image is that environment's image with its own components' trees:
+
+```text
+bootstrap  FROM the StageX seed  static toolset under /cross: LLVM (clang, lld, compiler-rt),
+                                 BusyBox, make, CMake, Python; Go; the kernel's UAPI headers
+tools      FROM bootstrap        compiler-rt, musl, libc++, the userland, LLVM, interpreters,
+                                 build systems, libraries, Rust, the image tools and the test VM
+                                 (qemu, OVMF, swtpm)
+standard   FROM tools            the image: base-files, kernel, runc, containerd, pause, dust...
+```
+
+A target's `components` build on its environment's image (bootstrap's, on the seed), each with
+the trees of the target's components its recipe `depends-on`, and of what those depend on,
+dependencies first. Builds run in parallel, each as soon as what it depends on is built, and a
+component rebuilds only when what it builds with changes. In `tools`, the toolchain is spelled
+out: musl depends on compiler-rt, the userland on the target libraries, LLVM on all of them, and
+everything else on `llvm`. A dependency the environment already has is satisfied as is: standard's
+recipes list what they use of `tools` (the kernel's bison, perl or pahole...) as documentation,
+and a recipe may serve several targets. A component may be listed in several targets; it is then built in each (with the same
+cache key when its recipe and environment are the same). A target overrides a component's recipe
+with `targets/<target>/components/<component>.toml`, merged over it: tables merge key by key
+(metadata, `[vars]`, `[sources]`...), any other value replaces (`depends-on`, the `[[build]]`
+steps as a whole). Recipes put what a target may change in `[vars]`: bootstrap's make, CMake,
+Python and LLVM override only `prefix` (`/cross`) and their flags, to be built static on the seed
+alone. `extends` starts a target from another: its components come first, `kernel-cmdline` adds
+to its own.
+
+StageX's tools are linked dynamically against a musl at the very paths of ours (`/lib/ld-musl-
+x86_64.so.1`, `/usr/lib/libc.so`), so StageX never reaches a later environment: `bootstrap`
+builds a static toolset under `/cross` with it, and everything else builds from that on an
+empty root (`PATH` ends with `/cross/llvm/bin:/cross/bin`; busybox also gives `/bin/sh` until
+bash replaces it). The bootstrap clang targets `x86_64-hardened-linux-musl`, with compiler-rt,
+LLVM's libunwind and libc++ and lld as defaults; `tools` builds the target libraries with it,
+then the userland and LLVM natively against them. From then on the system
+compiles with our clang (`cc`), the binary tools are LLVM's under their GNU names (`ld` is
+lld), and clang compiles with `-fstack-protector-strong` everywhere (its configuration file).
+
+An exported target (`[export]`) is an image: `cargo builder image|run|test --target <name>`
+(default `standard`) builds it and only what it needs. Its environment assembles it (mkfs.erofs,
+veritysetup, mke2fs, qemu-img, systemd-stub's stub, ukify and systemd-sbsign) and boots it for
+`run` and `test` (qemu, OVMF and swtpm, all built from source). `kernel-cmdline` and
+`[partition]` sizes are its own.
+
+`cargo builder plan <target>/<component>` (or just `<component>` when one target lists it)
+prints a component's environment and plan. Each distinct environment is an image: a generated
+Containerfile (`build/environments/<key>.Containerfile`) copying the components' trees, tagged
+by its key: the seed's name and the digest of its Containerfile, and the cache keys of its
+components. Component cache keys include it. Components build in parallel (`--parallel`, 4 by
+default) as soon as what they need is built; their output goes to
+`build/logs/<target>/<component>.log`.
+
+Go is built from source with StageX's Go (in `bootstrap`); it is static, so it runs anywhere.
+Rust is built against our LLVM (`llvm-config`), bootstrapped from the pinned release binaries
+for musl its source names (stage0), as upstream does; it links with clang and lld, dynamically
+against musl (`crt-static = false`, `-C target-feature=-crt-static` for the workspace). The
+kernel builds with `LLVM=1`.
+
+### Recipes
+
+Each component is a recipe, `specs/targets/<target>/components/<name>.toml` (in
+`specs/components/` when several targets build it), read when dust-builder loads. A
+recipe declares metadata and pinned sources, and describes its build through a small API.
+Recipes never run anything themselves: the description is a plan, a list of steps (run a
+command, install, copy, write...) on locations such as `work:`, `root:/` (the component's tree),
+`out:` or `dep(<target>/<component>):`. dust-builder executes the steps itself: commands in a container
+of the component's environment through `podman exec`, with their arguments passed as they are
+(there is no shell script and no quoting); file steps on the mounted directories.
+
+A component installs one tree, at `/`: in the image when its target is exported, in the
+environments holding its target otherwise. Every tree keeps the merged-`/usr` layout.
+
+1. **Load:** load the targets, merge their overrides, describe every recipe's plan, and check the
+   references: a misused build API (writing to another component's output or a read-only
+   location, an undeclared image, a pattern in a command, an invalid environment variable), an
+   unknown component, or an output nobody writes fails here.
+2. **Fetch:** download sources and verify their SHA-256, into a cache named by checksum
+   (`build/cache/sources/<sha256>`).
 3. **Build:** each plan runs in its own container with `--network=none`. Only a recipe's fetch
    phase (dust's `cargo fetch --locked`) gets network access, and it is verified by
    `Cargo.lock`. Go dependencies are vendored upstream. Outputs are cached under
    `build/components/<name>/<key>`. The key hashes the plan, the source checksums, in-tree
-   sources, the builder image ID and the keys of the component's dependencies, so refactoring
+   sources, the environment key and the keys of the component's dependencies, so refactoring
    a recipe without changing its steps rebuilds nothing.
-4. **Assemble:** merge the component roots. A path owned by two components is an error. The
-   build fails on setuid/setgid or world-writable files, and on any ELF file whose interpreter,
-   `DT_NEEDED` libraries or required symbol versions cannot be resolved inside the image.
+4. **Assemble:** merge the trees of the exported target's components. A path owned by two
+   components is an error. The build fails on setuid/setgid or world-writable files, and on any
+   ELF file that is not a static executable or a kernel module (an interpreter, `DT_NEEDED`
+   libraries, or a shared library).
 5. **Seal:** `mkfs.erofs` with fixed timestamps and all files owned by root, then `veritysetup
    format`.
 6. **UKI:** ukify (from the systemd source tree) with the kernel, the command line and
-   os-release, signed with `sbsign`. A development key is generated in `build/keys/` if none is
-   present.
+   os-release, signed with `systemd-sbsign`. A development key is generated in `build/keys/` if
+   none is present.
 7. **Disk:** ESP (FAT32 written in Rust, fixed timestamps), GPT, protective MBR, then qcow2.
-8. **SBOM:** CycloneDX 1.6. It has one component per recipe, with source URLs and checksums,
-   license, purl and CPE. Under each sit the Go modules (`go version -m`), Rust crates
-   (`cargo tree`) and standard libraries linked into its binaries. The metadata records the
-   qcow2 checksum, root hash, kernel command line and builder image.
+8. **SBOM:** CycloneDX 1.6. It has one component per component built for the target, with
+   source URLs and checksums, license, purl and CPE. Under each sit the Go modules (`go version
+   -m`), Rust crates (`cargo tree`) and standard libraries linked into its binaries. The metadata
+   records the qcow2 checksum, root hash, kernel command line and the pinned images of the seeds
+   the build bootstraps from. The build tools are components too, so they are listed with their
+   sources.
 
 ### Adding a component
 
-1. Write `components/<name>/recipe.rs`, starting from a similar recipe: `ca-certificates`
-   installs a file, `libseccomp` is autotools, `containerd` is Go, `dust` is Cargo.
-2. Implement [`Component`](../crates/dust-builder/src/recipe/mod.rs): `meta`, optional `local`
-   and `fetch`, and `build`. Sources are constants (`source!(url, sha256)`); using one
-   (`b.unpack(&SRC)`, `b.source(&SRC)`) records it.
-   - **Outputs** other components or the image pipeline use are typed constants exported by
-     the recipe (`pub const IMAGE: Output = Output::new(NAME, "bzImage")`), located with
-     `b.output(&IMAGE)`. Consumers locate one with `b.input(&libseccomp::DEVELOPMENT_FILES)`,
-     which is the dependency declaration: dependencies are derived from the plan. Image
-     assembly reads the kernel's and systemd-stub's outputs the same way.
-   - **Container images** ("from scratch", see `pause`) are declared by filling them:
-     `b.container_image(&IMAGE)` returns the image's root.
-3. Register it in [`crates/dust-builder/src/components.rs`](../crates/dust-builder/src/components.rs).
+A new component is a recipe, `specs/targets/<target>/components/<name>.toml`
+([`declarative.rs`](../crates/dust-builder/src/recipe/declarative.rs) documents the format),
+starting from a similar one: `ca-certificates` installs a file, `pcre2` is autotools, `kmod` is
+Meson, `json-c` is CMake, `containerd` is Go. It lists in `depends-on` what it builds with
+among its target's components (its environment's are always there). Its sources are extracted (archives, in `work:<source>`) or taken as
+they are, each as `{<source>}`, then its build is a list of steps of a fixed set of kinds
+(`configure`, `cmake`, `meson`, `run`, `make`, `install`, `symlink`, `go-build`...), each a call
+of the build API below; they work in the `src` tree unless given a `dir` (or `src`, `tree`), and
+the build systems install into the component's tree, `{dest}` (`make = { install = true }` builds,
+then installs). Strings only substitute values (`{version}`, `{vars.x}`, `{llvm.target}`),
+locations (`{src}`, `{dest}/usr/bin`, `{work:x}`) and `{jobs}`, with no conditionals or loops.
+`cpe = "<vendor>:<product>"` is the usual CPE 2.3 name. Then list it in a target.
+
+Recipes share values through `[exports]` (`{llvm.options}`, `{compiler-rt.resource-dir}`,
+`{python.site-packages}`) and sources (`from = "llvm"`); a list item that is exactly the
+reference of a list is replaced by its items. An output is written to `{out:<name>}`; another
+component's tree is read from `{dep:<target>/<component>}` and its output from
+`{dep:<target>/<component>/<output>}`, which are the dependency declarations. Image assembly
+reads the kernel's and systemd-stub's outputs the same way. A container image ("from scratch",
+see `pause`) is declared in `[images.<name>]` and filled through `{image:<name>}`; it is
+`localhost/hardened/<name>:<version>`.
 
 The build API is in [`recipe/plan.rs`](../crates/dust-builder/src/recipe/plan.rs), the executor
 in [`exec.rs`](../crates/dust-builder/src/exec.rs). The rules:
 
-- **Locations:** steps write only to the component's own places (`work:`, `root:/`, `out:`,
+- **Locations:** steps write only to the component's own places (`work:`, `{dest}`, `out:`,
   `sbom:`, its declared images); sources, the repository and dependencies are read-only.
   `install`, `copy` and `remove` accept patterns (`*`, `?`, `**`), resolved when they run;
   commands never do.
 - **Modes:** `Mode` cannot express setuid, setgid or sticky bits.
-- **Commands:** a `Cmd` is `#[must_use]`, so a command never `.run()` is a compile warning.
-- **Kernel configuration:** `kernel_config` merges the fragment, then checks that every option
-  made it into `.config` (Kconfig silently drops options whose dependencies are unmet).
-- **Helpers apply the policy:** `go_build` vendors, uses `-trimpath`, applies full RELRO with
-  cgo and records Go modules for the SBOM; `cargo_build` is `--offline --locked` and records the
+- **Kernel configuration:** `kernel-config` starts from `allnoconfig` with the fragment
+  (`KCONFIG_ALLCONFIG`): anything not listed there, or selected by what is, is off. It then
+  checks that every option made it into `.config` (Kconfig silently drops options whose
+  dependencies are unmet).
+- **Helpers apply the policy:** `go-build` vendors, uses `-trimpath`, applies full RELRO with
+  cgo and records Go modules for the SBOM; `cargo-build` is `--offline --locked` and records the
   crates and toolchain.
 
-Data files sit next to the recipe and are embedded with `include_str!`, such as the kernel's
-`config.fragment` or base-files' `files/`.
+`specs/` is laid out like Rust modules: a recipe with data files is a directory,
+`<name>/spec.toml` next to them, such as the kernel's `config.fragment`, base-files' `files/` or
+musl's patches (an override uses its recipe's); likewise a target is `specs/targets/<name>/
+spec.toml` next to its `components/`. Specs use dotted keys (`make.install = true`), one per
+line, rather than inline tables.
 
 ## Security model, in short
 
@@ -265,6 +359,3 @@ Data files sit next to the recipe and are embedded with `include_str!`, such as 
 - **Attestation:** SEV-SNP and TDX evidence, and the remote-attestation management flow
   (key release).
 - **Kubernetes:** kubelet as a privileged system container, with CNI.
-- **glibc and libgcc_s** are built from source, but the binaries are linked against the builder
-  image's glibc 2.41 headers. Running them on 2.44 is ABI-compatible; a sysroot built from the
-  glibc component would remove the gap.

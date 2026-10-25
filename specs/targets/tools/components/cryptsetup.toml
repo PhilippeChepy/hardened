@@ -1,0 +1,28 @@
+version = "2.8.8"
+kind = "application"
+summary = "veritysetup, computing the image's dm-verity hash tree"
+license = "GPL-2.0-or-later"
+homepage = "https://gitlab.com/cryptsetup/cryptsetup"
+cpe = "cryptsetup_project:cryptsetup"
+
+depends-on = ["llvm", "json-c", "lvm2", "openssl", "popt", "util-linux", "pkgconf"]
+
+[sources.src]
+url = "https://www.kernel.org/pub/linux/utils/cryptsetup/v2.8/cryptsetup-{version}.tar.xz"
+sha256 = "3acfa685f2dd7fcc832e0b77bc7093aa7da554a51ce8dafbb4138eaa854eee35"
+
+[[build]]
+configure.args = [
+    "--disable-asciidoc",
+    "--disable-ssh-token",
+    "--disable-external-tokens",
+    "--disable-cryptsetup",
+    "--disable-integritysetup",
+    "--enable-veritysetup",
+    "--disable-luks2-reencryption",
+    "--with-crypto_backend=openssl",
+    "--disable-udev",
+    "--disable-nls",
+    "--disable-static",
+    "--disable-keyring",
+]

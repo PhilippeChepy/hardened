@@ -1,0 +1,43 @@
+change-id = "ignore"
+
+[build]
+# stage0, assembled in the build's scratch space (mounted at /work). bootstrap.py downloads it
+# unless the configuration file names it.
+rustc = "/work/stage0/bin/rustc"
+cargo = "/work/stage0/bin/cargo"
+build = "x86_64-unknown-linux-musl"
+host = ["x86_64-unknown-linux-musl"]
+target = ["x86_64-unknown-linux-musl"]
+vendor = true
+locked-deps = true
+extended = true
+tools = ["cargo"]
+docs = false
+description = "hardened"
+
+[llvm]
+link-shared = true
+use-libcxx = true
+static-libstdcpp = false
+
+[rust]
+channel = "stable"
+debuginfo-level = 0
+# lld's section compression needs zlib, which our LLVM is built without (and there is no debug
+# information to compress).
+compress-debuginfo = "off"
+llvm-libunwind = "system"
+
+[install]
+prefix = "/usr"
+sysconfdir = "/etc"
+
+[target.x86_64-unknown-linux-musl]
+llvm-config = "/usr/bin/llvm-config"
+cc = "cc"
+cxx = "c++"
+ar = "ar"
+ranlib = "ranlib"
+linker = "cc"
+crt-static = false
+musl-root = "/usr"

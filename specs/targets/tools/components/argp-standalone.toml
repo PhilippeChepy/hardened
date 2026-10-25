@@ -1,0 +1,29 @@
+version = "1.4.1"
+kind = "library"
+summary = "argp, glibc's argument parser, for musl: a static library elfutils links"
+license = "LGPL-2.1-or-later"
+homepage = "https://github.com/ericonr/argp-standalone"
+
+depends-on = ["llvm", "autoconf", "automake"]
+
+[sources.src]
+url = "https://github.com/ericonr/argp-standalone/archive/{version}.tar.gz"
+sha256 = "879d76374424dce051b812f16f43c6d16de8dbaddd76002f83fd1b6e57d39e0b"
+
+[[build]]
+run.cmd = ["autoreconf", "-fi"]
+
+[[build]]
+run.cmd = ["./configure", "--prefix=/usr", "CFLAGS=-O2 -fPIC"]
+
+[[build]]
+make = {}
+
+# No install target: the library and its header.
+[[build]]
+install.from = "{src}/libargp.a"
+install.to = "{dest}/usr/lib/libargp.a"
+
+[[build]]
+install.from = "{src}/argp.h"
+install.to = "{dest}/usr/include/argp.h"

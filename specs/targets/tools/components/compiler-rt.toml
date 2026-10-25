@@ -1,0 +1,80 @@
+# compiler-rt's builtins (what libgcc provides with GCC) and C start files (`crtbegin.o`,
+# `crtend.o`), in clang's resource directory. Built by the bootstrap clang against musl's headers
+# alone: it comes before any C library. Linked into every program, the image's included.
+
+version = "{llvm.version}"
+kind = "library"
+summary = "compiler-rt builtins and C start files (linked into every program)"
+license = "Apache-2.0 WITH LLVM-exception"
+homepage = "https://compiler-rt.llvm.org"
+purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
+cpe = "llvm:compiler-rt"
+
+[exports]
+# Where the builtins and start files are, below `/`: clang's resource directory.
+resource-dir = "usr/lib/clang/{llvm.major}"
+# CMake options of the runtimes built by the bootstrap clang, before any C++ library
+# (then `-DCMAKE_SYSROOT=`).
+cross-options = [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_SYSTEM_NAME=Linux",
+    "-DCMAKE_SYSTEM_PROCESSOR=x86_64",
+    "-DCMAKE_C_COMPILER=/cross/llvm/bin/clang",
+    "-DCMAKE_CXX_COMPILER=/cross/llvm/bin/clang++",
+    "-DCMAKE_ASM_COMPILER=/cross/llvm/bin/clang",
+    "-DCMAKE_AR=/cross/llvm/bin/llvm-ar",
+    "-DCMAKE_RANLIB=/cross/llvm/bin/llvm-ranlib",
+    "-DCMAKE_NM=/cross/llvm/bin/llvm-nm",
+    "-DCMAKE_C_COMPILER_TARGET={llvm.target}",
+    "-DCMAKE_CXX_COMPILER_TARGET={llvm.target}",
+    "-DCMAKE_ASM_COMPILER_TARGET={llvm.target}",
+    "-DLLVM_DEFAULT_TARGET_TRIPLE={llvm.target}",
+    "-DCMAKE_INSTALL_PREFIX=/usr",
+]
+
+[sources.src]
+from = "llvm"
+
+# musl's headers: what the builtins include of a C library.
+[sources.musl]
+from = "musl"
+
+[[build]]
+run.cmd = ["make", "ARCH=x86_64", "prefix=/usr", "install-headers", "DESTDIR={work:sysroot}"]
+run.dir = "{musl}"
+
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "cmake",
+    "-G",
+    "Unix Makefiles",
+    "-S",
+    "{src}/runtimes",
+    "-B",
+    "{work:build}",
+    "{compiler-rt.cross-options}",
+    "-DCMAKE_SYSROOT={work:sysroot}",
+    "-DLLVM_ENABLE_RUNTIMES=compiler-rt",
+    # Nothing to link with yet.
+    "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+    "-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON",
+    "-DCOMPILER_RT_BUILD_BUILTINS=ON",
+    "-DCOMPILER_RT_BUILD_CRT=ON",
+    "-DCOMPILER_RT_BUILD_SANITIZERS=OFF",
+    "-DCOMPILER_RT_BUILD_XRAY=OFF",
+    "-DCOMPILER_RT_BUILD_LIBFUZZER=OFF",
+    "-DCOMPILER_RT_BUILD_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_MEMPROF=OFF",
+    "-DCOMPILER_RT_BUILD_ORC=OFF",
+    "-DCOMPILER_RT_BUILD_CTX_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_GWP_ASAN=OFF",
+    "-DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON",
+    "-DCOMPILER_RT_INSTALL_PATH=/{compiler-rt.resource-dir}",
+]
+
+[[build]]
+make.dir = "{work:build}"
+make.install = true

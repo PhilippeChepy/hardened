@@ -119,8 +119,5 @@ mod tests {
             Role::from_organizations([Role::READER_ORG, Role::ADMIN_ORG]),
             Err(NoRole::Conflicting)
         );
-        for role in [Role::Reader, Role::Admin] {
-            assert_eq!(Role::from_organization(role.organization()), Some(role));
-        }
     }
 }

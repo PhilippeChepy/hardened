@@ -1,0 +1,35 @@
+# The bootstrap LLVM: clang, lld and the LLVM tools, built by StageX's GCC, statically, at
+# `/cross/llvm`, with compiler-rt's builtins and start files in its resource directory. Static, it
+# runs on an empty root: in `tools`, it builds musl, the LLVM runtimes, the userland and LLVM
+# itself natively, against our musl at /usr.
+
+summary = "LLVM, clang and lld, static"
+# Built on the seed alone.
+depends-on = []
+
+[vars]
+prefix = "/cross/llvm"
+options = [
+    "-DCMAKE_C_COMPILER=gcc",
+    "-DCMAKE_CXX_COMPILER=g++",
+    "-DLLVM_BUILD_STATIC=ON",
+    # Plugins link clang with --export-dynamic, whose symbol relocations a static PIE on musl
+    # does not process: it would crash at start.
+    "-DCLANG_PLUGIN_SUPPORT=OFF",
+    "-DLLVM_ENABLE_PLUGINS=OFF",
+    # compiler-rt's builtins and start files, built by the new clang for its default target.
+    # StageX's musl headers serve; nothing is linked yet.
+    "-DLLVM_ENABLE_RUNTIMES=compiler-rt",
+    "-DRUNTIMES_CMAKE_ARGS=-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+    "-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON",
+    "-DCOMPILER_RT_BUILD_BUILTINS=ON",
+    "-DCOMPILER_RT_BUILD_CRT=ON",
+    "-DCOMPILER_RT_BUILD_SANITIZERS=OFF",
+    "-DCOMPILER_RT_BUILD_XRAY=OFF",
+    "-DCOMPILER_RT_BUILD_LIBFUZZER=OFF",
+    "-DCOMPILER_RT_BUILD_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_MEMPROF=OFF",
+    "-DCOMPILER_RT_BUILD_ORC=OFF",
+    "-DCOMPILER_RT_BUILD_CTX_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_GWP_ASAN=OFF",
+]

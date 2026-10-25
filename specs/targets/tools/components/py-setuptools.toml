@@ -1,0 +1,15 @@
+version = "84.2.1"
+kind = "library"
+summary = "setuptools, for qemu's configure"
+license = "MIT"
+homepage = "https://github.com/pypa/setuptools"
+purl = "pkg:pypi/setuptools@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/s/setuptools/setuptools-{version}-py3-none-any.whl"
+sha256 = "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

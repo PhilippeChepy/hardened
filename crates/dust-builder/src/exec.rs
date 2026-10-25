@@ -5,7 +5,7 @@
 //! patterns are resolved too. Each step is printed before it runs.
 
 use std::collections::BTreeSet;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -33,6 +33,8 @@ impl Places {
 
 pub struct Executor<'a> {
     pub container: &'a Running,
+    /// Where each step is printed, before its output.
+    pub log: &'a std::fs::File,
     pub places: &'a Places,
     pub jobs: usize,
     pub epoch: u64,
@@ -41,7 +43,7 @@ pub struct Executor<'a> {
 impl Executor<'_> {
     pub fn run(&self, steps: &[Step]) -> anyhow::Result<()> {
         for step in steps {
-            eprintln!("  {step}");
+            writeln!(&mut &*self.log, "  {step}")?;
             self.step(step).with_context(|| format!("step `{step}`"))?;
         }
         Ok(())
@@ -57,6 +59,9 @@ impl Executor<'_> {
                 write(&self.host(into)?, output.as_bytes(), Mode::FILE)
             }
             Step::Write { to, contents, mode } => write(&self.host(to)?, contents.as_bytes(), *mode),
+            Step::Patch { tree, name, diff } => {
+                crate::patch::apply(&self.host(tree)?, diff).with_context(|| format!("applying {name}"))
+            }
             Step::Install { from, to, mode } => {
                 let [found] = &self.matches(from)?[..] else {
                     bail!("{from} must match exactly one file");
@@ -93,28 +98,20 @@ impl Executor<'_> {
                 Ok(())
             }
             Step::Strip => self.strip(),
+            Step::CheckEnv(env) => {
+                let root = self.host(env)?;
+                for dir in ["bin", "sbin", "lib", "lib64"] {
+                    let path = root.join(dir);
+                    ensure!(
+                        !path.symlink_metadata().is_ok_and(|m| m.is_dir()),
+                        "{env}/{dir} is a directory: install under /usr (merged-/usr layout)"
+                    );
+                }
+                Ok(())
+            }
             Step::CheckKernelConfig { config, fragment } => {
                 let config = std::fs::read_to_string(self.host(config)?)?;
                 check_kernel_config(&config, fragment)
-            }
-            Step::RecordStaticRuntime { into } => {
-                let run = |argv: &[&str]| {
-                    let argv: Vec<String> = argv.iter().map(|&a| a.to_owned()).collect();
-                    self.container.exec(&argv, "/", &[], true)
-                };
-                let libgcc = run(&["gcc", "-print-libgcc-file-name"])?;
-                let owner = run(&["dpkg", "-S", libgcc.trim()])?;
-                let package = owner.split(':').next().unwrap_or_default().trim().to_owned();
-                ensure!(!package.is_empty(), "no package owns {}", libgcc.trim());
-                let versions = run(&[
-                    "dpkg-query",
-                    "-W",
-                    "-f",
-                    "${Package} ${Version}\\n",
-                    "libc6-dev",
-                    &package,
-                ])?;
-                write(&self.host(into)?, versions.as_bytes(), Mode::FILE)
             }
         }
     }
@@ -191,7 +188,7 @@ impl Executor<'_> {
         }
         for batch in files.chunks(200) {
             let mut argv = vec![
-                "strip".into(),
+                "strip".to_owned(),
                 "--strip-debug".into(),
                 "--enable-deterministic-archives".into(),
             ];
@@ -245,12 +242,12 @@ fn expand(dir: &Path, relative: &str, segments: &[&str], found: &mut BTreeSet<St
             format!("{relative}/{name}")
         }
     };
-    let subdirectories = || -> anyhow::Result<Vec<String>> {
+    // The names in `dir`, sorted.
+    let names = || -> anyhow::Result<Vec<String>> {
         let mut names = Vec::new();
         if dir.is_dir() {
             for entry in std::fs::read_dir(dir)? {
-                let entry = entry?;
-                names.push(entry.file_name().to_string_lossy().into_owned());
+                names.push(entry?.file_name().to_string_lossy().into_owned());
             }
         }
         names.sort();
@@ -259,14 +256,14 @@ fn expand(dir: &Path, relative: &str, segments: &[&str], found: &mut BTreeSet<St
 
     if *first == "**" {
         expand(dir, relative, rest, found)?;
-        for name in subdirectories()? {
+        for name in names()? {
             let path = dir.join(&name);
             if path.symlink_metadata()?.is_dir() {
                 expand(&path, &join(&name), segments, found)?;
             }
         }
     } else if first.contains(['*', '?']) {
-        for name in subdirectories()? {
+        for name in names()? {
             if wildcard(first.as_bytes(), name.as_bytes()) {
                 let path = dir.join(&name);
                 if rest.is_empty() || path.is_dir() {

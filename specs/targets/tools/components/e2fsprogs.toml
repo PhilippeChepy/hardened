@@ -1,0 +1,28 @@
+version = "1.47.4"
+kind = "application"
+summary = "mke2fs, formatting the image's state partition"
+license = "GPL-2.0-only"
+homepage = "https://e2fsprogs.sourceforge.net"
+cpe = "e2fsprogs_project:e2fsprogs"
+
+depends-on = ["llvm", "util-linux", "pkgconf"]
+
+[sources.src]
+url = "https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{version}/e2fsprogs-{version}.tar.xz"
+sha256 = "fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b"
+
+[[build]]
+configure.args = [
+    "--disable-nls",
+    "--disable-fsck",
+    "--disable-uuidd",
+    # util-linux's: their own older copies would shadow its headers.
+    "--disable-libuuid",
+    "--disable-libblkid",
+    "--disable-defrag",
+    "--disable-e2initrd-helper",
+    "--disable-fuse2fs",
+    "--with-crond-dir=no",
+    "--with-systemd-unit-dir=no",
+    "--with-udev-rules-dir=no",
+]

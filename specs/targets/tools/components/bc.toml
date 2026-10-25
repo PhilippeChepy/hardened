@@ -1,0 +1,28 @@
+version = "7.0.3"
+kind = "application"
+summary = "bc calculator (Gavin Howard's), for the kernel build"
+license = "BSD-2-Clause"
+homepage = "https://git.gavinhoward.com/gavin/bc"
+purl = "pkg:github/gavinhoward/bc@{version}"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://github.com/gavinhoward/bc/releases/download/{version}/bc-{version}.tar.xz"
+sha256 = "91eb74caed0ee6655b669711a4f350c25579778694df248e28363318e03c7fc4"
+
+# Its own configure script, given long options only (it mishandles short ones after them).
+# Its macros paste `true` into tokens: C23 made it a keyword.
+[[build]]
+run.cmd = [
+    "./configure",
+    "--prefix=/usr",
+    "--opt=3",
+    "--disable-generated-tests",
+    "--disable-nls",
+    "--disable-man-pages",
+]
+run.env = [["CC", "cc"], ["CFLAGS", "-std=gnu17"]]
+
+[[build]]
+make.install = true

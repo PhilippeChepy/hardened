@@ -1,0 +1,108 @@
+# musl, the C library of every environment after the bootstrap and of the image, with mimalloc 3
+# as its allocator, the way Chimera Linux builds it with mimalloc 2. Built by the bootstrap
+# clang, with ThinLTO (but its start files, its dynamic linker's entry and mimalloc); the image's
+# programs link it statically.
+#
+# Patches: musl's fixes since 1.2.6 (`001`-`008`, upstream commits) and the CVE-2026-107891 fix
+# (regcomp), as Chimera carries them; Chimera's plumbing for an external allocator (`0001`) and
+# LTO exceptions (`lto.patch`); and ours for mimalloc 3: more per-thread pointers in musl
+# (`0100`), its object without LTO (`0101`) and a libc build of mimalloc
+# (`mimalloc-libc.patch`), with the glue in `files/mimalloc.c`. Chimera's are from
+# <https://github.com/chimera-linux/cports> at `c93640e5` (main/musl).
+
+version = "1.2.6"
+kind = "library"
+summary = "musl C library, with mimalloc as its allocator"
+license = "MIT"
+homepage = "https://musl.libc.org"
+cpe = "musl-libc:musl"
+
+depends-on = ["compiler-rt"]
+
+[vars]
+# The dynamic loader: musl's `libc.so` under the name programs request.
+loader = "ld-musl-x86_64.so.1"
+
+[sources.src]
+url = "https://musl.libc.org/releases/musl-{version}.tar.gz"
+sha256 = "d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a"
+
+[sources.mimalloc]
+url = "https://github.com/microsoft/mimalloc/archive/refs/tags/v3.6.0.tar.gz"
+sha256 = "c663101ba193b5b823c8541c1b719ab67e3ebf9976e425a02359a5cad5e52990"
+
+[[build]]
+copy.from = "{mimalloc}/*"
+copy.into = "{src}/mimalloc"
+
+# Applied in order, to the musl tree with mimalloc at `mimalloc/`.
+[[build]]
+patch.files = [
+    "patches/001-6f6bd4a1896ba0be19168abc1346c8c7e3851709.patch",
+    "patches/002-0572555dab1d1e10b5f7351a005ec588cab41e25.patch",
+    "patches/003-40acb04b2c1291f7d3091c61080109da11eea48b.patch",
+    "patches/004-67219f0130ec7c876ac0b299046460fad31caabf.patch",
+    "patches/005-d2f20c49dfb556d9096251aa0acd92ca907b3400.patch",
+    "patches/006-228da39e38c1cae13cbe637e771412c1984dba5d.patch",
+    "patches/007-b3291b9a9f77f1f993d2b4f8c68a26cf09221ae7.patch",
+    "patches/008-5122f9f3c99fee366167c5de98b31546312921ab.patch",
+    "patches/CVE-2026-107891.patch",
+    "patches/0001-plumb-in-support-for-externally-provided-allocator-l.patch",
+    "patches/lto.patch",
+    "patches/0100-malloc-tls-extra.patch",
+    "patches/0101-mimalloc-no-lto.patch",
+    "patches/mimalloc-libc.patch",
+]
+
+[[build]]
+write.to = "{src}/mimalloc/src/mimalloc.c"
+write.file = "files/mimalloc.c"
+
+[[build]]
+write.to = "{src}/mimalloc-verify-syms.sh"
+write.file = "files/mimalloc-verify-syms.sh"
+write.mode = 0o755
+
+[[build]]
+run.cmd = [
+    "./configure",
+    "--prefix=/usr",
+    "--syslibdir=/usr/lib",
+    "--target={llvm.target}",
+    "--with-malloc=external",
+    "CC=/cross/llvm/bin/clang --target={llvm.target}",
+    "AR=/cross/llvm/bin/llvm-ar",
+    "RANLIB=/cross/llvm/bin/llvm-ranlib",
+    "CFLAGS=-flto=thin",
+    # compiler-rt in place of libgcc.
+    "LIBCC={dep:tools/compiler-rt}/{compiler-rt.resource-dir}/lib/{llvm.target}/libclang_rt.builtins.a",
+]
+
+[[build]]
+make.args = ["EXTRA_OBJ=src/malloc/external/mimalloc.o"]
+make.env = [["OBJCOPY", "/cross/llvm/bin/llvm-objcopy"], ["NM", "/cross/llvm/bin/llvm-nm"]]
+make.install = true
+
+# Relative, so the sysroot copies resolve too.
+[[build]]
+remove = "{dest}/usr/lib/{vars.loader}"
+
+[[build]]
+symlink.target = "libc.so"
+symlink.link = "{dest}/usr/lib/{vars.loader}"
+
+[[build]]
+symlink.target = "../lib/libc.so"
+symlink.link = "{dest}/usr/bin/ldd"
+
+[[build]]
+copy.from = "{dep:bootstrap/linux-headers/include}/*"
+copy.into = "{dest}/usr/include"
+
+# Merged /usr. Compilers also look for x86_64 libraries in lib64 directories.
+[[build]]
+mkdir = "{dest}/usr/sbin"
+
+[[build]]
+symlinks.dir = "{dest}"
+symlinks.links = [["bin", "usr/bin"], ["sbin", "usr/sbin"], ["lib", "usr/lib"], ["lib64", "usr/lib"], ["usr/lib64", "lib"]]

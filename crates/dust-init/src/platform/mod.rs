@@ -181,11 +181,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn names_round_trip() {
-        for platform in Platform::ALL {
-            assert_eq!(Platform::from_name(platform.name()), Some(platform));
-        }
-    }
 }

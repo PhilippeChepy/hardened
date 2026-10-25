@@ -1,9 +1,5 @@
-//! Outputs: what a component produces besides files in the image (a file or a directory).
-//!
-//! A recipe declares its outputs as constants next to its code (`pub const IMAGE: Output =
-//! Output::new(NAME, "bzImage")`). Consumers import them from the producing recipe's module, so a
-//! renamed or removed output is a compile error, and using one is the dependency declaration:
-//! [`super::Build::input`] records it.
+//! Outputs: what a component produces besides its tree (a file or a directory), written to
+//! `{out:<name>}` and read by others as `{dep:<target>/<component>/<name>}`, or by image assembly.
 
 use std::fmt;
 
@@ -17,21 +13,30 @@ pub struct Output {
 }
 
 impl Output {
-    /// Panics (a compile error in a const context) unless `name` is a plain file name.
+    /// Panics (a compile error in a const context) unless `name` [`Output::is_valid`].
     pub const fn new(component: ComponentName, name: &'static str) -> Self {
+        assert!(
+            Self::is_valid(name),
+            "output names are file names: alphanumerics and '._-'"
+        );
+        Self { component, name }
+    }
+
+    /// A plain file name: alphanumerics and `._-`, not starting with `.`.
+    pub const fn is_valid(name: &str) -> bool {
         let bytes = name.as_bytes();
-        assert!(!bytes.is_empty(), "empty output name");
+        if bytes.is_empty() || bytes[0] == b'.' {
+            return false;
+        }
         let mut i = 0;
         while i < bytes.len() {
             let b = bytes[i];
-            assert!(
-                b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-',
-                "output names are file names: alphanumerics and '._-'"
-            );
+            if !(b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
+                return false;
+            }
             i += 1;
         }
-        assert!(bytes[0] != b'.', "output names cannot start with '.'");
-        Self { component, name }
+        true
     }
 
     pub fn component(&self) -> &ComponentName {
@@ -62,11 +67,9 @@ mod tests {
 
     #[test]
     fn output_names_are_file_names() {
+        assert!(Output::is_valid("kernel.release"));
         for bad in ["", "a/b", "..", ".hidden", "a b"] {
-            assert!(
-                std::panic::catch_unwind(|| Output::new(crate::name!("x"), bad)).is_err(),
-                "{bad:?} accepted"
-            );
+            assert!(!Output::is_valid(bad), "{bad:?} accepted");
         }
     }
 }

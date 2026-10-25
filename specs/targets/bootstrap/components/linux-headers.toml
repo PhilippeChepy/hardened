@@ -1,0 +1,24 @@
+version = "{kernel.version}"
+kind = "library"
+summary = "Linux UAPI headers of the shipped kernel"
+license = "GPL-2.0-only WITH Linux-syscall-note"
+homepage = "https://www.kernel.org"
+purl = "pkg:generic/linux@{kernel.version}"
+
+# A component of its own, so that kernel configuration changes rebuild neither musl nor the
+# toolchain.
+[sources.src]
+from = "kernel"
+
+# `headers` rather than `headers_install`, which needs rsync. In an object directory of its own,
+# the generated usr/include holds nothing but the headers.
+[[build]]
+make.args = ["-s", "headers", "ARCH=x86_64", "O={work:objects}"]
+
+# The sanitized `include/` tree (`linux/`, `asm/`, ...).
+[[build]]
+copy.from = "{work:objects}/usr/include/*"
+copy.into = "{out:include}"
+
+[[build]]
+remove = "{out:include}/**/.*.cmd"

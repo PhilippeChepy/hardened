@@ -32,7 +32,7 @@ jobs:
           path: |
             build/cache/sources
             build/cache/cargo-registry
-          key: sources-${{ hashFiles('components/*/recipe.rs', 'Cargo.lock') }}
+          key: sources-${{ hashFiles('specs/**/*.toml', 'Cargo.lock') }}
       - run: cargo builder test
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,14 @@
+Build the mimalloc object without LTO: mimalloc-verify-syms.sh localizes its
+symbols with llvm-objcopy, which needs a machine code object.
+
+--- a/Makefile
++++ b/Makefile
+@@ -149,7 +149,7 @@
+ endif
+ 
+ $(EXTRA_OBJ): $(GENH) $(IMPH)
+-	$(CC) -I$(srcdir)/mimalloc/include $(CFLAGS_ALL) -std=gnu11 -fPIC -O3 -DNDEBUG -fvisibility=hidden -isystem `$(CC) -print-resource-dir`/include -c -o $(EXTRA_OBJ) $(srcdir)/mimalloc/src/mimalloc.c
++	$(CC) -I$(srcdir)/mimalloc/include $(CFLAGS_ALL) -std=gnu11 -fPIC -O3 -DNDEBUG -fvisibility=hidden -fno-lto -isystem `$(CC) -print-resource-dir`/include -c -o $(EXTRA_OBJ) $(srcdir)/mimalloc/src/mimalloc.c
+ 	sh $(srcdir)/mimalloc-verify-syms.sh $(EXTRA_OBJ)
+ 
+ obj/%.o: $(srcdir)/%.s

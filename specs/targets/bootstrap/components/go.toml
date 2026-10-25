@@ -1,0 +1,31 @@
+# The Go toolchain, built from source with StageX's Go (`GOROOT_BOOTSTRAP`). It is a static, pure
+# Go program, so it runs in any environment, where it builds containerd and runc. Its standard
+# library is compiled into them.
+
+version = "1.27.3"
+kind = "application"
+summary = "Go toolchain, building containerd and runc"
+license = "BSD-3-Clause"
+homepage = "https://go.dev"
+purl = "pkg:golang/stdlib@v{version}"
+cpe = "golang:go"
+
+[sources.src]
+url = "https://go.dev/dl/go{version}.src.tar.gz"
+sha256 = "6e7749035cf360f06b2575d162ea79df9fda8ef671889e5c375f8e50777f26bb"
+
+# `sh` is bash on StageX, which has no `bash` command.
+[[build]]
+run.cmd = ["sh", "make.bash"]
+run.dir = "{src}/src"
+# Built by StageX's Go toolchain.
+run.env = [["GOROOT_BOOTSTRAP", "/usr/lib/go"], ["CGO_ENABLED", "0"]]
+
+# Go finds its root from the (resolved) path of the `go` binary.
+[[build]]
+copy.from = "{src}/*"
+copy.into = "{dest}/usr/lib/go"
+
+[[build]]
+symlinks.dir = "{dest}/usr/bin"
+symlinks.links = [["go", "../lib/go/bin/go"], ["gofmt", "../lib/go/bin/gofmt"]]

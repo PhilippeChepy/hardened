@@ -3,9 +3,9 @@
 //!
 //! A sandboxed process gets:
 //! - its own mount, IPC, UTS and cgroup namespaces (it keeps the host network);
-//! - a read-only tmpfs root (`pivot_root`) holding only `/usr/lib` (glibc and libgcc_s), its
-//!   program and the [`Bind`]s of its [`Spec`]: no `/proc`, `/sys`, `/dev`, `/etc` or `/var`,
-//!   and nothing else to execute;
+//! - a read-only tmpfs root (`pivot_root`) holding only its program (static, like every program
+//!   of the image) and the [`Bind`]s of its [`Spec`]: no `/proc`, `/sys`, `/dev`, `/etc`, `/var`
+//!   or libraries, and nothing else to execute;
 //! - a uid/gid without supplementary groups, an empty capability bounding set and
 //!   `no_new_privs`;
 //! - a seccomp allowlist ([`BASE_SYSCALLS`] plus the spec's [`Syscalls`]); any other call kills
@@ -41,8 +41,6 @@ use crate::process::{Child, Reaper};
 
 const CGROUPS: &str = "/sys/fs/cgroup/sandbox";
 const ROOTS: &str = "/run/sandbox";
-/// Shared libraries of the image, needed by every (dynamically linked) program.
-const LIBRARIES: &str = "/usr/lib";
 /// Restarts back off exponentially up to this, and start over after a run this long.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -215,7 +213,6 @@ struct Prepared {
     files: Vec<CString>,
     /// Source, target in the root, and whether it may hold executables.
     binds: Vec<(CString, CString, bool)>,
-    lib64: CString,
     id: u32,
     filters: Vec<BpfProgram>,
 }
@@ -227,17 +224,10 @@ impl Prepared {
         let root = Path::new(ROOTS).join(spec.name);
         std::fs::create_dir_all(&root).with_context(|| root.display().to_string())?;
 
-        let binds: Vec<Bind> = [
-            Bind {
-                path: LIBRARIES,
-                exec: true,
-            },
-            Bind {
-                path: spec.program,
-                exec: true,
-            },
-        ]
-        .into_iter()
+        let binds: Vec<Bind> = std::iter::once(Bind {
+            path: spec.program,
+            exec: true,
+        })
         .chain(spec.binds.iter().copied())
         .collect();
         for (i, a) in binds.iter().enumerate() {
@@ -273,7 +263,6 @@ impl Prepared {
                 .iter()
                 .map(|(source, target, exec)| Ok((c_path(source)?, c_path(target)?, *exec)))
                 .collect::<anyhow::Result<_>>()?,
-            lib64: c_path(&root.join("lib64"))?,
             id: spec.id,
             filters: seccomp_filters(&spec.syscalls)?,
         })
@@ -347,7 +336,7 @@ fn create_dir(path: &Path) -> anyhow::Result<()> {
 
 /// Runs in the child between `fork` and `exec`.
 fn enter(prepared: &Prepared) -> std::io::Result<()> {
-    use rustix::fs::{mkdir, open, symlink};
+    use rustix::fs::{mkdir, open};
     use rustix::mount::{mount, mount_bind, mount_change, mount_remount, unmount};
 
     // Join the cgroup first: the cgroup namespace is then rooted at it.
@@ -384,8 +373,6 @@ fn enter(prepared: &Prepared) -> std::io::Result<()> {
             Mode::from_raw_mode(0o644),
         )?);
     }
-    // The ELF interpreter is /lib64/ld-linux-x86-64.so.2, as on the host.
-    symlink(c"usr/lib", prepared.lib64.as_c_str())?;
     for (source, target, exec) in &prepared.binds {
         mount_bind(source.as_c_str(), target.as_c_str())?;
         let mut flags = MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
@@ -430,6 +417,7 @@ pub const BASE_SYSCALLS: Syscalls = Syscalls {
     allowed: &[
         0,   // read
         1,   // write
+        2,   // open (musl, where glibc uses openat)
         3,   // close
         4,   // stat
         5,   // fstat
@@ -459,6 +447,7 @@ pub const BASE_SYSCALLS: Syscalls = Syscalls {
         79,  // getcwd
         89,  // readlink
         96,  // gettimeofday
+        99,  // sysinfo (the allocator sizes itself to the machine's memory)
         102, // getuid
         104, // getgid
         107, // geteuid
@@ -497,8 +486,8 @@ pub const BASE_SYSCALLS: Syscalls = Syscalls {
         441, // epoll_pwait2
     ],
     restricted: &[
-        // TCGETS, TCGETS2 (isatty), FIONBIO, FIOCLEX.
-        (sys::IOCTL, 1, &[0x5401, 0x802c_542a, 0x5421, 0x5451]),
+        // TCGETS, TCGETS2, TIOCGWINSZ (isatty: glibc, Rust, musl), FIONBIO, FIOCLEX.
+        (sys::IOCTL, 1, &[0x5401, 0x802c_542a, 0x5413, 0x5421, 0x5451]),
         // PR_SET_NAME, PR_GET_NAME (thread names).
         (sys::PRCTL, 0, &[15, 16]),
     ],
@@ -513,10 +502,10 @@ mod sys {
     pub const ENOSYS: u32 = 38;
 }
 
-/// The seccomp filters, in installation order: one failing `clone3` with `ENOSYS`, so glibc
-/// falls back to `clone`, whose flags can be checked (threads only, no new processes), then the
-/// allowlist (anything else kills the process). Installing a filter is itself a prctl and a
-/// seccomp call, which the allowlist forbids: it goes last.
+/// The seccomp filters, in installation order: one failing `clone3` with `ENOSYS`, so the C
+/// library falls back to `clone`, whose flags can be checked (threads only, no new processes),
+/// then the allowlist (anything else kills the process). Installing a filter is itself a prctl
+/// and a seccomp call, which the allowlist forbids: it goes last.
 fn seccomp_filters(extra: &Syscalls) -> anyhow::Result<Vec<BpfProgram>> {
     let arg = |index: u8, op: SeccompCmpOp, value: u64| {
         SeccompCondition::new(index, SeccompCmpArgLen::Dword, op, value).map_err(anyhow::Error::from)

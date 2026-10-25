@@ -17,36 +17,7 @@ pub struct Sha256([u8; 32]);
 #[error("invalid SHA-256 {0:?}: expected 64 hex digits")]
 pub struct InvalidSha256(String);
 
-/// A SHA-256 written as a literal, validated at compile time: `sha256!("e3b0…b855")`.
-#[macro_export]
-macro_rules! sha256 {
-    ($hex:literal) => {
-        const { $crate::sha256::Sha256::from_hex_const($hex) }
-    };
-}
-
 impl Sha256 {
-    /// Parses 64 hex digits in a const context; panics (a compile error there) otherwise.
-    pub const fn from_hex_const(hex: &str) -> Self {
-        const fn nibble(c: u8) -> u8 {
-            match c {
-                b'0'..=b'9' => c - b'0',
-                b'a'..=b'f' => c - b'a' + 10,
-                b'A'..=b'F' => c - b'A' + 10,
-                _ => panic!("invalid SHA-256: non-hex digit"),
-            }
-        }
-        let hex = hex.as_bytes();
-        assert!(hex.len() == 64, "invalid SHA-256: expected 64 hex digits");
-        let mut bytes = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            bytes[i] = nibble(hex[2 * i]) << 4 | nibble(hex[2 * i + 1]);
-            i += 1;
-        }
-        Self(bytes)
-    }
-
     pub fn digest(data: impl AsRef<[u8]>) -> Self {
         Self::finalize(sha2::Sha256::new_with_prefix(data))
     }
@@ -55,19 +26,16 @@ impl Sha256 {
         Self(hasher.finalize().into())
     }
 
-    pub fn of_reader(mut reader: impl Read) -> io::Result<Self> {
+    pub fn of_file(path: &Path) -> io::Result<Self> {
+        let mut file = std::fs::File::open(path)?;
         let mut hasher = sha2::Sha256::new();
         let mut buf = vec![0; 1 << 16];
         loop {
-            match reader.read(&mut buf)? {
+            match file.read(&mut buf)? {
                 0 => return Ok(Self::finalize(hasher)),
                 n => hasher.update(&buf[..n]),
             }
         }
-    }
-
-    pub fn of_file(path: &Path) -> io::Result<Self> {
-        Self::of_reader(std::fs::File::open(path)?)
     }
 
     /// The first `N` bytes (checked at compile time), for identifiers derived from the digest.
@@ -138,22 +106,5 @@ mod tests {
         for bad in ["", "abc", &EMPTY[..63], &format!("{EMPTY}0"), &EMPTY.replace('e', "g")] {
             assert!(bad.parse::<Sha256>().is_err(), "{bad:?} accepted");
         }
-    }
-
-    #[test]
-    fn parses_literals_at_compile_time() {
-        const DIGEST: Sha256 = Sha256::from_hex_const(EMPTY);
-        assert_eq!(DIGEST, Sha256::digest(b""));
-        assert_eq!(
-            crate::sha256!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-            DIGEST
-        );
-    }
-
-    #[test]
-    fn splits_into_halves() {
-        let digest: Sha256 = format!("{}{}", "11".repeat(16), "22".repeat(16)).parse().unwrap();
-        assert_eq!(digest.halves(), ([0x11; 16], [0x22; 16]));
-        assert_eq!(digest.prefix::<4>(), [0x11; 4]);
     }
 }

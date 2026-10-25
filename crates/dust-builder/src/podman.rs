@@ -1,66 +1,29 @@
-//! The builder image and the containers run from it.
+//! Environment images (see [`crate::environment`]) and the containers run from them.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, ensure};
 
-use crate::Paths;
 use crate::sha256::Sha256;
 
-/// The pinned builder image, tagged by the hash of its Containerfile.
+/// The image of an environment.
 #[derive(Debug, Clone)]
-pub struct Builder {
+pub struct Image {
     pub tag: String,
-    /// Image ID, part of every cache key and recorded in the SBOM.
-    pub id: Sha256,
+    /// What the image is built from (see [`crate::environment::ensure`]), part of the cache keys
+    /// of the components built in it.
+    pub key: Sha256,
 }
 
-impl Builder {
-    pub fn ensure(paths: &Paths) -> anyhow::Result<Self> {
-        let dir = paths.root.join("builder");
-        let containerfile = Sha256::digest(std::fs::read(dir.join("Containerfile"))?);
-        let tag = format!(
-            "localhost/hardened-builder:{}",
-            hex::encode(containerfile.prefix::<8>())
-        );
-
-        let exists = Command::new("podman")
-            .args(["image", "exists", &tag])
-            .status()
-            .context("podman is required")?
-            .success();
-        if !exists {
-            eprintln!("==> building builder image {tag}");
-            let status = Command::new("podman")
-                .args(["build", "--tag", &tag, "--file"])
-                .arg(dir.join("Containerfile"))
-                .arg(&dir)
-                .status()?;
-            if !status.success() {
-                bail!("building the builder image failed");
-            }
-        }
-
-        let output = Command::new("podman")
-            .args(["image", "inspect", "--format", "{{.Id}}", &tag])
-            .stderr(Stdio::inherit())
-            .output()?;
-        if !output.status.success() {
-            bail!("inspecting the builder image failed");
-        }
-        let id = String::from_utf8(output.stdout)?
-            .trim()
-            .parse()
-            .context("unexpected builder image ID")?;
-        Ok(Self { tag, id })
-    }
-
+impl Image {
     /// Prepares a container running `script` with bash.
     pub fn container(&self, script: impl Into<String>) -> Container<'_> {
         Container {
-            builder: self,
+            image: self,
             script: script.into(),
+            posix: false,
             mounts: Vec::new(),
             env: Vec::new(),
             network: false,
@@ -72,6 +35,50 @@ impl Builder {
     }
 }
 
+/// Whether the image `tag` exists locally.
+pub fn exists(tag: &str) -> anyhow::Result<bool> {
+    Ok(Command::new("podman")
+        .args(["image", "exists", tag])
+        .status()
+        .context("podman is required")?
+        .success())
+}
+
+/// Builds `containerfile` with `context`, as `tag`, with named build contexts (for
+/// `COPY --from=<name>`), its output going to the file `log`. The image is one layer: environments
+/// copy many component trees.
+pub fn build(
+    containerfile: &Path,
+    context: &Path,
+    tag: &str,
+    contexts: &[(String, PathBuf)],
+    log: &Path,
+) -> anyhow::Result<()> {
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let output = File::create(log)?;
+    let mut cmd = Command::new("podman");
+    cmd.args(["build", "--tag", tag, "--file"])
+        .arg(containerfile)
+        .arg("--squash-all");
+    for (name, path) in contexts {
+        cmd.arg("--build-context").arg(format!("{name}={}", path.display()));
+    }
+    let status = cmd
+        .arg(context)
+        .stdout(output.try_clone()?)
+        .stderr(output)
+        .status()
+        .context("running podman")?;
+    ensure!(
+        status.success(),
+        "podman build failed with {status} (log: {})",
+        log.display()
+    );
+    Ok(())
+}
+
 /// A bind mount of a host path into the container.
 #[derive(Debug)]
 struct Mount {
@@ -81,8 +88,10 @@ struct Mount {
 }
 
 pub struct Container<'a> {
-    builder: &'a Builder,
+    image: &'a Image,
     script: String,
+    /// Run the script with `sh` rather than bash.
+    posix: bool,
     mounts: Vec<Mount>,
     env: Vec<(String, String)>,
     network: bool,
@@ -93,6 +102,12 @@ pub struct Container<'a> {
 }
 
 impl Container<'_> {
+    /// Runs the script with `sh` rather than bash, for images without bash (the StageX seed).
+    pub fn posix(mut self) -> Self {
+        self.posix = true;
+        self
+    }
+
     pub fn mount(self, host: impl AsRef<Path>, guest: impl Into<String>) -> Self {
         self.bind(host, guest, false)
     }
@@ -136,34 +151,48 @@ impl Container<'_> {
         self
     }
 
-    pub fn interactive(mut self, interactive: bool) -> Self {
-        self.interactive = interactive;
+    /// Attaches the terminal (stdin, and a TTY when there is one).
+    pub fn interactive(mut self) -> Self {
+        self.interactive = true;
         self
     }
 
     pub fn command(&self) -> Command {
         let mut cmd = self.run_command();
-        cmd.args([&self.builder.tag, "bash", "-euo", "pipefail", "-c", &self.script]);
+        if self.posix {
+            cmd.args([&self.image.tag, "sh", "-eu", "-c", &self.script]);
+        } else {
+            cmd.args([&self.image.tag, "bash", "-euo", "pipefail", "-c", &self.script]);
+        }
         cmd
     }
 
-    /// Starts the container in the background, idle, for [`Running::exec`]. It is removed when
-    /// the returned handle is dropped.
-    pub fn start(&self, name: &str) -> anyhow::Result<Running> {
+    /// Starts the container in the background, idle, for [`Running::exec`], whose commands write
+    /// their output to `log`. It is removed when the returned handle is dropped.
+    pub fn start(&self, name: &str, log: &File) -> anyhow::Result<Running> {
         remove(name);
         let mut cmd = self.run_command();
-        cmd.args(["--detach", "--name", name, &self.builder.tag, "sleep", "infinity"]);
+        cmd.args(["--detach", "--name", name, &self.image.tag, "sleep", "infinity"]);
         let status = cmd.stdout(Stdio::null()).status().context("running podman")?;
-        if !status.success() {
-            bail!("starting container {name} failed with {status}");
-        }
-        Ok(Running { name: name.to_owned() })
+        ensure!(status.success(), "starting container {name} failed with {status}");
+        Ok(Running {
+            name: name.to_owned(),
+            log: log.try_clone()?,
+        })
     }
 
     /// `podman run` with the options, without the image and command.
     fn run_command(&self) -> Command {
         let mut cmd = Command::new("podman");
-        cmd.args(["run", "--rm", "--security-opt", "label=disable"]);
+        // Environments built from scratch have no /tmp.
+        cmd.args([
+            "run",
+            "--rm",
+            "--security-opt",
+            "label=disable",
+            "--tmpfs",
+            "/tmp:rw,exec,mode=1777",
+        ]);
         if let Some(name) = &self.name {
             cmd.arg("--name").arg(name);
         }
@@ -194,18 +223,14 @@ impl Container<'_> {
 
     pub fn run(&self) -> anyhow::Result<()> {
         let status = self.command().status().context("running podman")?;
-        if !status.success() {
-            bail!("container exited with {status}");
-        }
+        ensure!(status.success(), "container exited with {status}");
         Ok(())
     }
 
     /// Runs the container, returning its standard output.
     pub fn output(&self) -> anyhow::Result<String> {
         let output = self.command().stderr(Stdio::inherit()).output()?;
-        if !output.status.success() {
-            bail!("container exited with {}", output.status);
-        }
+        ensure!(output.status.success(), "container exited with {}", output.status);
         Ok(String::from_utf8(output.stdout)?)
     }
 }
@@ -213,11 +238,12 @@ impl Container<'_> {
 /// A container started with [`Container::start`], running commands without a shell.
 pub struct Running {
     name: String,
+    log: File,
 }
 
 impl Running {
     /// Runs `argv` in `dir` with extra environment variables. With `capture`, returns its
-    /// standard output; otherwise it goes to the terminal.
+    /// standard output; otherwise it goes to the log, like its standard error.
     pub fn exec(&self, argv: &[String], dir: &str, env: &[(String, String)], capture: bool) -> anyhow::Result<String> {
         let mut cmd = Command::new("podman");
         cmd.args(["exec", "--workdir", dir]);
@@ -225,17 +251,14 @@ impl Running {
             cmd.arg("--env").arg(format!("{key}={value}"));
         }
         cmd.arg(&self.name).args(argv);
+        cmd.stderr(self.log.try_clone()?);
         if capture {
-            let output = cmd.stderr(Stdio::inherit()).output().context("running podman")?;
-            if !output.status.success() {
-                bail!("{} failed with {}", argv[0], output.status);
-            }
+            let output = cmd.output().context("running podman")?;
+            ensure!(output.status.success(), "{} failed with {}", argv[0], output.status);
             Ok(String::from_utf8(output.stdout)?)
         } else {
-            let status = cmd.status().context("running podman")?;
-            if !status.success() {
-                bail!("{} failed with {status}", argv[0]);
-            }
+            let status = cmd.stdout(self.log.try_clone()?).status().context("running podman")?;
+            ensure!(status.success(), "{} failed with {status}", argv[0]);
             Ok(String::new())
         }
     }

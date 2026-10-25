@@ -1,0 +1,18 @@
+# LZ4 compression library and tool, for erofs-utils (the root filesystem is lz4hc-compressed).
+
+version = "1.10.0"
+kind = "library"
+summary = "LZ4 compression library"
+license = "BSD-2-Clause AND GPL-2.0-or-later"
+homepage = "https://lz4.org"
+cpe = "lz4_project:lz4"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://github.com/lz4/lz4/releases/download/v{version}/lz4-{version}.tar.gz"
+sha256 = "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"
+
+[[build]]
+make.args = ["PREFIX=/usr"]
+make.install = ["install", "PREFIX=/usr"]

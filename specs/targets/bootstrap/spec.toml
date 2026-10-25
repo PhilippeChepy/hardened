@@ -1,0 +1,21 @@
+# The bootstrap, on StageX: a static toolset under /cross, which runs on an empty root. LLVM built
+# by StageX's GCC (clang, lld, the LLVM tools and compiler-rt, at /cross/llvm), BusyBox, make,
+# CMake and Python (its own recipes, in bootstrap/recipes/); and, also static, Go (built with
+# StageX's Go) and the kernel's UAPI headers.
+#
+# StageX itself never reaches a later environment: its tools, dynamically linked, sit where our
+# musl goes.
+
+components = ["linux-headers", "llvm", "busybox", "make", "cmake", "python", "go"]
+
+# The only build environment from outside: StageX images pinned by digest, themselves built
+# reproducibly from a full-source bootstrap. GCC, the GNU userland, perl, python, CMake and Go,
+# on musl.
+[seed]
+base = "docker.io/stagex/pallet-python@sha256:9463c00f462325a7b0a46a5460b241c09a41f62e5968b1b3dea3796451caea55"
+# Copied over the base, in order.
+layers = [
+    "docker.io/stagex/pallet-gcc-gnu-gnu@sha256:7d9bad63fafe72a3934a6efea9f742bf3a610a169bd401533a2b57c45efa2f2d",
+    "docker.io/stagex/core-go@sha256:689ff4afffb574203ec8039fd4663101b07bec04805d53fb198bee1a51bb1736",
+    "docker.io/stagex/core-cmake@sha256:75ab41e96e7142fbe667e36f482858ce190d3fe5e2bb29835cf1b153cff74d34",
+]

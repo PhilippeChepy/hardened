@@ -1,0 +1,15 @@
+version = "3.3"
+kind = "application"
+summary = "GNU gperf perfect hash generator"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gperf/"
+cpe = "gnu:gperf"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/gperf/gperf-{version}.tar.gz"
+sha256 = "fd87e0aba7e43ae054837afd6cd4db03a3f2693deb3619085e6ed9d8d9604ad8"
+
+[[build]]
+configure = {}

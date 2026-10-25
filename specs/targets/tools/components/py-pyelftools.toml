@@ -1,0 +1,15 @@
+version = "0.33"
+kind = "library"
+summary = "pyelftools, for systemd-stub's ELF to PE conversion"
+license = "Unlicense"
+homepage = "https://github.com/eliben/pyelftools"
+purl = "pkg:pypi/pyelftools@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/p/pyelftools/pyelftools-{version}-py3-none-any.whl"
+sha256 = "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

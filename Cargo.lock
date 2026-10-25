@@ -595,7 +595,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "const_format",
  "fatfs",
  "goblin",
  "gpt",

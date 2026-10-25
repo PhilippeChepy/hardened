@@ -1,0 +1,20 @@
+version = "5.3"
+kind = "application"
+summary = "GNU Bash, the shell of the build environments"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/bash/"
+cpe = "gnu:bash"
+
+depends-on = ["compiler-rt", "musl", "llvm-runtimes"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/bash/bash-{version}.tar.gz"
+sha256 = "0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba"
+
+[[build]]
+configure.args = ["--without-bash-malloc", "--disable-nls"]
+
+# `/bin/sh` of the later environments.
+[[build]]
+symlink.target = "bash"
+symlink.link = "{dest}/usr/bin/sh"

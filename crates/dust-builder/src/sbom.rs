@@ -3,7 +3,8 @@
 //! One component per recipe (with its source archives, checksums and license), nesting the Go
 //! modules and Rust crates compiled into its binaries, plus the toolchain standard libraries that
 //! end up linked in. The metadata records the image checksum, the dm-verity root hash, the kernel
-//! command line and the builder image, so the SBOM is tied to exactly one image.
+//! command line and the pinned images the build bootstraps from, so the SBOM is tied to exactly
+//! one image.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +12,6 @@ use anyhow::Context;
 use serde_json::{Value, json};
 
 use crate::build::Built;
-use crate::podman::Builder;
 use crate::recipe::ComponentName;
 use crate::rootfs::Manifest;
 use crate::sha256::Sha256;
@@ -19,7 +19,8 @@ use crate::sha256::Sha256;
 pub struct Sbom<'a> {
     pub version: &'a str,
     pub components: &'a [&'a Built],
-    pub builder: &'a Builder,
+    /// The pinned images of the seeds.
+    pub bootstrap: &'a [String],
     pub manifest: &'a Manifest,
     pub image_sha256: Sha256,
     pub roothash: Sha256,
@@ -38,7 +39,7 @@ impl Sbom<'_> {
             let meta = &built.recipe.meta;
             let mut component = json!({
                 "type": meta.kind,
-                "bom-ref": meta.name,
+                "bom-ref": built.unit.to_string(),
                 "name": meta.name,
                 "version": meta.version,
                 "description": meta.summary,
@@ -47,6 +48,7 @@ impl Sbom<'_> {
                 "externalReferences": external_references(built),
                 "properties": [
                     { "name": "hardened:build-key", "value": built.key },
+                    { "name": "hardened:target", "value": built.unit.target },
                     { "name": "hardened:rootfs-entries",
                       "value": files_per_component.get(&meta.name).copied().unwrap_or(0).to_string() },
                 ],
@@ -61,12 +63,13 @@ impl Sbom<'_> {
             components.push(component);
         }
 
-        let refs: Vec<&ComponentName> = self.components.iter().map(|b| b.recipe.name()).collect();
+        let refs: Vec<String> = self.components.iter().map(|b| b.unit.to_string()).collect();
         let mut dependencies = vec![json!({ "ref": "hardened", "dependsOn": refs })];
         for built in self.components {
+            let depends: Vec<String> = built.recipe.depends().into_iter().map(ToString::to_string).collect();
             dependencies.push(json!({
-                "ref": built.recipe.name(),
-                "dependsOn": built.recipe.depends(),
+                "ref": built.unit.to_string(),
+                "dependsOn": depends,
             }));
         }
 
@@ -95,7 +98,7 @@ impl Sbom<'_> {
                         { "name": "hardened:architecture", "value": "x86_64" },
                         { "name": "hardened:verity-roothash", "value": self.roothash },
                         { "name": "hardened:kernel-cmdline", "value": self.cmdline },
-                        { "name": "hardened:builder-image", "value": self.builder.id },
+                        { "name": "hardened:bootstrap-images", "value": self.bootstrap.join(" ") },
                     ],
                 },
             },
@@ -127,8 +130,6 @@ pub enum Inventory {
     CargoTree,
     /// `rustc --version`: the Rust standard library linked in.
     RustToolchain,
-    /// `<package> <version>` lines: builder Debian packages linked in statically.
-    DebianPackages,
 }
 
 /// A library listed by an inventory.
@@ -137,70 +138,46 @@ struct Library {
     version: String,
     purl: String,
     license: Option<String>,
-    linkage: Option<&'static str>,
 }
 
 impl Inventory {
-    const ALL: [Self; 4] = [
-        Self::GoBuildInfo,
-        Self::CargoTree,
-        Self::RustToolchain,
-        Self::DebianPackages,
-    ];
+    const ALL: [Self; 3] = [Self::GoBuildInfo, Self::CargoTree, Self::RustToolchain];
 
     pub fn extension(self) -> &'static str {
         match self {
             Self::GoBuildInfo => "gomod",
             Self::CargoTree => "crates",
             Self::RustToolchain => "toolchain",
-            Self::DebianPackages => "deb",
         }
     }
 
     fn libraries(self, text: &str) -> Vec<Library> {
-        let library = |name: String, version: String, purl: String| Library {
-            name,
-            version,
-            purl,
-            license: None,
-            linkage: None,
-        };
         match self {
-            Self::GoBuildInfo => parse_go_version_m(text)
-                .into_iter()
-                .map(|(name, version)| {
-                    let purl = format!("pkg:golang/{name}@{version}");
-                    library(name, version, purl)
+            Self::GoBuildInfo => (parse_go_version_m(text).into_iter())
+                .map(|(name, version)| Library {
+                    purl: format!("pkg:golang/{name}@{version}"),
+                    name,
+                    version,
+                    license: None,
                 })
                 .collect(),
-            Self::CargoTree => parse_cargo_tree(text)
-                .into_iter()
+            Self::CargoTree => (parse_cargo_tree(text).into_iter())
                 .map(|(name, version, license)| Library {
+                    purl: format!("pkg:cargo/{name}@{version}"),
+                    name,
+                    version,
                     license,
-                    ..library(name.clone(), version.clone(), format!("pkg:cargo/{name}@{version}"))
                 })
                 .collect(),
             // `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
-            Self::RustToolchain => text
-                .split_whitespace()
-                .nth(1)
+            Self::RustToolchain => (text.split_whitespace().nth(1))
                 .map(|version| Library {
-                    license: Some("MIT OR Apache-2.0".into()),
-                    ..library(
-                        "rust-std".into(),
-                        version.into(),
-                        format!("pkg:generic/rust-std@{version}"),
-                    )
+                    name: "rust-std".to_owned(),
+                    version: version.to_owned(),
+                    purl: format!("pkg:generic/rust-std@{version}"),
+                    license: Some("MIT OR Apache-2.0".to_owned()),
                 })
                 .into_iter()
-                .collect(),
-            Self::DebianPackages => text
-                .lines()
-                .filter_map(|line| line.split_once(' '))
-                .map(|(name, version)| Library {
-                    linkage: Some("static, from the builder image"),
-                    ..library(name.into(), version.into(), format!("pkg:deb/debian/{name}@{version}"))
-                })
                 .collect(),
         }
     }
@@ -230,9 +207,6 @@ fn nested_components(built: &Built) -> anyhow::Result<Vec<Value>> {
             });
             if let Some(license) = library.license {
                 component["licenses"] = json!([{ "expression": license }]);
-            }
-            if let Some(linkage) = library.linkage {
-                component["properties"] = json!([{ "name": "hardened:linkage", "value": linkage }]);
             }
             nested.insert(library.purl, component);
         }

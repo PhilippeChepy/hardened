@@ -1,5 +1,5 @@
-//! Booting the image in qemu (inside the builder container): OVMF firmware, an swtpm vTPM,
-//! user-data through fw_cfg, the dust API forwarded to the host.
+//! Booting the image in qemu, in a container of the target's test environment (`[export] test`):
+//! OVMF firmware, an swtpm vTPM, user-data through fw_cfg, the dust API forwarded to the host.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -7,13 +7,15 @@ use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, ensure};
 
-use crate::Paths;
-use crate::podman::Builder;
+use crate::podman::Image;
+use crate::{Paths, TargetArg};
 
 #[derive(clap::Args)]
 pub struct RunArgs {
+    #[command(flatten)]
+    target: TargetArg,
     /// User-data file passed to the VM.
     #[arg(long)]
     user_data: Option<PathBuf>,
@@ -32,6 +34,8 @@ pub struct RunArgs {
 
 #[derive(clap::Args)]
 pub struct TestArgs {
+    #[command(flatten)]
+    target: TargetArg,
     /// Seconds to wait for every marker.
     #[arg(long, default_value_t = 300)]
     timeout: u64,
@@ -48,27 +52,24 @@ const SMOKE_MARKERS: &[&str] = &[
 ];
 
 pub fn run(paths: &Paths, args: &RunArgs) -> anyhow::Result<()> {
-    let builder = Builder::ensure(paths)?;
-    let image = latest_image(paths)?;
+    let vm = vm_image(paths, &args.target)?;
+    let image = latest_image(paths, &args.target)?;
     let state = paths.build().join("run");
-    let mut cmd = qemu_container(&builder, &image, &state, args)?
-        .interactive(true)
-        .command();
+    let mut cmd = qemu_container(&vm, &image, &state, args)?.interactive().command();
     let status = cmd.status()?;
-    if !status.success() {
-        bail!("qemu exited with {status}");
-    }
+    ensure!(status.success(), "qemu exited with {status}");
     Ok(())
 }
 
 pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
     if !args.no_build {
-        crate::image::build_image(paths)?;
+        crate::image::build_image(paths, &args.target.id, crate::build::Options::default())?;
     }
-    let builder = Builder::ensure(paths)?;
-    let image = latest_image(paths)?;
+    let vm = vm_image(paths, &args.target)?;
+    let image = latest_image(paths, &args.target)?;
     let state = paths.build().join("test");
     let run_args = RunArgs {
+        target: args.target.clone(),
         user_data: Some(paths.root.join("tests/smoke-user-data.toml")),
         disk_size: "4G".into(),
         keep_state: false,
@@ -76,7 +77,7 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
         api_port: 17443,
     };
     let name = format!("hardened-test-{}", std::process::id());
-    let mut child = qemu_container(&builder, &image, &state, &run_args)?
+    let mut child = qemu_container(&vm, &image, &state, &run_args)?
         .name(&name)
         .command()
         .stdin(Stdio::null())
@@ -116,16 +117,18 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn latest_image(paths: &Paths) -> anyhow::Result<PathBuf> {
-    let image = paths.image().join("disk.raw");
-    if !image.exists() {
-        bail!("no image: run `cargo builder image` first");
-    }
+fn latest_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<PathBuf> {
+    let image = paths.image(&target.id).join("disk.raw");
+    ensure!(
+        image.exists(),
+        "no image of target {0}: run `cargo builder image --target {0}` first",
+        target.id
+    );
     Ok(image)
 }
 
 fn qemu_container<'a>(
-    builder: &'a Builder,
+    vm: &'a Image,
     image: &Path,
     state: &Path,
     args: &RunArgs,
@@ -156,7 +159,7 @@ exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=/state/vars.fd \
     -drive file=/state/disk.qcow2,if=virtio,format=qcow2 \
-    -netdev user,id=net0,hostfwd=tcp::7443-:7443 -device virtio-net-pci,netdev=net0 \
+    -netdev user,id=net0,hostfwd=tcp::7443-:7443 -device virtio-net-pci,netdev=net0,romfile= \
     -chardev socket,id=tpm,path=/state/swtpm.sock -tpmdev emulator,id=tpm0,chardev=tpm \
     -device tpm-crb,tpmdev=tpm0 \
     -device virtio-rng-pci \
@@ -165,7 +168,7 @@ exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
         disk = args.disk_size,
         memory = args.memory_mib,
     );
-    let mut container = builder
+    let mut container = vm
         .container(script)
         .mount_ro(image.parent().context("image directory")?, "/image")
         .mount(state, "/state")
@@ -175,4 +178,23 @@ exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
         container = container.device("/dev/kvm");
     }
     Ok(container)
+}
+
+/// The image of the target's test environment (qemu, OVMF, swtpm and what the script above
+/// runs), its components built if needed.
+fn vm_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<Image> {
+    let pipeline = crate::pipeline::Pipeline::load(paths)?;
+    let target = pipeline.targets.get(&target.id)?;
+    anyhow::ensure!(target.export.is_some(), "target {} is not exported", target.id);
+    let environment = pipeline.environment(target)?;
+    let order = pipeline.order(&environment.trees)?;
+    crate::fetch::fetch_all(paths, order.iter().map(|job| &job.recipe))?;
+    let built = crate::build::build_all(
+        paths,
+        &order,
+        &pipeline.keys_environment()?,
+        None,
+        crate::build::Options::default(),
+    )?;
+    crate::environment::ensure(paths, &environment, &built)
 }

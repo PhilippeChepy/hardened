@@ -1,13 +1,14 @@
-//! Component recipes, written in Rust: `components/<name>/recipe.rs`.
+//! Component recipes: a target's in `specs/targets/<target>/components/`, those several targets
+//! build in `specs/components/` ([`declarative`] describes the format).
 //!
-//! A recipe implements [`Component`]: its [`Meta`] (for the SBOM) and `fetch`/`build` functions
-//! describing its build through [`Build`]. Recipes never execute anything: the description is a
+//! A recipe gives a component's [`Meta`] (for the SBOM), and its build (and fetch phase, for
+//! cargo), described through [`Build`]. Recipes never execute anything: the description is a
 //! [`Plan`] of steps, which also records what the build uses (sources, other components'
-//! outputs) and the container images it fills. The plan is what the cache key hashes.
-//!
-//! Component names ([`name!`]) and source checksums ([`source!`], [`crate::sha256!`]) are
-//! validated at compile time; the rest of a plan when recipes load.
+//! outputs) and the container images it fills. The plan is what the cache key hashes; every plan
+//! is described, and checked, when recipes load.
 
+mod build_systems;
+mod declarative;
 mod output;
 mod plan;
 
@@ -17,9 +18,10 @@ use std::fmt;
 use std::path::{Component as PathComponent, Path};
 use std::str::FromStr;
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use serde::Serialize;
 
+pub use build_systems::Configure;
 pub use output::Output;
 pub use plan::{Arg, Base, Build, CargoBinary, Cgo, Cmd, Command, GoBuild, Loc, Mode, Piece, Plan, Step};
 
@@ -27,17 +29,6 @@ use crate::sha256::Sha256;
 
 /// The OS version: the workspace version, which dust-builder shares.
 pub const WORKSPACE_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Everything a recipe needs, for `use crate::recipe::prelude::*`.
-pub mod prelude {
-    pub use const_format::formatcp;
-
-    pub use super::{
-        Arg, Build, CargoBinary, Cgo, Cmd, Component, ComponentName, ComponentType, ContainerImage, GoBuild, Meta,
-        Mode, Output, Source, WORKSPACE_VERSION,
-    };
-    pub use crate::{name, source};
-}
 
 /// A component name: lowercase ASCII letters, digits and inner `-`. Used in output paths and
 /// container mount points, so it can never contain `/` or `..`.
@@ -96,6 +87,14 @@ impl FromStr for ComponentName {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for ComponentName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 impl From<ComponentName> for String {
     fn from(name: ComponentName) -> Self {
         name.0.into_owned()
@@ -120,8 +119,35 @@ impl fmt::Display for ComponentName {
     }
 }
 
+/// A component of a target, which the pipeline builds: `<target>/<component>`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Unit {
+    pub target: ComponentName,
+    pub component: ComponentName,
+}
+
+impl FromStr for Unit {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> anyhow::Result<Self> {
+        let (target, component) = text
+            .split_once('/')
+            .with_context(|| format!("{text:?} is not `<target>/<component>`"))?;
+        Ok(Self {
+            target: target.parse()?,
+            component: component.parse()?,
+        })
+    }
+}
+
+impl fmt::Display for Unit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.target, self.component)
+    }
+}
+
 /// CycloneDX 1.6 component type (the subset hardened's components use).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ComponentType {
     Application,
@@ -136,84 +162,28 @@ pub struct Meta {
     pub name: ComponentName,
     pub version: String,
     pub kind: ComponentType,
-    pub summary: &'static str,
+    pub summary: String,
     /// SPDX license expression.
-    pub license: &'static str,
-    pub homepage: &'static str,
-    /// Package URL; `pkg:generic/<name>@<version>` unless set with [`Meta::purl`].
+    pub license: String,
+    pub homepage: String,
+    /// Package URL; `pkg:generic/<name>@<version>` unless the recipe sets one.
     pub purl: String,
     pub cpe: Option<String>,
 }
 
-impl Meta {
-    pub fn new(
-        name: ComponentName,
-        version: impl Into<String>,
-        kind: ComponentType,
-        summary: &'static str,
-        license: &'static str,
-        homepage: &'static str,
-    ) -> Self {
-        let version = version.into();
-        Self {
-            purl: format!("pkg:generic/{name}@{version}"),
-            name,
-            version,
-            kind,
-            summary,
-            license,
-            homepage,
-            cpe: None,
-        }
-    }
-
-    pub fn purl(mut self, purl: impl Into<String>) -> Self {
-        self.purl = purl.into();
-        self
-    }
-
-    pub fn cpe(mut self, cpe: impl Into<String>) -> Self {
-        self.cpe = Some(cpe.into());
-        self
-    }
-}
-
-/// A pinned source archive. Declared as a constant with [`source!`]; recorded (to be fetched,
-/// verified and listed in the SBOM) when the build uses it.
+/// A pinned source file, recorded (to be fetched, verified and listed in the SBOM) when the
+/// build uses it. The source cache names it by its checksum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Source {
     pub url: &'static str,
     pub sha256: Sha256,
-    file: Option<&'static str>,
-}
-
-/// A source: `source!(url, sha256)`, optionally `file = "name"` when the URL does not end with a
-/// usable file name. The checksum is validated at compile time; URLs may be built from constants
-/// with `formatcp!`.
-#[macro_export]
-macro_rules! source {
-    ($url:expr, $sha256:literal $(,)?) => {
-        $crate::recipe::Source::new($url, $crate::sha256!($sha256), None)
-    };
-    ($url:expr, $sha256:literal, file = $file:expr $(,)?) => {
-        $crate::recipe::Source::new($url, $crate::sha256!($sha256), Some($file))
-    };
 }
 
 impl Source {
-    pub const fn new(url: &'static str, sha256: Sha256, file: Option<&'static str>) -> Self {
-        Self { url, sha256, file }
-    }
-
-    /// File name in the source cache.
-    pub fn file_name(&self) -> Result<&'static str, String> {
-        let name = self
-            .file
-            .unwrap_or_else(|| self.url.rsplit('/').next().unwrap_or_default());
-        if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
-            return Err(format!("{}: no usable file name, set `file = …`", self.url));
-        }
-        Ok(name)
+    /// An archive, extracted for the build (`.tar.*`, `.tgz`), rather than a file used as is.
+    pub fn is_archive(&self) -> bool {
+        let path = self.url.split(['?', '#']).next().unwrap_or_default();
+        path.contains(".tar") || path.ends_with(".tgz")
     }
 }
 
@@ -267,30 +237,14 @@ impl ContainerImage {
     }
 }
 
-/// A component of the image. Implemented by each `components/<name>/recipe.rs`.
-pub trait Component: Sync {
-    fn meta(&self) -> Meta;
-
-    /// Repository paths an in-tree component is built from, mounted at `/src` and hashed into
-    /// the cache key.
-    fn local(&self) -> Vec<&'static str> {
-        Vec::new()
-    }
-
-    /// Steps run with network access before the build, for lockfile-verified downloads only.
-    fn fetch(&self, _: &mut Build) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// The build, run without network access.
-    fn build(&self, b: &mut Build) -> anyhow::Result<()>;
-}
-
-/// A component resolved at load time: its metadata and plan.
+/// A component described at load time: its metadata and plan, the same in every target building
+/// it from this recipe.
 #[derive(Clone)]
 pub struct Recipe {
     pub meta: Meta,
     pub local: Vec<RepoPath>,
+    /// Components of the target building it, which it builds with.
+    pub depends_on: Vec<String>,
     pub plan: Plan,
 }
 
@@ -307,9 +261,9 @@ impl Recipe {
         &self.meta.name
     }
 
-    /// The components whose outputs the build uses.
-    pub fn depends(&self) -> &BTreeSet<ComponentName> {
-        &self.plan.inputs
+    /// The components whose trees or outputs the build uses.
+    pub fn depends(&self) -> BTreeSet<&Unit> {
+        self.plan.inputs()
     }
 
     /// The container images the build fills.
@@ -317,103 +271,72 @@ impl Recipe {
         self.plan.images.iter()
     }
 
-    fn resolve(component: &dyn Component) -> anyhow::Result<Self> {
-        let meta = component.meta();
+    fn describe(recipe: &declarative::Declarative) -> anyhow::Result<Self> {
+        let meta = recipe.meta.clone();
         ensure!(!meta.version.is_empty(), "empty version");
         ensure!(meta.purl.starts_with("pkg:"), "purl must start with \"pkg:\"");
-        let plan = Plan::describe(
-            &meta.name,
-            &meta.version,
-            |b| component.fetch(b),
-            |b| component.build(b),
-        )?;
-        let local = component
-            .local()
-            .into_iter()
-            .map(|path| RepoPath::try_from(path).map_err(anyhow::Error::msg))
-            .collect::<anyhow::Result<_>>()?;
-        Ok(Self { meta, local, plan })
+        let plan = Plan::describe(&meta.name, |b| recipe.fetch(b), |b| recipe.build(b))?;
+        Ok(Self {
+            meta,
+            local: recipe.local.clone(),
+            depends_on: recipe.depends_on.clone(),
+            plan,
+        })
     }
 }
 
-/// Every component of the image, keyed by name. Dependencies are known and acyclic, and every
-/// plan described.
+/// Every recipe, its plan described: the components', and the targets' overrides by unit.
 #[derive(Debug)]
-pub struct Recipes(BTreeMap<ComponentName, Recipe>);
+pub struct Recipes {
+    components: BTreeMap<ComponentName, Recipe>,
+    overrides: BTreeMap<Unit, Recipe>,
+}
 
 impl Recipes {
-    pub fn load() -> anyhow::Result<Self> {
-        Self::resolve(crate::components::ALL)
+    /// The repository's recipes.
+    pub fn load(paths: &crate::Paths) -> anyhow::Result<Self> {
+        Self::resolve(declarative::load(&paths.specs())?)
     }
 
-    fn resolve(components: &[&dyn Component]) -> anyhow::Result<Self> {
-        let mut recipes = BTreeMap::new();
-        for component in components {
-            let recipe = Recipe::resolve(*component).with_context(|| format!("component {}", component.meta().name))?;
-            if let Some(previous) = recipes.insert(recipe.name().clone(), recipe) {
-                bail!("component {} is defined twice", previous.name());
-            }
+    fn resolve(recipes: Vec<(Option<ComponentName>, declarative::Declarative)>) -> anyhow::Result<Self> {
+        let (mut components, mut overrides) = (BTreeMap::new(), BTreeMap::new());
+        for (target, loaded) in recipes {
+            let name = loaded.meta.name.clone();
+            let recipe = Recipe::describe(&loaded).with_context(|| match &target {
+                Some(target) => format!("component {name}, as target {target} overrides it"),
+                None => format!("component {name}"),
+            })?;
+            let duplicate = match target {
+                Some(target) => {
+                    let unit = Unit {
+                        target,
+                        component: name,
+                    };
+                    overrides.insert(unit, recipe).is_some()
+                }
+                None => components.insert(name, recipe).is_some(),
+            };
+            ensure!(!duplicate, "a recipe is defined twice");
         }
-        for recipe in recipes.values() {
-            for dep in recipe.depends() {
-                ensure!(
-                    recipes.contains_key(dep),
-                    "{} uses outputs of unknown component {dep}",
-                    recipe.name()
-                );
-            }
-        }
-        let recipes = Self(recipes);
-        recipes.build_order(&[])?;
-        Ok(recipes)
+        Ok(Self { components, overrides })
     }
 
     pub fn values(&self) -> impl Iterator<Item = &Recipe> {
-        self.0.values()
+        self.components.values().chain(self.overrides.values())
     }
 
-    #[cfg(test)]
-    pub fn get(&self, name: &str) -> Option<&Recipe> {
-        self.0.get(name)
+    /// The recipe of `unit`: as its target overrides it, if it does.
+    pub fn get(&self, unit: &Unit) -> anyhow::Result<&Recipe> {
+        (self
+            .overrides
+            .get(unit)
+            .or_else(|| self.components.get(&unit.component)))
+        .with_context(|| format!("no recipe for {unit}"))
     }
 
-    /// The selected components (all when empty) and their dependencies, dependencies first.
-    pub fn build_order(&self, selected: &[ComponentName]) -> anyhow::Result<Vec<&Recipe>> {
-        fn visit<'a>(
-            name: &ComponentName,
-            recipes: &'a BTreeMap<ComponentName, Recipe>,
-            visiting: &mut BTreeSet<&'a ComponentName>,
-            done: &mut BTreeSet<&'a ComponentName>,
-            order: &mut Vec<&'a Recipe>,
-        ) -> anyhow::Result<()> {
-            let (name, recipe) = recipes
-                .get_key_value(name)
-                .with_context(|| format!("unknown component {name}"))?;
-            if done.contains(name) {
-                return Ok(());
-            }
-            if !visiting.insert(name) {
-                bail!("dependency cycle through component {name}");
-            }
-            for dep in recipe.depends() {
-                visit(dep, recipes, visiting, done, order)?;
-            }
-            visiting.remove(name);
-            done.insert(name);
-            order.push(recipe);
-            Ok(())
-        }
-
-        let names: Vec<&ComponentName> = if selected.is_empty() {
-            self.0.keys().collect()
-        } else {
-            selected.iter().collect()
-        };
-        let (mut visiting, mut done, mut order) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
-        for name in names {
-            visit(name, &self.0, &mut visiting, &mut done, &mut order)?;
-        }
-        Ok(order)
+    /// The units whose targets override their recipes.
+    pub fn overridden(&self) -> impl Iterator<Item = &Unit> {
+        self.overrides.keys()
     }
 }
 
@@ -421,23 +344,14 @@ impl Recipes {
 mod tests {
     use super::*;
 
-    /// Every recipe of the repository resolves: a misused build API fails here.
     #[test]
-    fn resolves_every_component() {
-        let recipes = Recipes::load().unwrap();
-        let order: Vec<&str> = recipes
-            .build_order(&[])
-            .unwrap()
-            .iter()
-            .map(|r| r.name().as_str())
-            .collect();
-        let position = |name| order.iter().position(|n| *n == name).unwrap();
-        assert!(position("libseccomp") < position("runc"));
-        let dust = recipes.get("dust").unwrap();
-        assert!(!dust.plan.fetch.is_empty(), "dust fetches its crates");
-        assert!(recipes.get("kernel").unwrap().plan.fetch.is_empty());
-        let pause = recipes.get("pause").unwrap();
-        assert_eq!(pause.images().count(), 1, "pause fills its sandbox image");
+    fn parses_units() {
+        let unit: Unit = "tools/perl".parse().unwrap();
+        assert_eq!((unit.target.as_str(), unit.component.as_str()), ("tools", "perl"));
+        assert_eq!(unit.to_string(), "tools/perl");
+        for bad in ["perl", "tools/", "/perl", "tools/a/b", "Tools/perl"] {
+            assert!(bad.parse::<Unit>().is_err(), "{bad:?} accepted");
+        }
     }
 
     #[test]
@@ -447,22 +361,6 @@ mod tests {
         }
         assert_eq!(name!("gcc-runtime").as_str(), "gcc-runtime");
         assert_eq!("gcc-runtime".parse::<ComponentName>().unwrap(), name!("gcc-runtime"));
-    }
-
-    #[test]
-    fn validates_source_file_names() {
-        let digest = Sha256::digest(b"");
-        assert_eq!(
-            Source::new("https://x/a.tar.gz", digest, None).file_name(),
-            Ok("a.tar.gz")
-        );
-        assert_eq!(
-            Source::new("https://x/", digest, Some("b.tar")).file_name(),
-            Ok("b.tar")
-        );
-        assert!(Source::new("https://x/", digest, None).file_name().is_err());
-        assert!(Source::new("https://x/..", digest, None).file_name().is_err());
-        assert!(Source::new("https://x/a", digest, Some("a/b")).file_name().is_err());
     }
 
     #[test]

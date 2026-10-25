@@ -10,7 +10,6 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-const_format = "0.2.37"
 fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
 goblin = { version = "0.10.7", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
 gpt.workspace = true

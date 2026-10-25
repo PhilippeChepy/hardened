@@ -1,0 +1,24 @@
+version = "2.6.1"
+kind = "library"
+summary = "Seccomp filter library, statically linked into runc"
+license = "LGPL-2.1-only"
+homepage = "https://github.com/seccomp/libseccomp"
+purl = "pkg:github/seccomp/libseccomp@v{version}"
+cpe = "libseccomp_project:libseccomp"
+
+depends-on = ["gperf"]
+
+[sources.src]
+url = "https://github.com/seccomp/libseccomp/releases/download/v{version}/libseccomp-{version}.tar.gz"
+sha256 = "501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be"
+
+# Headers, static library and pkg-config file, in their `/usr` layout: linked into runc, nothing
+# goes to the tree.
+[[build]]
+configure.dest = "{out:dev}"
+configure.args = [
+    "--libdir=/usr/lib",
+    "--disable-shared",
+    # Linked into runc, with ThinLTO.
+    "CFLAGS=-O2 -flto=thin",
+]

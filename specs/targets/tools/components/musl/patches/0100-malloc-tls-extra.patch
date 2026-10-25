@@ -1,0 +1,56 @@
+Give the external allocator four more per-thread pointers next to malloc_tls,
+zeroed for each new thread and kept when the dynamic linker moves the initial
+thread structure: mimalloc 3 keeps two theaps, its thread-local array, a fast
+slot and the thread id there (see files/mimalloc.c).
+
+diff -ru a/ldso/dynlink.c b/ldso/dynlink.c
+--- a/ldso/dynlink.c
++++ b/ldso/dynlink.c
+@@ -2034,11 +2034,14 @@
+ 	 * since the TLS images might have contained relocated addresses. */
+ 	if (initial_tls != builtin_tls) {
+ 		void *mtls = __pthread_self()->malloc_tls;
++		void *mtls_extra[4];
++		memcpy(mtls_extra, __pthread_self()->malloc_tls_extra, sizeof mtls_extra);
+ 		pthread_t ns = __copy_tls(initial_tls);
+ 		if (__init_tp(ns) < 0) {
+ 			a_crash();
+ 		}
+ 		ns->malloc_tls = mtls;
++		memcpy(ns->malloc_tls_extra, mtls_extra, sizeof mtls_extra);
+ 	} else {
+ 		size_t tmp_tls_size = libc.tls_size;
+ 		pthread_t self = __pthread_self();
+diff -ru a/src/env/__init_tls.c b/src/env/__init_tls.c
+--- a/src/env/__init_tls.c
++++ b/src/env/__init_tls.c
+@@ -25,6 +25,7 @@
+ 	td->sysinfo = __sysinfo;
+ 	td->next = td->prev = td;
+ 	td->malloc_tls = __malloc_tls_default;
++	memset(td->malloc_tls_extra, 0, sizeof td->malloc_tls_extra);
+ 	return 0;
+ }
+ 
+diff -ru a/src/internal/pthread_impl.h b/src/internal/pthread_impl.h
+--- a/src/internal/pthread_impl.h
++++ b/src/internal/pthread_impl.h
+@@ -64,6 +64,7 @@
+ 	char *dlerror_buf;
+ 	void *stdio_locks;
+ 	void *malloc_tls;
++	void *malloc_tls_extra[4];
+ 
+ 	/* Part 3 -- the positions of these fields relative to
+ 	 * the end of the structure is external and internal ABI. */
+diff -ru a/src/thread/pthread_create.c b/src/thread/pthread_create.c
+--- a/src/thread/pthread_create.c
++++ b/src/thread/pthread_create.c
+@@ -321,6 +321,7 @@
+ 	new->tsd = (void *)tsd;
+ 	new->locale = &libc.global_locale;
+ 	new->malloc_tls = __malloc_tls_default;
++	memset(new->malloc_tls_extra, 0, sizeof new->malloc_tls_extra);
+ 	if (attr._a_detach) {
+ 		new->detach_state = DT_DETACHED;
+ 	} else {

@@ -1,0 +1,28 @@
+# Python, for the build systems that need it (Meson, Rust's bootstrap, systemd, ukify).
+
+version = "3.14.9"
+kind = "application"
+summary = "Python interpreter"
+license = "Python-2.0"
+homepage = "https://www.python.org"
+cpe = "python:python"
+
+depends-on = ["llvm", "zlib", "libffi"]
+
+[exports]
+# Where pure Python packages are installed, below `/`.
+site-packages = "usr/lib/python3.14/site-packages"
+
+# What a target building its own Python changes.
+[vars]
+prefix = "/usr"
+args = ["--enable-shared", "--without-static-libpython"]
+
+[sources.src]
+url = "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz"
+sha256 = "e02d9ac21cebda6e46435369744a92c65cc7cd8669697694122cf97ffacd1e53"
+
+# ensurepip stays: qemu's configure creates a virtual environment with it.
+[[build]]
+configure.prefix = "{vars.prefix}"
+configure.args = ["{vars.args}", "--disable-test-modules"]

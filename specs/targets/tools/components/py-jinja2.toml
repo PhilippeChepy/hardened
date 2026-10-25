@@ -1,0 +1,15 @@
+version = "3.1.6"
+kind = "library"
+summary = "Jinja2 templates, for systemd's build"
+license = "BSD-3-Clause"
+homepage = "https://palletsprojects.com/p/jinja/"
+purl = "pkg:pypi/jinja2@{version}"
+
+depends-on = ["llvm", "python", "py-markupsafe"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/j/jinja2/jinja2-{version}-py3-none-any.whl"
+sha256 = "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

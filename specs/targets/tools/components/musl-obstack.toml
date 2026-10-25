@@ -1,0 +1,18 @@
+version = "1.2.3"
+kind = "library"
+summary = "obstack, glibc's object stack allocator, for musl: a static library elfutils links"
+license = "GPL-2.0-or-later"
+homepage = "https://github.com/void-linux/musl-obstack"
+
+depends-on = ["llvm", "autoconf", "automake", "libtool", "pkgconf"]
+
+[sources.src]
+url = "https://github.com/void-linux/musl-obstack/archive/v{version}.tar.gz"
+sha256 = "9ffb3479b15df0170eba4480e51723c3961dbe0b461ec289744622db03a69395"
+
+[[build]]
+run.cmd = ["autoreconf", "-fi"]
+
+[[build]]
+configure.args = ["--disable-shared", "CFLAGS=-O2 -fPIC"]
+configure.in-tree = true

@@ -1,0 +1,15 @@
+version = "0.19"
+kind = "library"
+summary = "json-c JSON library"
+license = "MIT"
+homepage = "https://github.com/json-c/json-c"
+cpe = "json-c_project:json-c"
+
+depends-on = ["llvm", "cmake"]
+
+[sources.src]
+url = "https://s3.amazonaws.com/json-c_releases/releases/json-c-{version}.tar.gz"
+sha256 = "37ad0249902e301bd9052bf712e511fcc6acff4ecaad4b5900aad9ce564e26de"
+
+[[build]]
+cmake.args = ["-DBUILD_STATIC_LIBS=OFF", "-DDISABLE_WERROR=ON"]

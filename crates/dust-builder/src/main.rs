@@ -1,29 +1,35 @@
 //! The hardened build system.
 //!
-//! Every component of the OS is compiled from source inside a pinned builder image
-//! (`builder/Containerfile`), then assembled into a dm-verity protected root filesystem, a signed
-//! unified kernel image and a GPT disk, published as qcow2 together with a CycloneDX SBOM.
+//! Every component of the OS is compiled from source, from its recipe (`specs/`), by a
+//! pipeline of targets (`specs/targets/`) bootstrapped from a pinned seed; the components of an
+//! exported target are assembled into a dm-verity protected root filesystem, a signed unified
+//! kernel image and a GPT disk, published as qcow2 together with a CycloneDX SBOM.
 //!
 //! ```text
-//! cargo builder image          # build everything, write build/out/
+//! cargo builder image          # build the standard target, write build/out/
 //! cargo builder run            # boot the image in qemu (OVMF + swtpm)
 //! cargo builder test           # boot it headless and check the smoke-test markers
 //! ```
 
 mod build;
-mod components;
+mod environment;
 mod exec;
 mod fetch;
 mod image;
 mod keys;
 mod oci;
+mod patch;
+mod pipeline;
 mod podman;
 mod recipe;
 mod report;
 mod rootfs;
 mod run;
 mod sbom;
+mod seeds;
 mod sha256;
+mod specs;
+mod targets;
 
 use std::path::PathBuf;
 
@@ -44,25 +50,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Builds the builder image (done implicitly by the other commands).
-    Builder,
     /// Downloads and verifies the source archives of all components.
     Fetch,
-    /// Builds components (all by default) and their dependencies.
+    /// Builds components (`<target>/<component>`, or `<component>` when one target lists it; all by
+    /// default) and what they need.
     Build {
-        components: Vec<recipe::ComponentName>,
+        components: Vec<String>,
         /// Rebuild the named components even if cached.
         #[arg(long)]
         force: bool,
+        #[command(flatten)]
+        options: build::Options,
     },
-    /// Prints the scripts a component's recipe renders to, without running anything.
-    Plan { component: recipe::ComponentName },
-    /// Builds everything and writes the qcow2 image and its SBOM to build/out/.
-    Image,
+    /// Prints a component's environment and the steps of its build, without running anything.
+    Plan { component: String },
+    /// Builds a target and writes its qcow2 image and SBOM to build/out/.
+    Image {
+        #[command(flatten)]
+        target: TargetArg,
+        #[command(flatten)]
+        options: build::Options,
+    },
     /// Boots the image in qemu with a serial console.
     Run(run::RunArgs),
     /// Builds the image, boots it headless and waits for the smoke-test markers.
     Test(run::TestArgs),
+}
+
+/// The target an image command works on.
+#[derive(Debug, Clone, clap::Args)]
+pub struct TargetArg {
+    /// A target of specs/targets/.
+    #[arg(long = "target", default_value = "standard")]
+    pub id: String,
 }
 
 /// Well-known locations, relative to the repository root.
@@ -72,7 +92,7 @@ pub struct Paths {
 }
 
 impl Paths {
-    fn discover() -> anyhow::Result<Self> {
+    pub fn discover() -> anyhow::Result<Self> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let root = manifest_dir
             .ancestors()
@@ -82,8 +102,12 @@ impl Paths {
         Ok(Self { root })
     }
 
-    pub fn components(&self) -> PathBuf {
-        self.root.join("components")
+    /// The build's specifications: `components/` (the recipes) and `targets/`.
+    pub fn specs(&self) -> PathBuf {
+        self.root.join("specs")
+    }
+    pub fn targets(&self) -> PathBuf {
+        self.specs().join("targets")
     }
     pub fn build(&self) -> PathBuf {
         self.root.join("build")
@@ -100,11 +124,16 @@ impl Paths {
     pub fn work(&self) -> PathBuf {
         self.build().join("work")
     }
-    pub fn image(&self) -> PathBuf {
-        self.build().join("image")
+    /// Where the image of `target` is assembled.
+    pub fn image(&self, target: &str) -> PathBuf {
+        self.build().join("image").join(target)
     }
     pub fn out(&self) -> PathBuf {
         self.build().join("out")
+    }
+    /// Build logs: one per component and per environment, overwritten by each build.
+    pub fn logs(&self) -> PathBuf {
+        self.build().join("logs")
     }
     pub fn keys(&self) -> PathBuf {
         self.build().join("keys")
@@ -135,31 +164,33 @@ fn main() -> anyhow::Result<()> {
     };
 
     match cli.command {
-        Command::Builder => {
-            podman::Builder::ensure(&paths)?;
-        }
         Command::Fetch => {
-            let recipes = recipe::Recipes::load()?;
+            let recipes = recipe::Recipes::load(&paths)?;
             fetch::fetch_all(&paths, recipes.values())?;
         }
-        Command::Build { components, force } => {
-            let recipes = recipe::Recipes::load()?;
-            let builder = podman::Builder::ensure(&paths)?;
-            let order = recipes.build_order(&components)?;
-            fetch::fetch_all(&paths, order.iter().copied())?;
-            build::build_all(&paths, &builder, &order, force.then_some(components.as_slice()))?;
+        Command::Build {
+            components,
+            force,
+            options,
+        } => {
+            let pipeline = pipeline::Pipeline::load(&paths)?;
+            let units = (components.iter())
+                .map(|name| pipeline.unit(name))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let order = pipeline.order(&units)?;
+            fetch::fetch_all(&paths, order.iter().map(|job| &job.recipe))?;
+            let keys = pipeline.keys_environment()?;
+            build::build_all(&paths, &order, &keys, force.then_some(units.as_slice()), options)?;
         }
         Command::Plan { component } => {
-            let recipes = recipe::Recipes::load()?;
-            let recipe = recipes
-                .values()
-                .find(|r| *r.name() == component)
-                .with_context(|| format!("unknown component {component}"))?;
-            println!("{} {}", recipe.name(), recipe.meta.version);
-            print!("{}", recipe.plan);
+            let pipeline = pipeline::Pipeline::load(&paths)?;
+            let job = pipeline.job(&pipeline.unit(&component)?)?;
+            println!("{} {}", job.unit, job.recipe.meta.version);
+            println!("environment: {}", job.environment);
+            print!("{}", job.recipe.plan);
         }
-        Command::Image => {
-            image::build_image(&paths)?;
+        Command::Image { target, options } => {
+            image::build_image(&paths, &target.id, options)?;
         }
         Command::Run(args) => run::run(&paths, &args)?,
         Command::Test(args) => run::test(&paths, &args)?,

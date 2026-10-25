@@ -1,0 +1,60 @@
+version = "workspace"
+kind = "library"
+summary = "Root filesystem skeleton: merged-/usr layout, os-release and static configuration"
+license = "Apache-2.0"
+homepage = "https://github.com/PhilippeChepy/hardened"
+purl = "pkg:github/PhilippeChepy/hardened@{version}#specs/targets/standard/components/base-files"
+
+# Directories that must exist in the read-only root (mount points included).
+[[build]]
+mkdir = [
+    "{dest}/usr/bin",
+    "{dest}/usr/lib",
+    "{dest}/etc",
+    "{dest}/proc",
+    "{dest}/sys",
+    "{dest}/dev",
+    "{dest}/run",
+    "{dest}/tmp",
+    "{dest}/var",
+    "{dest}/usr/share/hardened/images",
+]
+
+# Merged /usr, and the /etc entries that change at runtime pointing into /run.
+[[build]]
+symlinks.dir = "{dest}"
+symlinks.links = [
+    ["bin", "usr/bin"],
+    ["sbin", "usr/bin"],
+    ["lib", "usr/lib"],
+    ["lib64", "usr/lib"],
+    ["etc/resolv.conf", "../run/hardened/resolv.conf"],
+    ["etc/hosts", "../run/hardened/hosts"],
+    ["etc/hostname", "../run/hardened/hostname"],
+    ["etc/os-release", "../usr/lib/os-release"],
+]
+
+[[build]]
+write.to = "{dest}/usr/lib/os-release"
+write.template = true
+write.contents = """
+NAME="hardened"
+ID=hardened
+VERSION_ID={version}
+PRETTY_NAME="hardened {version}"
+HOME_URL="https://github.com/PhilippeChepy/hardened"
+"""
+
+[[build]]
+write.to = "{dest}/etc/passwd"
+write.file = "files/etc/passwd"
+
+[[build]]
+write.to = "{dest}/etc/group"
+write.file = "files/etc/group"
+
+# With the bundled sandbox image.
+[[build]]
+write.to = "{dest}/usr/share/hardened/containerd/config.toml"
+write.file = "files/usr/share/hardened/containerd/config.toml"
+write.template = true

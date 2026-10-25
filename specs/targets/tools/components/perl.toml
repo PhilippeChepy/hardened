@@ -1,0 +1,28 @@
+# Perl, for the build systems that need it (OpenSSL, Autoconf, the kernel).
+
+version = "5.44.0"
+kind = "application"
+summary = "Perl interpreter"
+license = "Artistic-1.0-Perl OR GPL-1.0-or-later"
+homepage = "https://www.perl.org"
+cpe = "perl:perl"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://www.cpan.org/src/5.0/perl-{version}.tar.xz"
+sha256 = "505cf43912e9480495c344c70260452e32aa2a73c546a026b3f100053b23ce91"
+
+[[build]]
+run.cmd = [
+    "sh",
+    "Configure",
+    "-des",
+    "-Dprefix=/usr",
+    "-Dvendorprefix=/usr",
+    "-Duseshrplib",
+    "-Dusethreads",
+]
+
+[[build]]
+make.install = true

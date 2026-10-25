@@ -1,0 +1,15 @@
+version = "5.4.1"
+kind = "application"
+summary = "GNU awk"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gawk/"
+cpe = "gnu:gawk"
+
+depends-on = ["compiler-rt", "musl", "llvm-runtimes"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/gawk/gawk-{version}.tar.xz"
+sha256 = "07f6f7342b7febe4313fc2c2542ad93d64fe20ad8717200109f105a826f5fd37"
+
+[[build]]
+configure.args = ["--disable-nls"]

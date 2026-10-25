@@ -1,0 +1,42 @@
+version = "0.197"
+kind = "application"
+summary = "elfutils: libelf, for the kernel build"
+license = "GPL-3.0-or-later AND (GPL-2.0-or-later OR LGPL-3.0-or-later)"
+homepage = "https://sourceware.org/elfutils/"
+cpe = "elfutils_project:elfutils"
+
+depends-on = [
+    "llvm",
+    "argp-standalone",
+    "musl-fts",
+    "musl-obstack",
+    "zlib",
+    "zstd",
+    "json-c",
+    "pkgconf",
+    "m4",
+    "bison",
+    "flex",
+]
+
+[sources.src]
+url = "https://sourceware.org/elfutils/ftp/{version}/elfutils-{version}.tar.bz2"
+sha256 = "1fdf525f22dcf796d99a99ba3ea00a1f7b1ae5421bc62e8443a708920b99b904"
+
+[[build]]
+patch.files = ["patches/musl-macros.patch"]
+
+[[build]]
+configure.args = [
+    "--disable-debuginfod",
+    "--enable-libdebuginfod=dummy",
+    "--disable-nls",
+    "--program-prefix=eu-",
+    # It links libstdc++ (we have libc++).
+    "--disable-demangler",
+    # musl: GNU extensions, and the stack its threads get by default is small.
+    # Not -Werror (hardcoded, after which CFLAGS come): clang warns about more
+    # than GCC, which upstream builds with.
+    "CFLAGS=-O2 -D_GNU_SOURCE -Wno-unaligned-access -Wno-error",
+    "LDFLAGS=-Wl,-z,stack-size=2097152",
+]

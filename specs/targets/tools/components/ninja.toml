@@ -1,0 +1,20 @@
+version = "1.13.2"
+kind = "application"
+summary = "Ninja build tool, for Meson projects and LLVM"
+license = "Apache-2.0"
+homepage = "https://ninja-build.org"
+purl = "pkg:github/ninja-build/ninja@v{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz"
+sha256 = "974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17"
+
+[[build]]
+run.cmd = ["python3", "configure.py", "--bootstrap"]
+
+[[build]]
+install.from = "{src}/ninja"
+install.to = "{dest}/usr/bin/ninja"
+install.mode = 0o755

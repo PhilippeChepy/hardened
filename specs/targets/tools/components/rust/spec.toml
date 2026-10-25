@@ -1,0 +1,64 @@
+# The Rust toolchain (rustc and cargo), built from source for musl against our LLVM (as
+# `llvm-config` finds it), bootstrapped from the previous release (stage0), as upstream does. Its
+# standard library is compiled into dust-init and dust-api.
+
+version = "1.99.1"
+kind = "application"
+summary = "Rust toolchain, building dust-init and dust-api"
+license = "MIT OR Apache-2.0"
+homepage = "https://www.rust-lang.org"
+cpe = "rust-lang:rust"
+
+depends-on = ["llvm", "python", "openssl", "pkgconf", "cmake", "perl", "zlib"]
+
+[vars]
+# The stage0 release binaries for musl hosts (dynamically linked, with GCC's unwinder), at the
+# checksums `src/stage0` of the source pins.
+stage0 = "https://static.rust-lang.org/dist/2026-08-20"
+
+[sources.src]
+url = "https://static.rust-lang.org/dist/rustc-{version}-src.tar.xz"
+sha256 = "6451598a99e77f07571960f6b21d577399d3a30f33e80cbd2e3a4aae6535d265"
+
+# stage0: the release's rustc, standard library and cargo, put together in one tree.
+[sources.stage0-rustc]
+url = "{vars.stage0}/rustc-1.98.0-x86_64-unknown-linux-musl.tar.xz"
+sha256 = "4783d0963e5566b03e5e5be6bcb900672c177389d148d138fe1d75bc52554c91"
+
+[sources.stage0-std]
+url = "{vars.stage0}/rust-std-1.98.0-x86_64-unknown-linux-musl.tar.xz"
+sha256 = "1a76f782db2d540e1cd16ea47829b323f4a8f4dda64bca4b23be189109c510f8"
+
+[sources.stage0-cargo]
+url = "{vars.stage0}/cargo-1.98.0-x86_64-unknown-linux-musl.tar.xz"
+sha256 = "8a4da98a9a099e2bf8c210a236cd0cc8d6a259254f4b8fdf6997177ea9e1e4bf"
+
+[[build]]
+copy.from = "{stage0-rustc}/rustc/*"
+copy.into = "{work:stage0}"
+
+[[build]]
+copy.from = "{stage0-std}/rust-std-x86_64-unknown-linux-musl/*"
+copy.into = "{work:stage0}"
+
+[[build]]
+copy.from = "{stage0-cargo}/cargo/*"
+copy.into = "{work:stage0}"
+
+# The release binaries, and what its standard library links, use GCC's unwinder; LLVM's
+# libunwind has the same interface (and musl's dynamic linker does not check its symbol
+# versions). Only stage0 needs it: the compilers it builds link libunwind.
+[[build]]
+symlinks.dir = "{work:stage0}/lib"
+symlinks.links = [["libgcc_s.so.1", "/usr/lib/libunwind.so.1"], ["libgcc_s.so", "/usr/lib/libunwind.so"]]
+
+# Offline (vendored crates, stage0 given), against our LLVM (shared, with libc++), for a
+# dynamically linked musl (`crt-static = false`; `musl-root` is where its start files are),
+# unwinding with LLVM's libunwind. clang compiles and links (with lld, its default).
+[[build]]
+write.to = "{src}/bootstrap.toml"
+write.file = "files/bootstrap.toml"
+
+[[build]]
+run.cmd = ["python3", "x.py", "install"]
+run.env = [["DESTDIR", "{dest}"], ["LD_LIBRARY_PATH", "{work:stage0}/lib"], ["LIBRARY_PATH", "{work:stage0}/lib"]]

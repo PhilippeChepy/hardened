@@ -1,0 +1,121 @@
+# LLVM: clang, lld and the LLVM tools and libraries, the compiler of every environment after the
+# bootstrap. Built by the bootstrap clang, on musl, against libc++.
+
+version = "23.1.4"
+kind = "application"
+summary = "LLVM, clang and lld: the compiler of every environment after the bootstrap"
+license = "Apache-2.0 WITH LLVM-exception"
+homepage = "https://llvm.org"
+purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
+cpe = "llvm:llvm"
+
+depends-on = [
+    "compiler-rt",
+    "musl",
+    "llvm-runtimes",
+    "bash",
+    "coreutils",
+    "diffutils",
+    "findutils",
+    "gawk",
+    "grep",
+    "sed",
+    "make",
+    "tar",
+    "gzip",
+    "xz",
+    "bzip2",
+]
+
+[exports]
+# The triplet clang targets by default, of the system it builds; its major version, which names
+# its resource directory (`lib/clang/<major>`).
+target = "x86_64-hardened-linux-musl"
+major = "23"
+
+# What a target building its own LLVM changes: where it goes and its own CMake options.
+[vars]
+prefix = "/usr"
+options = [
+    "-DLLVM_HOST_TRIPLE={llvm.target}",
+    "-DLLVM_BUILD_LLVM_DYLIB=ON",
+    "-DLLVM_LINK_LLVM_DYLIB=ON",
+    "-DLLVM_ENABLE_LIBCXX=ON",
+]
+
+[sources.src]
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-{version}/llvm-project-{version}.src.tar.xz"
+sha256 = "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2"
+
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "cmake",
+    "-G",
+    "Unix Makefiles",
+    "-S",
+    "{src}/llvm",
+    "-B",
+    "{work:build}",
+    # x86 only, clang and lld, and clang's defaults for musl: compiler-rt, LLVM's libunwind,
+    # libc++ and lld instead of libgcc, libstdc++ and GNU ld.
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DLLVM_ENABLE_PROJECTS=clang;lld",
+    "-DLLVM_TARGETS_TO_BUILD=X86",
+    "-DLLVM_DEFAULT_TARGET_TRIPLE={llvm.target}",
+    "-DCLANG_VENDOR=hardened",
+    "-DCLANG_DEFAULT_RTLIB=compiler-rt",
+    "-DCLANG_DEFAULT_UNWINDLIB=libunwind",
+    "-DCLANG_DEFAULT_CXX_STDLIB=libc++",
+    "-DCLANG_DEFAULT_LINKER=lld",
+    "-DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON",
+    "-DENABLE_LINKER_BUILD_ID=ON",
+    "-DLLVM_INCLUDE_TESTS=OFF",
+    "-DLLVM_INCLUDE_EXAMPLES=OFF",
+    "-DLLVM_INCLUDE_BENCHMARKS=OFF",
+    "-DLLVM_INCLUDE_DOCS=OFF",
+    "-DLLVM_ENABLE_BINDINGS=OFF",
+    "-DLLVM_ENABLE_ZLIB=OFF",
+    "-DLLVM_ENABLE_ZSTD=OFF",
+    "-DLLVM_ENABLE_LIBXML2=OFF",
+    "-DLLVM_ENABLE_LIBEDIT=OFF",
+    "-DLLVM_ENABLE_LIBPFM=OFF",
+    "-DLLVM_ENABLE_CURL=OFF",
+    "-DLLVM_ENABLE_HTTPLIB=OFF",
+    "-DCLANG_ENABLE_STATIC_ANALYZER=OFF",
+    "-DCMAKE_INSTALL_PREFIX={vars.prefix}",
+    "{vars.options}",
+]
+
+[[build]]
+make.dir = "{work:build}"
+make.install = ["install/strip"]
+
+# Named `cpp`, clang runs as the C preprocessor.
+[[build]]
+symlinks.dir = "{dest}{vars.prefix}/bin"
+# The GNU names of the binary tools, and the LLVM programs answering to them.
+symlinks.links = [
+    ["ld", "ld.lld"],
+    ["ar", "llvm-ar"],
+    ["nm", "llvm-nm"],
+    ["objcopy", "llvm-objcopy"],
+    ["objdump", "llvm-objdump"],
+    ["ranlib", "llvm-ranlib"],
+    ["readelf", "llvm-readelf"],
+    ["strip", "llvm-strip"],
+    ["size", "llvm-size"],
+    ["strings", "llvm-strings"],
+    ["addr2line", "llvm-addr2line"],
+    ["c++filt", "llvm-cxxfilt"],
+    ["cc", "clang"],
+    ["c++", "clang++"],
+    ["cpp", "clang"],
+]
+
+[[build]]
+write.to = "{dest}{vars.prefix}/bin/{llvm.target}.cfg"
+# Options clang adds to every compilation.
+write.contents = "-fstack-protector-strong\n"

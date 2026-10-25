@@ -1,0 +1,15 @@
+version = "10.49"
+kind = "application"
+summary = "PCRE2 regular expressions, for GLib"
+license = "BSD-3-Clause WITH PCRE2-exception"
+homepage = "https://github.com/PCRE2Project/pcre2"
+cpe = "pcre:pcre2"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-{version}/pcre2-{version}.tar.bz2"
+sha256 = "53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384"
+
+[[build]]
+configure.args = ["--disable-static"]

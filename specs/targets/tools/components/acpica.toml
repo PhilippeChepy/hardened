@@ -1,0 +1,21 @@
+version = "20260930"
+kind = "application"
+summary = "ACPICA iasl compiler, for OVMF"
+license = "BSD-3-Clause OR GPL-2.0-only"
+homepage = "https://acpica.org"
+cpe = "intel:acpica"
+
+depends-on = ["llvm", "bison", "flex", "m4"]
+
+[sources.src]
+url = "https://github.com/open-acpica/acpica/releases/download/{version}/acpica-unix-{version}.tar.gz"
+sha256 = "aa18901b92e30749be0edc3081c8d550c61fce4fa37546fc6a65d367a4ae71a5"
+
+# Its warning flags are GCC's: with clang, unknown ones would be errors.
+[[build]]
+make.args = ["iasl", "CC=cc", "NOWERROR=TRUE"]
+
+[[build]]
+install.from = "{src}/generate/unix/bin/iasl"
+install.to = "{dest}/usr/bin/iasl"
+install.mode = 0o755

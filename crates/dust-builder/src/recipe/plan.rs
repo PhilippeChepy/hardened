@@ -7,13 +7,13 @@
 //! and steps may only write to the component's own places.
 //!
 //! While describing the build, recipes also declare what it uses: [`Build::source`] records a
-//! [`Source`], [`Build::input`] another component's output (a dependency).
+//! [`Source`], [`Build::input`] another component's tree or output (a dependency).
 
 use std::collections::BTreeSet;
 use std::fmt::{self, Write as _};
 
 use super::output::Output;
-use super::{ComponentName, ContainerImage, Source};
+use super::{ComponentName, ContainerImage, Source, Unit};
 use crate::sbom::Inventory;
 
 /// Where a [`Loc`] is relative to.
@@ -25,7 +25,7 @@ pub enum Base {
     Repo,
     /// The downloaded sources (read-only).
     Sources,
-    /// The OS root filesystem.
+    /// The component's tree, installed at `/` (in the image, or in the environments holding it).
     Root,
     /// One of the component's container images.
     Image(ComponentName),
@@ -33,8 +33,8 @@ pub enum Base {
     Outputs,
     /// Inventories for the SBOM.
     Sbom,
-    /// Another component's outputs (read-only).
-    Dep(ComponentName),
+    /// Another component's directory (read-only): its tree at `root`, its outputs at `outputs/`.
+    Dep(Unit),
     /// Kept across builds of the component (e.g. cargo's target directory).
     Cache,
     /// Secrets from `build/keys/` the build declared (read-only).
@@ -136,9 +136,15 @@ impl Arg {
         Self(vec![Piece::Epoch])
     }
 
-    /// `self` immediately followed by `other`.
+    /// `self` immediately followed by `other`. Adjacent texts merge, so an argument has one
+    /// form (and one cache key) however it was put together.
     pub fn concat(mut self, other: impl Into<Arg>) -> Self {
-        self.0.extend(other.into().0);
+        for piece in other.into().0 {
+            match (self.0.last_mut(), piece) {
+                (Some(Piece::Text(text)), Piece::Text(more)) => text.push_str(&more),
+                (_, piece) => self.0.push(piece),
+            }
+        }
         self
     }
 
@@ -268,6 +274,13 @@ pub enum Step {
         contents: String,
         mode: Mode,
     },
+    /// Applies the unified diff `diff` (named `name`) to the source tree `tree`, as `patch -p1`
+    /// without fuzz ([`crate::patch`]).
+    Patch {
+        tree: Loc,
+        name: String,
+        diff: String,
+    },
     /// Installs one file; `from` may be a pattern matching exactly one file.
     Install {
         from: Loc,
@@ -288,15 +301,14 @@ pub enum Step {
     Remove(Loc),
     /// Strips debug information from the ELF files of the root filesystem.
     Strip,
+    /// Fails if the tree `env` has a real `bin`, `sbin`, `lib` or `lib64` directory at its root:
+    /// copied into an environment, it would replace the merged-`/usr` symbolic link there.
+    CheckEnv(Loc),
     /// Fails unless every `CONFIG_X=v` line of `fragment` is in the kernel `config`, and every
     /// `CONFIG_X=n` absent from it: Kconfig silently drops options whose dependencies are unmet.
     CheckKernelConfig {
         config: Loc,
         fragment: String,
-    },
-    /// Records the builder's static C runtime (the Debian packages of `libc.a` and `libgcc.a`).
-    RecordStaticRuntime {
-        into: Loc,
     },
 }
 
@@ -315,16 +327,17 @@ impl fmt::Display for Step {
                 };
                 write!(f, "write    {to} ({mode}) = {shown}")
             }
+            Self::Patch { tree, name, .. } => write!(f, "patch    {tree} with {name}"),
             Self::Install { from, to, mode } => write!(f, "install  {from} → {to} ({mode})"),
             Self::Copy { from, into } => write!(f, "copy     {from} → {into}/"),
             Self::Symlink { target, link } => write!(f, "symlink  {link} → {target}"),
             Self::Remove(path) => write!(f, "remove   {path}"),
+            Self::CheckEnv(env) => write!(f, "check    {env} keeps the merged-/usr layout"),
             Self::Strip => write!(f, "strip    root:/ (debug information of ELF files)"),
             Self::CheckKernelConfig { config, fragment } => {
                 let options = fragment.lines().filter(|l| l.starts_with("CONFIG_")).count();
                 write!(f, "check    {config} has the {options} options of the fragment")
             }
-            Self::RecordStaticRuntime { into } => write!(f, "record   static C runtime packages → {into}"),
         }
     }
 }
@@ -338,35 +351,37 @@ pub struct Plan {
     pub build: Vec<Step>,
     /// Source archives, in order of first use.
     pub sources: Vec<Source>,
-    /// Components whose outputs are used: the dependencies.
-    pub inputs: BTreeSet<ComponentName>,
     /// The container images the build fills, archived after it.
     pub images: Vec<ContainerImage>,
     /// Files of `build/keys/` the build uses; only these are visible to it.
     pub secrets: Vec<&'static str>,
+    /// The outputs the build writes, by name.
+    pub outputs: BTreeSet<&'static str>,
+    /// The trees (`None`) and outputs of other components it reads, checked against what those
+    /// write.
+    pub uses: BTreeSet<(Unit, Option<&'static str>)>,
+}
+
+impl Plan {
+    /// The units whose trees or outputs the build reads: its dependencies.
+    pub fn inputs(&self) -> BTreeSet<&Unit> {
+        self.uses.iter().map(|(unit, _)| unit).collect()
+    }
 }
 
 impl Plan {
     /// Describes the phases of a component.
     pub(super) fn describe(
         name: &ComponentName,
-        version: &str,
         fetch: impl FnOnce(&mut Build) -> anyhow::Result<()>,
         build: impl FnOnce(&mut Build) -> anyhow::Result<()>,
     ) -> anyhow::Result<Self> {
-        let mut b = Build {
-            name: name.clone(),
-            version: version.to_owned(),
-            steps: Vec::new(),
-            sources: Vec::new(),
-            inputs: BTreeSet::new(),
-            images: Vec::new(),
-            secrets: Vec::new(),
-            errors: Vec::new(),
-        };
+        let mut b = Build::new(name.clone());
         fetch(&mut b)?;
         let fetch = std::mem::take(&mut b.steps);
         build(&mut b)?;
+        // The tree goes onto `/`: it must keep the merged-`/usr` layout.
+        b.step(Step::CheckEnv(Loc::new(Base::Root)));
         if !b.errors.is_empty() {
             anyhow::bail!("invalid plan:\n  {}", b.errors.join("\n  "));
         }
@@ -374,9 +389,10 @@ impl Plan {
             fetch,
             build: b.steps,
             sources: b.sources,
-            inputs: b.inputs,
             images: b.images,
             secrets: b.secrets,
+            outputs: b.outputs,
+            uses: b.uses,
         })
     }
 }
@@ -389,9 +405,10 @@ impl fmt::Display for Plan {
                 writeln!(f, "  {}  sha256:{}", source.url, source.sha256)?;
             }
         }
-        if !self.inputs.is_empty() {
-            let inputs: Vec<&str> = self.inputs.iter().map(ComponentName::as_str).collect();
-            writeln!(f, "uses the outputs of: {}", inputs.join(", "))?;
+        let inputs = self.inputs();
+        if !inputs.is_empty() {
+            let inputs: Vec<String> = inputs.iter().map(ToString::to_string).collect();
+            writeln!(f, "uses: {}", inputs.join(", "))?;
         }
         for image in &self.images {
             writeln!(f, "container image: {} (entrypoint {})", image.name, image.entrypoint)?;
@@ -418,9 +435,10 @@ impl fmt::Display for Plan {
 pub enum Cgo {
     /// Pure Go: a static binary without libc.
     Disabled,
-    /// Links against C libraries: a PIE, with full RELRO and immediate binding. `sysroot` holds
-    /// the libraries' staged `/usr` tree (a dependency's output), found through pkg-config.
-    Enabled { sysroot: Option<Loc> },
+    /// Links statically against musl and C libraries: a static PIE, with full RELRO, its C code
+    /// with ThinLTO. `libraries` holds other libraries' staged `/usr` tree (a dependency's output,
+    /// static archives only), found through pkg-config.
+    Enabled { libraries: Option<Loc> },
 }
 
 /// A Go binary for [`Build::go_build`]. Dependencies must be vendored (builds are offline).
@@ -437,8 +455,13 @@ pub struct GoBuild<'a> {
     pub vars: &'a [(&'a str, &'a str)],
 }
 
-/// A binary of the repository workspace, named like its package, linked against the OS's
-/// shared glibc and libgcc_s.
+/// The Rust target of workspace binaries (the build machine's).
+const RUST_TARGET: &str = "x86_64-unknown-linux-musl";
+/// The image's binaries are static PIEs (musl, mimalloc and libunwind linked in, with the
+/// workspace's release LTO). With `--target`, `RUSTFLAGS` leaves build scripts and proc macros
+/// alone: they run on the build machine, dynamically linked.
+const RUST_STATIC: &str = "-C target-feature=+crt-static";
+/// A binary of the repository workspace, named like its package, statically linked.
 #[derive(Debug, Clone, Copy)]
 pub struct CargoBinary {
     pub package: &'static str,
@@ -449,20 +472,40 @@ pub struct CargoBinary {
 /// The build of a component being described. Every method appends steps to the plan.
 pub struct Build {
     name: ComponentName,
-    version: String,
     steps: Vec<Step>,
     sources: Vec<Source>,
-    inputs: BTreeSet<ComponentName>,
     images: Vec<ContainerImage>,
     secrets: Vec<&'static str>,
+    outputs: BTreeSet<&'static str>,
+    uses: BTreeSet<(Unit, Option<&'static str>)>,
     /// Misuses found while describing the build, reported all at once.
     errors: Vec<String>,
 }
 
 impl Build {
-    /// The version of the component.
-    pub fn version(&self) -> &str {
-        &self.version
+    fn new(name: ComponentName) -> Self {
+        Self {
+            name,
+            steps: Vec::new(),
+            sources: Vec::new(),
+            images: Vec::new(),
+            secrets: Vec::new(),
+            outputs: BTreeSet::new(),
+            uses: BTreeSet::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// A build of component `x`, for tests describing a plan by hand.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self::new(crate::name!("x"))
+    }
+
+    /// The steps described so far.
+    #[cfg(test)]
+    pub(crate) fn into_steps(self) -> Vec<Step> {
+        self.steps
     }
 
     /// A location in scratch space.
@@ -498,17 +541,19 @@ impl Build {
         if *output.component() != self.name {
             self.errors.push(format!("{output} is an output of another component"));
         }
+        self.outputs.insert(output.name());
         Loc::new(Base::Outputs).join(output.name())
     }
 
-    /// Another component's output; using it makes that component a dependency.
-    pub fn input(&mut self, output: &Output) -> Loc {
-        if *output.component() == self.name {
-            self.errors
-                .push(format!("{output} is an output of this component, not an input"));
+    /// Another component's tree (`output` `None`) or output; using it makes that component a
+    /// dependency.
+    pub fn input(&mut self, unit: &Unit, output: Option<&'static str>) -> Loc {
+        self.uses.insert((unit.clone(), output));
+        let dep = Loc::new(Base::Dep(unit.clone()));
+        match output {
+            None => dep.join("root"),
+            Some(name) => dep.join("outputs").join(name),
         }
-        self.inputs.insert(output.component().clone());
-        Loc::new(Base::Dep(output.component().clone())).join(output.name())
     }
 
     /// Declares a container image the build fills (archived after it), returning its root.
@@ -533,30 +578,16 @@ impl Build {
 
     /// A source file, recorded as one of the component's sources.
     pub fn source(&mut self, source: &Source) -> Loc {
-        let sources = Loc::new(Base::Sources);
-        match source.file_name() {
-            Ok(file) => {
-                if !self.sources.contains(source) {
-                    self.sources.push(*source);
-                }
-                sources.join(file)
-            }
-            Err(error) => {
-                self.errors.push(error);
-                sources
-            }
+        if !self.sources.contains(source) {
+            self.sources.push(*source);
         }
+        Loc::new(Base::Sources).join(&source.sha256.to_string())
     }
 
-    /// Extracts a source archive into scratch space, returning the directory: the archive's
-    /// name without its `.tar.*` extension.
-    pub fn unpack(&mut self, source: &Source) -> Loc {
+    /// Extracts a source archive into `work:<name>`, returning that directory.
+    pub fn unpack(&mut self, source: &Source, name: &str) -> Loc {
         let archive = self.source(source);
-        let name = archive
-            .path()
-            .split_once(".tar")
-            .map_or(archive.path(), |(stem, _)| stem);
-        let into = Loc::new(Base::Work).join(if name.is_empty() { "src" } else { name });
+        let into = self.work(name);
         self.step(Step::Unpack {
             archive,
             into: into.clone(),
@@ -597,6 +628,16 @@ impl Build {
         });
     }
 
+    /// Applies the patch `diff`, the file `name` of the recipe's directory, to the source `tree`.
+    pub fn patch(&mut self, tree: &Loc, name: &str, diff: &str) {
+        self.destination(tree);
+        self.step(Step::Patch {
+            tree: tree.clone(),
+            name: name.to_owned(),
+            diff: diff.to_owned(),
+        });
+    }
+
     /// Installs one file; `from` may be a pattern matching exactly one file.
     pub fn install(&mut self, from: &Loc, to: &Loc, mode: Mode) {
         self.destination(to);
@@ -632,18 +673,6 @@ impl Build {
         self.step(Step::Remove(path.clone()));
     }
 
-    /// Strips debug information from every ELF file installed in the root filesystem so far.
-    pub fn strip(&mut self) {
-        self.step(Step::Strip);
-    }
-
-    /// Records, for the SBOM, the builder's static C runtime linked into this component's
-    /// binaries.
-    pub fn record_static_runtime(&mut self) {
-        let into = self.inventory(Inventory::DebianPackages, "static-runtime");
-        self.step(Step::RecordStaticRuntime { into });
-    }
-
     /// Builds a Go binary into the root filesystem with the hardened defaults (vendored,
     /// `-trimpath`, stripped) and records its modules for the SBOM.
     pub fn go_build(&mut self, go: GoBuild<'_>) {
@@ -656,24 +685,30 @@ impl Build {
         }
         let output = self.root(go.install);
         let file = go.install.rsplit('/').next().unwrap_or(go.install).to_owned();
-        let mut cmd = self.cmd("go").dir(go.tree);
+        let mut cmd = self.cmd("go").dir(go.tree).env("GOTOOLCHAIN", "local");
         let mut args = vec!["build"];
+        let mut tags = go.tags.to_vec();
         match &go.cgo {
             Cgo::Disabled => cmd = cmd.env("CGO_ENABLED", "0"),
-            Cgo::Enabled { sysroot } => {
-                ldflags.push_str(" -linkmode external -extldflags '-Wl,-z,relro,-z,now'");
+            Cgo::Enabled { libraries } => {
+                ldflags.push_str(" -linkmode external -extldflags '-static-pie -flto=thin -Wl,-z,relro,-z,now'");
                 args.push("-buildmode=pie");
-                cmd = cmd.env("CGO_ENABLED", "1");
-                if let Some(sysroot) = sysroot {
+                // Name and user lookups in Go: a static program has no NSS to load.
+                tags.extend(["netgo", "osusergo"]);
+                cmd = cmd
+                    .env("CGO_ENABLED", "1")
+                    .env("CC", "cc")
+                    .env("CGO_CFLAGS", "-O2 -flto=thin");
+                if let Some(libraries) = libraries {
                     cmd = cmd
-                        .env("PKG_CONFIG_PATH", sysroot.join("usr/lib/pkgconfig"))
-                        .env("PKG_CONFIG_SYSROOT_DIR", sysroot);
+                        .env("PKG_CONFIG_PATH", libraries.join("usr/lib/pkgconfig"))
+                        .env("PKG_CONFIG_SYSROOT_DIR", libraries);
                 }
             }
         }
         cmd.args(args)
             .args(["-mod=vendor", "-trimpath", "-buildvcs=false", "-tags"])
-            .arg(go.tags.join(" "))
+            .arg(tags.join(" "))
             .arg("-ldflags")
             .arg(ldflags)
             .arg("-o")
@@ -689,7 +724,8 @@ impl Build {
         let workspace = self.repository();
         self.cmd("cargo")
             .dir(&workspace)
-            .args(["fetch", "--locked", "--target", "x86_64-unknown-linux-gnu"])
+            .env("CARGO_HTTP_CAINFO", "/etc/ssl/certs/ca-certificates.crt")
+            .args(["fetch", "--locked", "--target", RUST_TARGET])
             .run();
     }
 
@@ -704,12 +740,14 @@ impl Build {
         self.cmd("cargo")
             .dir(&workspace)
             .env("CARGO_TARGET_DIR", &target)
-            .args(["build", "--offline", "--locked", "--release"])
+            .env("RUSTFLAGS", RUST_STATIC)
+            .args(["build", "--offline", "--locked", "--release", "--target", RUST_TARGET])
             .args(selection)
             .run();
         for binary in binaries {
             let to = self.root(binary.install);
-            self.install(&target.join("release").join(binary.package), &to, Mode::EXECUTABLE);
+            let built = target.join(RUST_TARGET).join("release").join(binary.package);
+            self.install(&built, &to, Mode::EXECUTABLE);
         }
 
         let packages: Vec<&str> = binaries.iter().flat_map(|b| ["-p", b.package]).collect();
@@ -717,26 +755,27 @@ impl Build {
         self.cmd("cargo")
             .dir(&workspace)
             .args(["tree", "--offline", "--locked", "-e", "normal", "--prefix", "none"])
-            .args(["--target", "x86_64-unknown-linux-gnu", "--format", "{p}|{l}"])
+            .args(["--target", RUST_TARGET, "--format", "{p}|{l}"])
             .args(packages)
             .capture(&crates);
         // The Rust standard library is linked in but absent from Cargo.lock.
         let toolchain = self.inventory(Inventory::RustToolchain, "rust");
         self.cmd("rustc").arg("--version").capture(&toolchain);
+        self.step(Step::Strip);
     }
 
-    /// Configures the kernel `tree`: `defconfig` merged with `fragment`, then checks that every
-    /// option of the fragment made it into the final `.config`.
-    pub fn kernel_config(&mut self, tree: &Loc, defconfig: &str, fragment: &str) {
+    /// Configures the kernel `tree` (`make` with `args`, e.g. the toolchain) from nothing: every
+    /// option is off (`allnoconfig`) but those of `fragment` and what they select. Then checks that
+    /// every option of the fragment made it into the final `.config`.
+    pub fn kernel_config(&mut self, tree: &Loc, args: &[&str], fragment: &str) {
         let file = self.work("kconfig.fragment");
         self.write(&file, fragment, Mode::FILE);
-        self.cmd("make").dir(tree).args(["-s", defconfig]).run();
-        self.cmd("scripts/kconfig/merge_config.sh")
+        self.cmd("make")
             .dir(tree)
-            .args(["-m", ".config"])
-            .arg(&file)
+            .args(args.iter().copied())
+            .arg(Arg::from("KCONFIG_ALLCONFIG=").concat(&file))
+            .args(["-s", "allnoconfig"])
             .run();
-        self.cmd("make").dir(tree).args(["-s", "olddefconfig"]).run();
         self.step(Step::CheckKernelConfig {
             config: tree.join(".config"),
             fragment: fragment.to_owned(),
@@ -842,7 +881,6 @@ mod tests {
     fn describe(build: impl FnOnce(&mut Build)) -> anyhow::Result<Plan> {
         Plan::describe(
             &crate::name!("test"),
-            "1.0",
             |_| Ok(()),
             |b| {
                 build(b);
@@ -851,15 +889,17 @@ mod tests {
         )
     }
 
-    const SRC: Source = crate::source!(
-        "https://x/demo-1.0.tar.gz",
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
+    fn src() -> Source {
+        Source {
+            url: "https://x/demo-1.0.tar.gz",
+            sha256: crate::sha256::Sha256::digest(b""),
+        }
+    }
 
     #[test]
     fn misuses_are_reported_together() {
         const OTHER: Output = Output::new(crate::name!("other"), "file");
-        const OWN: Output = Output::new(crate::name!("test"), "own");
+        let other_unit: Unit = "tools/other".parse().unwrap();
         let undeclared = ContainerImage {
             name: crate::name!("undeclared"),
             entrypoint: "/x",
@@ -868,8 +908,7 @@ mod tests {
         let error = describe(|b| {
             let other = b.output(&OTHER);
             b.write(&other, "x", Mode::FILE);
-            let _ = b.input(&OWN);
-            let dep = b.input(&OTHER);
+            let dep = b.input(&other_unit, Some("file"));
             b.write(&dep, "x", Mode::FILE);
             let image = Loc::new(Base::Image(undeclared.name.clone()));
             b.write(&image.join("x"), "x", Mode::FILE);
@@ -882,8 +921,7 @@ mod tests {
         .to_string();
         for expected in [
             "other:file is an output of another component",
-            "test:own is an output of this component",
-            "dep(other):file is read-only",
+            "dep(tools/other):outputs/file is read-only",
             "image undeclared is not declared",
             "pattern work:*.c in a command",
             "invalid environment variable",
@@ -895,22 +933,26 @@ mod tests {
 
     #[test]
     fn records_sources_inputs_and_images() {
-        const DEV: Output = Output::new(crate::name!("libseccomp"), "dev");
+        let libseccomp: Unit = "standard/libseccomp".parse().unwrap();
         let image = ContainerImage {
             name: crate::name!("demo"),
             entrypoint: "/demo",
             user: (1, 1),
         };
         let plan = describe(|b| {
-            assert_eq!(b.input(&DEV).to_string(), "dep(libseccomp):dev");
-            let _ = b.unpack(&SRC);
-            let _ = b.source(&SRC);
+            assert_eq!(
+                b.input(&libseccomp, Some("dev")).to_string(),
+                "dep(standard/libseccomp):outputs/dev"
+            );
+            assert_eq!(b.input(&libseccomp, None).to_string(), "dep(standard/libseccomp):root");
+            let _ = b.unpack(&src(), "src");
+            let _ = b.source(&src());
             let root = b.container_image(&image);
             b.write(&root.join("demo"), "x", Mode::EXECUTABLE);
         })
         .unwrap();
-        assert!(plan.inputs.contains("libseccomp"));
-        assert_eq!(plan.sources, [SRC], "recorded once");
+        assert!(plan.inputs().contains(&libseccomp));
+        assert_eq!(plan.sources, [src()], "recorded once");
         assert_eq!(plan.images, [image]);
     }
 
@@ -922,7 +964,7 @@ mod tests {
                 tree: &tree,
                 package: ".",
                 install: "/usr/bin/runc",
-                cgo: Cgo::Enabled { sysroot: None },
+                cgo: Cgo::Enabled { libraries: None },
                 tags: &["seccomp"],
                 vars: &[("main.version", "1.5.2")],
             });

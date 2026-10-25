@@ -1,0 +1,104 @@
+Let mimalloc 3 live inside the C library (MI_LIBC_BUILD): a TLS model,
+MI_TLS_MODEL_LIBC, keeps the theaps and the thread-local array in the C
+library thread structure (lvalue macros MI_LIBC_TLS_<name> it defines), and
+thread exit is the C library's to report (no pthread key, no thread locals).
+
+diff -ru pa/mimalloc/include/mimalloc/prim/prim-tls.h pb/mimalloc/include/mimalloc/prim/prim-tls.h
+--- a/mimalloc/include/mimalloc/prim/prim-tls.h
++++ b/mimalloc/include/mimalloc/prim/prim-tls.h
+@@ -50,7 +50,7 @@
+ 
+ 
+ // Default TLS model
+-#if !defined(MI_TLS_MODEL_LOCAL) && !defined(MI_TLS_MODEL_PTHREADS) && !defined(MI_TLS_MODEL_FIXED) && !defined(MI_TLS_MODEL_WIN32)
++#if !defined(MI_TLS_MODEL_LOCAL) && !defined(MI_TLS_MODEL_PTHREADS) && !defined(MI_TLS_MODEL_FIXED) && !defined(MI_TLS_MODEL_WIN32) && !defined(MI_TLS_MODEL_LIBC)
+ #if defined(_WIN32)
+ #define MI_TLS_MODEL_WIN32        1
+ #elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__ANDROID__)  // and FreeBSD?
+@@ -275,6 +275,20 @@
+   return __mi_theap_cached;
+ }
+ 
++#elif MI_TLS_MODEL_LIBC
++// Built into the C library (MI_LIBC_BUILD), which has no thread locals of its own: its thread
++// structure holds the theaps, as the lvalues `MI_LIBC_TLS_theap_default` and
++// `MI_LIBC_TLS_theap_cached` it defines. The cached theap starts as NULL.
++#define MI_THEAP_INITASNULL  1
++
++static inline mi_theap_t* _mi_theap_default(void) {
++  return (mi_theap_t*)MI_LIBC_TLS_theap_default;
++}
++
++static inline mi_theap_t* _mi_theap_cached(void) {
++  return (mi_theap_t*)MI_LIBC_TLS_theap_cached;
++}
++
+ #elif MI_TLS_MODEL_PTHREADS
+ // Dynamic pthread slots. This can be fast depending on the platform (default for macOS and OpenBSD)
+ // On some platforms (like macOS), the loader might allocate on thread local declarations which
+diff -ru pa/mimalloc/src/prim/prim-tls.c pb/mimalloc/src/prim/prim-tls.c
+--- a/mimalloc/src/prim/prim-tls.c
++++ b/mimalloc/src/prim/prim-tls.c
+@@ -29,7 +29,9 @@
+ mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_cached = (mi_theap_t*)&_mi_theap_empty;
+ #endif
+ 
++#if !MI_TLS_MODEL_LIBC
+ mi_decl_hidden mi_decl_thread void* __mi_thread_id_helper = NULL;
++#endif
+ 
+ mi_threadid_t _mi_thread_id(void) mi_attr_noexcept {
+   const mi_threadid_t tid = _mi_prim_thread_id();
+@@ -215,6 +217,8 @@
+   _mi_tls_slots_init();
+   #if MI_TLS_MODEL_LOCAL
+     __mi_theap_cached = theap;
++  #elif MI_TLS_MODEL_LIBC
++    MI_LIBC_TLS_theap_cached = theap;
+   #elif MI_TLS_MODEL_FIXED
+     mi_prim_tls_slot_set(MI_TLS_MODEL_FIXED_CACHED, theap);
+   #elif MI_TLS_MODEL_WIN32
+@@ -235,6 +239,8 @@
+   _mi_tls_slots_init();
+   #if MI_TLS_MODEL_LOCAL
+     __mi_theap_default = theap;
++  #elif MI_TLS_MODEL_LIBC
++    MI_LIBC_TLS_theap_default = theap;
+   #elif MI_TLS_MODEL_FIXED
+     mi_prim_tls_slot_set(MI_TLS_MODEL_FIXED_DEFAULT, theap);
+   #elif MI_TLS_MODEL_WIN32
+diff -ru pa/mimalloc/src/prim/unix/prim.c pb/mimalloc/src/prim/unix/prim.c
+--- a/mimalloc/src/prim/unix/prim.c
++++ b/mimalloc/src/prim/unix/prim.c
+@@ -1060,9 +1060,10 @@
+ // Thread init/done
+ //----------------------------------------------------------------
+ 
+-#if defined(MI_USE_PTHREADS)
++#if defined(MI_USE_PTHREADS) && !MI_TLS_MODEL_LIBC
+ 
+ // use pthread local storage keys to detect thread ending
++// (in the C library, its thread exit calls `_mi_thread_done`)
+ // (and used with MI_TLS_PTHREADS for the default theap)
+ // atomic as a thread may initialize while the process is exiting and deleting the key
+ static _Atomic(pthread_key_t) _mi_heap_default_key = MI_ATOMIC_VAR_INIT(MI_PTHREAD_KEY_INVALID);
+diff -ru pa/mimalloc/src/util/threadlocal.c pb/mimalloc/src/util/threadlocal.c
+--- a/mimalloc/src/util/threadlocal.c
++++ b/mimalloc/src/util/threadlocal.c
+@@ -43,7 +43,15 @@
+   - mi_slot_fast: a single dedicated thread local for slightly faster access. (used for the main heap's theap)
+ ----------------------------------------------------------- */
+ 
+-#if MI_TLS_MODEL_PTHREADS || defined(__APPLE__)   // macOS has fast pthreads
++#if MI_TLS_MODEL_LIBC
++// In the C library's thread structure, as the lvalues `MI_LIBC_TLS_<name>` it defines.
++#define mi_define_thread_local(tp,name,initval) \
++  static inline tp   name##_peek(void)    { return (tp)MI_LIBC_TLS_##name; } \
++  static inline tp   name##_get(void)     { tp result = name##_peek(); return (result!=NULL ? result : initval); } \
++  static inline bool name##_set(tp val)   { MI_LIBC_TLS_##name = val; return true; } \
++  static inline void name##_delete(void)  {  }
++
++#elif MI_TLS_MODEL_PTHREADS || defined(__APPLE__)   // macOS has fast pthreads
+ // Use pthreads
+ #define mi_define_thread_local(tp,name,initval) \
+   static pthread_key_t __##name##_key = MI_PTHREAD_KEY_INVALID; \

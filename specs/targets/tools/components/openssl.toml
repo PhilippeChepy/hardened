@@ -1,0 +1,29 @@
+# OpenSSL, for the build tools that need it (the kernel's module signing, cargo, veritysetup,
+# systemd-sbsign).
+
+version = "3.6.5"
+kind = "library"
+summary = "OpenSSL cryptography library and tool"
+license = "Apache-2.0"
+homepage = "https://www.openssl.org"
+cpe = "openssl:openssl"
+
+depends-on = ["llvm", "perl", "zlib"]
+
+[sources.src]
+url = "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"
+sha256 = "a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
+
+[[build]]
+run.cmd = [
+    "./Configure",
+    "--prefix=/usr",
+    "--openssldir=/etc/ssl",
+    "--libdir=lib",
+    "shared",
+    "zlib-dynamic",
+    "CC=cc", # default is gcc
+]
+
+[[build]]
+make.install = ["install_sw", "install_ssldirs"]

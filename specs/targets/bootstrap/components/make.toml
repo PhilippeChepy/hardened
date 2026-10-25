@@ -1,0 +1,9 @@
+summary = "GNU make, static"
+# Built on the seed alone.
+depends-on = []
+
+[vars]
+prefix = "/cross"
+# StageX's GCC defaults to C23, where make's old-style declarations (`char *getenv ()`) mean
+# "no argument".
+args = ["CFLAGS=-O2 -std=gnu17", "LDFLAGS=-static"]

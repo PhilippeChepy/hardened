@@ -1,36 +1,42 @@
-//! Component builds, each in its own builder container, cached by content.
+//! Component builds (units), each in its own container of its environment's image, cached by
+//! content.
 //!
 //! The cache key of a component covers its plan (every step it runs), its source checksums, the
-//! in-tree files it builds from, the builder image and the keys of its dependencies, so any input
-//! change rebuilds it and everything depending on it. Refactoring a recipe without changing its
-//! steps rebuilds nothing.
+//! in-tree files it builds from, its environment (whose key covers the components it holds) and
+//! the keys of its dependencies, so any input change rebuilds it and everything depending on it.
+//! Refactoring a recipe without changing its steps rebuilds nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, PoisonError};
+use std::time::Instant;
 
 use anyhow::Context;
 use sha2::Digest;
 use walkdir::WalkDir;
 
 use crate::Paths;
+use crate::environment::Environment;
 use crate::exec::{Executor, Places};
-use crate::podman::Builder;
-use crate::recipe::{Base, ComponentName, ContainerImage, Output, Recipe};
+use crate::pipeline::Job;
+use crate::podman::Image;
+use crate::recipe::{Base, ContainerImage, Output, Recipe, Unit};
 use crate::sha256::Sha256;
 
 /// Bump to invalidate every cached component (e.g. when the build environment contract changes).
-const CACHE_VERSION: &str = "3";
+const CACHE_VERSION: &str = "4";
 
-/// Outputs of a built component.
+/// What a unit's build left: its tree, outputs, images and inventories.
 #[derive(Debug, Clone)]
 pub struct Built {
+    pub unit: Unit,
     pub recipe: Recipe,
     pub key: Sha256,
     pub dir: PathBuf,
 }
 
 impl Built {
-    /// Files shipped in the root filesystem.
+    /// The component's tree, installed at `/`.
     pub fn root(&self) -> PathBuf {
         self.dir.join("root")
     }
@@ -54,47 +60,219 @@ impl Built {
     }
 }
 
-/// Builds `order` (dependencies first). Components named in `force` are rebuilt even if cached.
+/// How many components build at the same time by default. Each runs `make -j<cores>`, but small
+/// ones spend most of their time in single-threaded configure scripts.
+pub const PARALLEL: usize = 4;
+
+/// How components build.
+#[derive(Debug, Clone, Copy, clap::Args)]
+pub struct Options {
+    /// Components built at the same time.
+    #[arg(long, default_value_t = PARALLEL)]
+    pub parallel: usize,
+    /// After a failure, keep building what does not depend on it, and report every failure.
+    #[arg(long)]
+    pub keep_going: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            parallel: PARALLEL,
+            keep_going: false,
+        }
+    }
+}
+
+/// Builds `order` (dependencies first), up to `options.parallel` units at a time: each starts
+/// once the units it needs are built. Units named in `force` are rebuilt even if cached. Build
+/// output goes to `build/logs/<target>/<component>.log`. The missing signing keys are generated
+/// first, in `keys` (an environment of no component).
 pub fn build_all(
     paths: &Paths,
-    builder: &Builder,
-    order: &[&Recipe],
-    force: Option<&[ComponentName]>,
-) -> anyhow::Result<BTreeMap<ComponentName, Built>> {
-    crate::keys::ensure(paths, builder)?;
-    let mut built: BTreeMap<ComponentName, Built> = BTreeMap::new();
-    for recipe in order {
-        // `order` lists dependencies first, so they are all built already.
-        let deps: Vec<&Built> = recipe.depends().iter().map(|d| &built[d]).collect();
-        let key = cache_key(paths, builder, recipe, &deps)?;
-        let dir = paths
+    order: &[&Job],
+    keys: &Environment,
+    force: Option<&[Unit]>,
+    options: Options,
+) -> anyhow::Result<BTreeMap<Unit, Built>> {
+    std::fs::create_dir_all(paths.logs())?;
+    let scheduler = Scheduler {
+        paths,
+        force,
+        keep_going: options.keep_going,
+        state: Mutex::new(State::default()),
+        wake: Condvar::new(),
+        images: Mutex::new(BTreeMap::new()),
+    };
+    crate::keys::ensure(paths, &scheduler.image(keys, &BTreeMap::new())?)?;
+    std::thread::scope(|scope| {
+        for _ in 0..options.parallel.max(1) {
+            scope.spawn(|| scheduler.work(order));
+        }
+    });
+    let mut state = scheduler.state.into_inner().unwrap_or_else(PoisonError::into_inner);
+    match state.failed.len() {
+        0 => Ok(state.built),
+        1 => Err(state.failed.remove(0).1),
+        _ => {
+            let failed: Vec<String> = state.failed.iter().map(|(unit, _)| unit.to_string()).collect();
+            anyhow::bail!(
+                "{} components failed: {} (logs in {})",
+                failed.len(),
+                failed.join(", "),
+                paths.logs().display()
+            )
+        }
+    }
+}
+
+struct Scheduler<'a> {
+    paths: &'a Paths,
+    force: Option<&'a [Unit]>,
+    keep_going: bool,
+    state: Mutex<State>,
+    /// Notified when a build ends.
+    wake: Condvar,
+    /// Environment images, built once (a build waiting for one waits for its build).
+    images: Mutex<BTreeMap<Environment, Image>>,
+}
+
+#[derive(Default)]
+struct State {
+    built: BTreeMap<Unit, Built>,
+    started: BTreeSet<Unit>,
+    /// The failures: no build starts after the first unless keeping going.
+    failed: Vec<(Unit, anyhow::Error)>,
+    /// What failed, or was skipped as depending on a failure.
+    unbuildable: BTreeSet<Unit>,
+}
+
+impl Scheduler<'_> {
+    /// Builds units of `order` whose prerequisites are built, until all are started.
+    fn work(&self, order: &[&Job]) {
+        loop {
+            let (job, built) = {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                loop {
+                    if (!self.keep_going && !state.failed.is_empty()) || state.started.len() == order.len() {
+                        return;
+                    }
+                    let skipped: Vec<Unit> = order
+                        .iter()
+                        .filter(|job| {
+                            !state.started.contains(&job.unit)
+                                && job.prerequisites().any(|u| state.unbuildable.contains(u))
+                        })
+                        .map(|job| job.unit.clone())
+                        .collect();
+                    if !skipped.is_empty() {
+                        for unit in skipped {
+                            eprintln!("==> {unit} skipped: it depends on a failed build");
+                            state.started.insert(unit.clone());
+                            state.unbuildable.insert(unit);
+                        }
+                        self.wake.notify_all();
+                        continue;
+                    }
+                    let ready = order.iter().find(|job| {
+                        !state.started.contains(&job.unit) && job.prerequisites().all(|u| state.built.contains_key(u))
+                    });
+                    if let Some(job) = ready {
+                        state.started.insert(job.unit.clone());
+                        break (*job, state.built.clone());
+                    }
+                    state = self.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
+                }
+            };
+            let result = self.build(job, &built);
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            match result {
+                Ok(done) => {
+                    state.built.insert(job.unit.clone(), done);
+                }
+                Err(error) => {
+                    state.unbuildable.insert(job.unit.clone());
+                    state.failed.push((job.unit.clone(), error));
+                }
+            }
+            self.wake.notify_all();
+        }
+    }
+
+    fn build(&self, job: &Job, built: &BTreeMap<Unit, Built>) -> anyhow::Result<Built> {
+        let (unit, recipe) = (&job.unit, &job.recipe);
+        let image = self.image(&job.environment, built)?;
+        let deps: Vec<&Built> = recipe.depends().into_iter().map(|d| &built[d]).collect();
+        let key = cache_key(self.paths, &image, recipe, &deps)?;
+        let dir = self
+            .paths
             .outputs()
             .join(recipe.name())
             .join(hex::encode(key.prefix::<16>()));
-        let forced = force.is_some_and(|names| names.contains(recipe.name()));
+        let forced = self.force.is_some_and(|units| units.contains(unit));
 
+        let version = &recipe.meta.version;
         if dir.join(".complete").exists() && !forced {
-            eprintln!("==> {} {} (cached)", recipe.name(), recipe.meta.version);
+            eprintln!("==> {unit} {version} (cached)");
         } else {
-            eprintln!("==> building {} {}", recipe.name(), recipe.meta.version);
-            run_build(paths, builder, recipe, &deps, &dir)
-                .with_context(|| format!("building component {}", recipe.name()))?;
+            eprintln!("==> building {unit} {version}");
+            let started = Instant::now();
+            let log_path = self
+                .paths
+                .logs()
+                .join(unit.target.as_str())
+                .join(format!("{}.log", unit.component));
+            std::fs::create_dir_all(log_path.parent().context("log directory")?)?;
+            let log = std::fs::File::create(&log_path)?;
+            if let Err(error) = run_build(self.paths, &image, job, &deps, &dir, &log) {
+                eprintln!("==> {unit} failed; the end of {}:", log_path.display());
+                eprint!("{}", tail(&log_path, 40));
+                return Err(error.context(format!("building {unit} (log: {})", log_path.display())));
+            }
+            eprintln!("==> built {unit} {version} in {:.0?}", started.elapsed());
         }
-        built.insert(
-            recipe.name().clone(),
-            Built {
-                recipe: (*recipe).clone(),
-                key,
-                dir,
-            },
-        );
+        Ok(Built {
+            unit: unit.clone(),
+            recipe: recipe.clone(),
+            key,
+            dir,
+        })
     }
-    Ok(built)
+
+    /// The image of `environment`, built the first time (`built` holds its components).
+    fn image(&self, environment: &Environment, built: &BTreeMap<Unit, Built>) -> anyhow::Result<Image> {
+        let mut images = self.images.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(image) = images.get(environment) {
+            return Ok(image.clone());
+        }
+        let image = crate::environment::ensure(self.paths, environment, built)?;
+        images.insert(environment.clone(), image.clone());
+        Ok(image)
+    }
 }
 
-fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built], dir: &Path) -> anyhow::Result<()> {
-    let staging = dir.with_extension("tmp");
-    let work = paths.work().join(recipe.name());
+/// The last `lines` lines of the file at `path`.
+fn tail(path: &Path, lines: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    let mut out = all[all.len().saturating_sub(lines)..].join("\n");
+    out.push('\n');
+    out
+}
+
+fn run_build(
+    paths: &Paths,
+    image: &Image,
+    job: &Job,
+    deps: &[&Built],
+    dir: &Path,
+    log: &std::fs::File,
+) -> anyhow::Result<()> {
+    let (unit, recipe) = (&job.unit, &job.recipe);
+    // Per unit: two targets may build the same component (in the same environment: to the same
+    // directory) at the same time.
+    let staging = dir.with_extension(format!("{}.tmp", unit.target));
+    let work = paths.work().join(unit.target.as_str()).join(unit.component.as_str());
     for d in [&staging, &work] {
         if d.exists() {
             std::fs::remove_dir_all(d)?;
@@ -104,7 +282,11 @@ fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built],
         std::fs::create_dir_all(staging.join(sub))?;
     }
     std::fs::create_dir_all(&work)?;
-    let cache = paths.cache().join("shared").join(recipe.name());
+    let cache = paths
+        .cache()
+        .join("shared")
+        .join(unit.target.as_str())
+        .join(unit.component.as_str());
     let registry = paths.cache().join("cargo-registry");
     std::fs::create_dir_all(&cache)?;
     std::fs::create_dir_all(&registry)?;
@@ -128,14 +310,13 @@ fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built],
         ));
     }
     for dep in deps {
-        let name = dep.recipe.name();
-        let guest = format!("/deps/{name}/outputs");
-        places.push((Base::Dep(name.clone()), dep.dir.join("outputs"), guest));
+        let guest = format!("/deps/{}", dep.unit);
+        places.push((Base::Dep(dep.unit.clone()), dep.dir.clone(), guest));
     }
     let places = Places::new(places);
 
     let container = |network: bool| {
-        let mut c = builder
+        let mut c = image
             .container("")
             .mount_ro(paths.sources(), "/sources")
             .mount_ro(&paths.root, "/src")
@@ -146,10 +327,11 @@ fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built],
             // Per build: Go reuses cached cgo results even when the pkg-config environment
             // changes, which would leak one build's outputs into another.
             .env("GOCACHE", "/work/.go-build")
+            .env("CARGO_HOME", "/usr/local/cargo")
             .env("SOURCE_DATE_EPOCH", crate::SOURCE_DATE_EPOCH.to_string())
             .network(network);
         for dep in deps {
-            c = c.mount_ro(&dep.dir, format!("/deps/{}", dep.recipe.name()));
+            c = c.mount_ro(&dep.dir, format!("/deps/{}", dep.unit));
         }
         // Only the secrets the plan declares, never the whole key directory.
         for secret in &recipe.plan.secrets {
@@ -157,11 +339,12 @@ fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built],
         }
         c
     };
-    let name = format!("hardened-build-{}", recipe.name());
+    let name = format!("hardened-build-{}.{}", unit.target, unit.component);
     let run = |steps, network| -> anyhow::Result<()> {
-        let running = container(network).start(&name)?;
+        let running = container(network).start(&name, log)?;
         Executor {
             container: &running,
+            log,
             places: &places,
             jobs: jobs(),
             epoch: crate::SOURCE_DATE_EPOCH,
@@ -171,7 +354,9 @@ fn run_build(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built],
     if !recipe.plan.fetch.is_empty() {
         run(&recipe.plan.fetch, true).context("fetch phase")?;
     }
-    run(&recipe.plan.build, false)?;
+    if !recipe.plan.build.is_empty() {
+        run(&recipe.plan.build, false)?;
+    }
 
     // Container images, archived from the trees the build filled.
     for image in recipe.images() {
@@ -196,7 +381,7 @@ fn jobs() -> usize {
     std::thread::available_parallelism().map_or(4, usize::from)
 }
 
-fn cache_key(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built]) -> anyhow::Result<Sha256> {
+fn cache_key(paths: &Paths, image: &Image, recipe: &Recipe, deps: &[&Built]) -> anyhow::Result<Sha256> {
     let mut hasher = sha2::Sha256::new();
     let mut field = |name: &str, value: &[u8]| {
         hasher.update(name.as_bytes());
@@ -205,7 +390,7 @@ fn cache_key(paths: &Paths, builder: &Builder, recipe: &Recipe, deps: &[&Built])
     };
 
     field("cache-version", CACHE_VERSION.as_bytes());
-    field("builder", builder.id.to_string().as_bytes());
+    field("environment", image.key.to_string().as_bytes());
     field("epoch", crate::SOURCE_DATE_EPOCH.to_string().as_bytes());
     field("version", recipe.meta.version.as_bytes());
     field("fetch", format!("{:?}", recipe.plan.fetch).as_bytes());
@@ -253,10 +438,10 @@ fn hash_tree(base: &Path, dir: &Path, field: &mut impl FnMut(&str, &[u8])) -> an
     Ok(())
 }
 
-/// Where `output` was built, among the components `built`.
-pub fn locate(built: &BTreeMap<ComponentName, Built>, output: &Output) -> anyhow::Result<PathBuf> {
+/// Where `unit` wrote `output`, among the units `built`.
+pub fn locate(built: &BTreeMap<Unit, Built>, unit: &Unit, output: &Output) -> anyhow::Result<PathBuf> {
     built
-        .get(output.component())
-        .with_context(|| format!("{output}: component {} was not built", output.component()))?
+        .get(unit)
+        .with_context(|| format!("{output}: {unit} was not built"))?
         .output(output)
 }

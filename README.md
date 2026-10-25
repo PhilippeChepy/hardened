@@ -2,8 +2,9 @@
 
 A minimal, immutable cloud operating system for running containers.
 
-The image contains a Linux kernel booted as a signed unified kernel image (UKI), glibc,
-containerd and runc. It also contains **dust-init**, a Rust PID 1 that replaces both the init system and
+The image contains a Linux kernel booted as a signed unified kernel image (UKI), containerd and
+runc: all built with LLVM, statically linked against musl (with mimalloc as its allocator) and
+with LTO. It also contains **dust-init**, a Rust PID 1 that replaces both the init system and
 cloud-init. There is no systemd, no shell, no package manager and no SSH: the machine is
 configured through user-data and managed through an mTLS API.
 
@@ -28,9 +29,11 @@ UEFI ─▶ UKI (systemd-stub + kernel + cmdline with the dm-verity root hash, s
 - **Immutable root.** The root filesystem is read-only erofs protected by dm-verity. Its root
   hash sits in the signed UKI command line, so every byte executed is measured. To upgrade,
   replace the VM.
-- **Built from source.** Every component in the image is compiled from pinned, checksummed
-  sources inside a pinned builder image. The build outputs a qcow2 image and a CycloneDX SBOM
-  that includes the Go modules and Rust crates linked into each binary.
+- **Built from source.** Every component in the image, and every tool that builds it (LLVM,
+  musl, Rust, Go...), is compiled from pinned, checksummed sources. Only the
+  bootstrap comes from outside: StageX images, pinned by digest, themselves built from a
+  full-source bootstrap. The build outputs a qcow2 image and a CycloneDX SBOM that includes the
+  Go modules and Rust crates linked into each binary.
 - **Small attack surface.** The kernel only loads signed modules, and only from the dm-verity
   root (LoadPin), firmware included. Modules are signed with a persistent key, so builds stay
   reproducible. The lockdown LSM runs in integrity mode, and legacy syscalls and io_uring are
@@ -46,15 +49,16 @@ and about 20 GB of disk space. `/dev/kvm` is optional; without it the VM runs un
 is much slower.
 
 ```sh
-cargo builder image       # build every component, then the image  →  build/out/
+cargo builder image       # build the standard target's components, then its image  →  build/out/
 cargo builder run         # boot it in qemu (OVMF + swtpm), serial console on stdio
 cargo builder test        # boot it headless and wait for the smoke-test markers
 ```
 
-The first build compiles GCC, glibc and the kernel, which takes a while. Later builds are
-incremental: each component is cached, keyed by a hash of all its inputs.
+The first build compiles the whole toolchain from source (LLVM twice, musl, Rust, Go...), then the image's components, which can take some time. Later builds are incremental: each
+component is cached, keyed by a hash of all its inputs.
 
-`build/out/` contains:
+`build/out/` contains, for the standard target (named `hardened`; `--target` picks another of
+[specs/targets/](specs/targets/)):
 
 | File | Content |
 | --- | --- |
@@ -95,8 +99,8 @@ See [docs/user-data.md](docs/user-data.md) for every setting.
 
 | Path | Content |
 | --- | --- |
-| [builder/](builder/) | Containerfile of the builder image (the toolchain; not shipped) |
-| [components/](components/) | One Rust recipe per image component (`recipe.rs`): metadata, pinned sources, typed build steps |
+| [specs/components/](specs/components/) | The recipes several targets build (make, CMake, Python, LLVM), which a target may override |
+| [specs/targets/](specs/targets/) | The build pipeline: each target (bootstrap on the pinned StageX seed, `tools`, the images) with the recipes of its components |
 | [crates/dust-builder/](crates/dust-builder/) | The build system: fetch, build, assemble, seal, sign, SBOM, run |
 | [crates/dust-init/](crates/dust-init/) | PID 1 |
 | [crates/dust-api/](crates/dust-api/) | mTLS API proxy, run by dust-init in a sandbox |

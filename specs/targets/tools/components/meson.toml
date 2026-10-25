@@ -1,0 +1,28 @@
+# Meson build system, installed as a single-file Python application.
+
+version = "1.12.1"
+kind = "application"
+summary = "Meson build system"
+license = "Apache-2.0"
+homepage = "https://mesonbuild.com"
+purl = "pkg:pypi/meson@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz"
+sha256 = "ab0a6ca09f8ef70c564c8241fb5a23957886a0b53fb58412b5e07eaf07dba743"
+
+[[build]]
+mkdir = "{dest}/usr/bin"
+
+[[build]]
+run.cmd = [
+    "python3",
+    "packaging/create_zipapp.py",
+    "--interpreter",
+    "/usr/bin/env python3",
+    "--outfile",
+    "{dest}/usr/bin/meson",
+    ".",
+]

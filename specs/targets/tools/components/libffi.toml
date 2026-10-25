@@ -1,0 +1,15 @@
+version = "3.8.0"
+kind = "application"
+summary = "Foreign function interface library, for Python and GLib"
+license = "MIT"
+homepage = "https://sourceware.org/libffi/"
+cpe = "libffi_project:libffi"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://github.com/libffi/libffi/releases/download/v{version}/libffi-{version}.tar.gz"
+sha256 = "7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4"
+
+[[build]]
+configure.args = ["--disable-static", "--disable-docs"]

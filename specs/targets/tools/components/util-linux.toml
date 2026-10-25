@@ -1,0 +1,30 @@
+version = "2.42.4"
+kind = "application"
+summary = "libuuid and libblkid from util-linux, for the image tools"
+license = "BSD-3-Clause AND LGPL-2.1-or-later"
+homepage = "https://github.com/util-linux/util-linux"
+cpe = "kernel:util-linux"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://www.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-{version}.tar.xz"
+sha256 = "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+
+[[build]]
+configure.args = [
+    "--disable-all-programs",
+    "--bindir=/usr/bin",
+    "--sbindir=/usr/sbin",
+    "--libdir=/usr/lib",
+    "--enable-libuuid",
+    "--enable-libblkid",
+    "--disable-nls",
+    "--disable-static",
+    "--without-python",
+    "--without-systemd",
+    "--without-udev",
+    "--disable-makeinstall-chown",
+    "--disable-makeinstall-setuid",
+    "--disable-liblastlog2",
+]

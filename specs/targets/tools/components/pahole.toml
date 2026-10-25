@@ -1,0 +1,18 @@
+# pahole (dwarves), which turns the kernel's DWARF into BTF, the type information BPF programs
+# (Cilium's) rely on. With its bundled libbpf.
+
+version = "1.32"
+kind = "application"
+summary = "pahole, generating the kernel's BTF"
+license = "GPL-2.0-only"
+homepage = "https://git.kernel.org/pub/scm/devel/pahole/pahole.git"
+
+depends-on = ["llvm", "cmake", "elfutils", "zlib"]
+
+[sources.src]
+url = "https://fedorapeople.org/~acme/dwarves/dwarves-{version}.tar.bz2"
+sha256 = "efeb3407fab640d725c4491bb8f67c3b3c1e70322d3cfb0a0418ae0c521edabc"
+
+# Its libraries in /usr/lib (the variable has no default).
+[[build]]
+cmake.args = ["-DLIB_INSTALL_DIR=lib", "-DLIBBPF_EMBEDDED=ON"]

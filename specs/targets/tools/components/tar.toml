@@ -1,0 +1,17 @@
+version = "1.35"
+kind = "application"
+summary = "GNU tar"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/tar/"
+cpe = "gnu:tar"
+
+depends-on = ["compiler-rt", "musl", "llvm-runtimes"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/tar/tar-{version}.tar.xz"
+sha256 = "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16"
+
+# It refuses to configure as root (the build container's user) otherwise.
+[[build]]
+configure.args = ["--disable-nls"]
+configure.env = [["FORCE_UNSAFE_CONFIGURE", "1"]]

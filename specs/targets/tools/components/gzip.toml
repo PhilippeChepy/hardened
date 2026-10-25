@@ -1,0 +1,15 @@
+version = "1.15"
+kind = "application"
+summary = "GNU gzip"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/gzip/"
+cpe = "gnu:gzip"
+
+depends-on = ["compiler-rt", "musl", "llvm-runtimes"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/gzip/gzip-{version}.tar.xz"
+sha256 = "9aa0cc780dec156b8282844833b342ab7cb08c25d2cd9a1869cdd0df31deff48"
+
+[[build]]
+configure = {}

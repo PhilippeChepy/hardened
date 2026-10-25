@@ -56,7 +56,7 @@ search-list = ["corp.example.com"]
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name-servers` | list of IPs | from DHCP | Replaces the DNS servers learned through DHCP. The resolver uses the first 3 |
-| `search-list` | list of domain names | from DHCP | Replaces the search domains learned through DHCP. The resolver uses the first 6 |
+| `search-list` | list of domain names | from DHCP | Replaces the search domains learned through DHCP. `resolv.conf` keeps the first 6 (glibc's limit), within 254 characters (musl's) |
 
 ## `settings.api`
 

@@ -1,0 +1,15 @@
+version = "1.4.21"
+kind = "application"
+summary = "GNU M4 macro processor"
+license = "GPL-3.0-or-later"
+homepage = "https://www.gnu.org/software/m4/"
+cpe = "gnu:m4"
+
+depends-on = ["llvm"]
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/m4/m4-{version}.tar.xz"
+sha256 = "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"
+
+[[build]]
+configure.args = ["--disable-nls"]

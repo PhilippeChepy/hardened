@@ -1,0 +1,48 @@
+# BusyBox, static, under /cross: the shell and core utilities of the bootstrap toolset, built on
+# StageX. It runs on an empty root, where the first components of `tools` build before our musl and
+# userland exist.
+
+version = "1.37.0"
+kind = "application"
+summary = "BusyBox shell and core utilities, static"
+license = "GPL-2.0-only"
+homepage = "https://busybox.net"
+cpe = "busybox:busybox"
+
+[sources.src]
+url = "https://busybox.net/downloads/busybox-{version}.tar.bz2"
+sha256 = "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+
+[[build]]
+run.cmd = ["make", "defconfig"]
+
+# Static, every applet in /cross/bin and /cross/sbin; tc does not build against recent kernel
+# headers.
+[[build]]
+run.cmd = [
+    "sed",
+    "-i",
+    "-e",
+    "s/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/",
+    "-e",
+    "s/^# CONFIG_INSTALL_NO_USR is not set/CONFIG_INSTALL_NO_USR=y/",
+    "-e",
+    "s/^CONFIG_TC=y/# CONFIG_TC is not set/",
+    ".config",
+]
+
+[[build]]
+make = {}
+
+[[build]]
+run.cmd = ["make", "install", "CONFIG_PREFIX={dest}/cross"]
+
+# `/bin/sh` and `/usr/bin/env`, which scripts and make call by path, until bash and coreutils
+# replace them; `/bin` as the merged-/usr layout has it.
+[[build]]
+symlinks.dir = "{dest}/usr/bin"
+symlinks.links = [["sh", "../../cross/bin/busybox"], ["env", "../../cross/bin/busybox"]]
+
+[[build]]
+symlink.target = "usr/bin"
+symlink.link = "{dest}/bin"

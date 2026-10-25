@@ -1,11 +1,10 @@
 //! Source archive download and verification.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use sha2::Digest;
 
 use crate::Paths;
 use crate::recipe::{Recipe, Source};
@@ -23,8 +22,7 @@ pub fn fetch_all<'a>(paths: &Paths, recipes: impl IntoIterator<Item = &'a Recipe
 }
 
 fn fetch(dir: &Path, source: &Source) -> anyhow::Result<()> {
-    let file_name = source.file_name().map_err(anyhow::Error::msg)?;
-    let path = dir.join(file_name);
+    let path = dir.join(source.sha256.to_string());
     if path.exists() {
         let actual = Sha256::of_file(&path)?;
         if actual == source.sha256 {
@@ -32,7 +30,7 @@ fn fetch(dir: &Path, source: &Source) -> anyhow::Result<()> {
         }
         eprintln!(
             "==> {}: cached file has checksum {actual}, downloading again",
-            file_name
+            path.display()
         );
     }
 
@@ -40,19 +38,10 @@ fn fetch(dir: &Path, source: &Source) -> anyhow::Result<()> {
     let partial = path.with_extension("part");
     let mut response = ureq::get(source.url).call()?.into_body().into_reader();
     let mut file = File::create(&partial)?;
-    let mut hasher = sha2::Sha256::new();
-    let mut buf = vec![0; 1 << 16];
-    loop {
-        let n = response.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])?;
-    }
+    io::copy(&mut response, &mut file)?;
     file.sync_all()?;
 
-    let actual = Sha256::finalize(hasher);
+    let actual = Sha256::of_file(&partial)?;
     if actual != source.sha256 {
         std::fs::remove_file(&partial)?;
         bail!("checksum mismatch: expected {}, got {actual}", source.sha256);

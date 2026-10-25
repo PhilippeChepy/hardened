@@ -1,0 +1,34 @@
+version = "1.0.8"
+kind = "application"
+summary = "bzip2 compression program and library"
+license = "bzip2-1.0.6"
+homepage = "https://sourceware.org/bzip2/"
+cpe = "bzip:bzip2"
+
+depends-on = ["compiler-rt", "musl", "llvm-runtimes"]
+
+[vars]
+tools = ["CC=cc", "AR=ar", "RANLIB=ranlib"]
+
+[sources.src]
+url = "https://sourceware.org/pub/bzip2/bzip2-{version}.tar.gz"
+sha256 = "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"
+
+# Plain Makefiles: the shared library has its own; the default target would run the tests.
+[[build]]
+make.args = ["-f", "Makefile-libbz2_so", "{vars.tools}"]
+
+[[build]]
+make.args = ["libbz2.a", "bzip2", "bzip2recover", "{vars.tools}"]
+
+[[build]]
+run.cmd = ["make", "install", "PREFIX={dest}/usr", "{vars.tools}"]
+
+[[build]]
+install.from = "{src}/libbz2.so.{version}"
+install.to = "{dest}/usr/lib/libbz2.so.{version}"
+install.mode = 0o755
+
+[[build]]
+symlinks.dir = "{dest}/usr/lib"
+symlinks.links = [["libbz2.so.1.0", "libbz2.so.{version}"], ["libbz2.so", "libbz2.so.1.0"]]

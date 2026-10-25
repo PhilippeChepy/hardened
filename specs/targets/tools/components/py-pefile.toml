@@ -1,0 +1,15 @@
+version = "2024.8.26"
+kind = "library"
+summary = "pefile, for ukify"
+license = "MIT"
+homepage = "https://github.com/erocarrera/pefile"
+purl = "pkg:pypi/pefile@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/p/pefile/pefile-{version}-py3-none-any.whl"
+sha256 = "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

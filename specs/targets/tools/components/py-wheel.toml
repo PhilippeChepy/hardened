@@ -1,0 +1,15 @@
+version = "0.48.0"
+kind = "library"
+summary = "wheel, for qemu's configure"
+license = "MIT"
+homepage = "https://github.com/pypa/wheel"
+purl = "pkg:pypi/wheel@{version}"
+
+depends-on = ["llvm", "python"]
+
+[sources.src]
+url = "https://files.pythonhosted.org/packages/py3/w/wheel/wheel-{version}-py3-none-any.whl"
+sha256 = "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"
+
+[[build]]
+run.cmd = ["python3", "-m", "zipfile", "-e", "{src}", "{dest}/{python.site-packages}"]

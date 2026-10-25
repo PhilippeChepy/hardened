@@ -8,20 +8,20 @@
 use std::path::Path;
 
 use crate::Paths;
-use crate::podman::Builder;
+use crate::podman::Image;
 
 /// The kernel module signing key: private key and X.509 certificate in one PEM file, as
 /// `CONFIG_MODULE_SIG_KEY` expects. Handed to the kernel build as a secret.
 pub const MODULES: &str = "modules.pem";
 
-/// Generates the missing keys.
-pub fn ensure(paths: &Paths, builder: &Builder) -> anyhow::Result<()> {
+/// Generates the missing keys, with the openssl and `sh` of `image`.
+pub fn ensure(paths: &Paths, image: &Image) -> anyhow::Result<()> {
     let keys = paths.keys();
     std::fs::create_dir_all(&keys)?;
     if !keys.join("db.key").exists() {
         eprintln!("==> generating a development Secure Boot key in {}", keys.display());
         generate(
-            builder,
+            image,
             &keys,
             "openssl req -new -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
                -subj '/CN=hardened development Secure Boot key/' \
@@ -33,7 +33,7 @@ pub fn ensure(paths: &Paths, builder: &Builder) -> anyhow::Result<()> {
         eprintln!("==> generating a development module signing key in {}", keys.display());
         // The extensions of the kernel's own certs/default_x509.genkey.
         generate(
-            builder,
+            image,
             &keys,
             &format!(
                 "umask 077\n\
@@ -49,6 +49,6 @@ pub fn ensure(paths: &Paths, builder: &Builder) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn generate(builder: &Builder, keys: &Path, script: &str) -> anyhow::Result<()> {
-    builder.container(script).mount(keys, "/keys").run()
+fn generate(image: &Image, keys: &Path, script: &str) -> anyhow::Result<()> {
+    image.container(script).posix().mount(keys, "/keys").run()
 }
