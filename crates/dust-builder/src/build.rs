@@ -8,8 +8,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use sha2::Digest;
@@ -20,6 +21,7 @@ use crate::environment::Environment;
 use crate::exec::{Executor, Places};
 use crate::pipeline::Job;
 use crate::podman::Image;
+use crate::progress::Progress;
 use crate::recipe::{Base, ContainerImage, Output, Recipe, Unit};
 use crate::sha256::Sha256;
 
@@ -103,13 +105,27 @@ pub fn build_all(
         state: Mutex::new(State::default()),
         wake: Condvar::new(),
         images: Mutex::new(BTreeMap::new()),
+        progress: Progress::new(order.len()),
     };
     crate::keys::ensure(paths, &scheduler.image(keys, &BTreeMap::new())?)?;
+    let finished = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        for _ in 0..options.parallel.max(1) {
-            scope.spawn(|| scheduler.work(order));
+        let workers: Vec<_> = (0..options.parallel.max(1))
+            .map(|_| scope.spawn(|| scheduler.work(order)))
+            .collect();
+        // Redraws the elapsed times of the status line.
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_secs(1));
+                scheduler.progress.tick();
+            }
+        });
+        for worker in workers {
+            let _ = worker.join();
         }
+        finished.store(true, Ordering::Relaxed);
     });
+    scheduler.progress.clear();
     let mut state = scheduler.state.into_inner().unwrap_or_else(PoisonError::into_inner);
     match state.failed.len() {
         0 => Ok(state.built),
@@ -135,6 +151,7 @@ struct Scheduler<'a> {
     wake: Condvar,
     /// Environment images, built once (a build waiting for one waits for its build).
     images: Mutex<BTreeMap<Environment, Image>>,
+    progress: Progress,
 }
 
 #[derive(Default)]
@@ -167,7 +184,8 @@ impl Scheduler<'_> {
                         .collect();
                     if !skipped.is_empty() {
                         for unit in skipped {
-                            eprintln!("==> {unit} skipped: it depends on a failed build");
+                            let message = format!("{unit} skipped: it depends on a failed build");
+                            self.progress.finished(&unit, false, &message);
                             state.started.insert(unit.clone());
                             state.unbuildable.insert(unit);
                         }
@@ -184,7 +202,15 @@ impl Scheduler<'_> {
                     state = self.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
                 }
             };
+            self.progress.taken(&job.unit);
             let result = self.build(job, &built);
+            if let Err(error) = &result
+                && self.progress.is_running(&job.unit)
+            {
+                // It failed before building: preparing its environment.
+                self.progress
+                    .finished(&job.unit, true, &format!("{} failed: {error:#}", job.unit));
+            }
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             match result {
                 Ok(done) => {
@@ -213,9 +239,10 @@ impl Scheduler<'_> {
 
         let version = &recipe.meta.version;
         if dir.join(".complete").exists() && !forced {
-            eprintln!("==> {unit} {version} (cached)");
+            self.progress
+                .finished(unit, false, &format!("{unit} {version} (cached)"));
         } else {
-            eprintln!("==> building {unit} {version}");
+            self.progress.building(&format!("building {unit} {version}"));
             let started = Instant::now();
             let log_path = self
                 .paths
@@ -225,11 +252,16 @@ impl Scheduler<'_> {
             std::fs::create_dir_all(log_path.parent().context("log directory")?)?;
             let log = std::fs::File::create(&log_path)?;
             if let Err(error) = run_build(self.paths, &image, job, &deps, &dir, &log) {
-                eprintln!("==> {unit} failed; the end of {}:", log_path.display());
-                eprint!("{}", tail(&log_path, 40));
+                let message = format!(
+                    "{unit} failed; the end of {}:\n{}",
+                    log_path.display(),
+                    tail(&log_path, 40)
+                );
+                self.progress.finished(unit, true, &message);
                 return Err(error.context(format!("building {unit} (log: {})", log_path.display())));
             }
-            eprintln!("==> built {unit} {version} in {:.0?}", started.elapsed());
+            let message = format!("built {unit} {version} in {:.0?}", started.elapsed());
+            self.progress.finished(unit, false, &message);
         }
         Ok(Built {
             unit: unit.clone(),

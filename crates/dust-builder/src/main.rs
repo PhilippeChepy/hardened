@@ -21,6 +21,7 @@ mod oci;
 mod patch;
 mod pipeline;
 mod podman;
+mod progress;
 mod recipe;
 mod report;
 mod rootfs;
