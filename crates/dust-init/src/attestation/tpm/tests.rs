@@ -276,6 +276,130 @@ fn quote_validates_its_inputs_and_the_attestation() {
     ));
 }
 
+const SRK_HANDLE: u32 = 0x8000_0000;
+const OBJECT_HANDLE: u32 = 0x8000_0001;
+const SESSION_HANDLE: u32 = 0x0300_0000;
+
+fn srk_response() -> Vec<u8> {
+    let mut w = Writer::default();
+    w.tpm2b(&commands::srk_template());
+    marshal::test_response(&[SRK_HANDLE], &w.into_bytes(), true)
+}
+
+fn sealed() -> Sealed {
+    Sealed {
+        private: b"private".to_vec(),
+        public: b"public".to_vec(),
+    }
+}
+
+#[test]
+fn pcr_policy_is_computed_from_the_current_values() {
+    let transport = Scripted::new([pcr_read_response(0, 1 << 11, 0)]);
+    let mut tpm = Tpm::with_transport(transport.clone());
+    let policy = tpm.pcr_policy(&[11]).unwrap();
+    let pcr11 = PcrSelection {
+        hash: 0x000B,
+        mask: 1 << 11,
+    };
+    assert_eq!(policy, commands::policy_pcr_digest(pcr11, &Sha256::digest([11; 32])));
+    assert_eq!(read_selection(&transport.commands()[0]), [0, 0x0B, 3, 0, 0x08, 0]);
+    assert!(matches!(tpm.pcr_policy(&[]), Err(TpmError::NoPcrSelected)));
+}
+
+#[test]
+fn seal_creates_a_policy_bound_object_under_the_storage_key() {
+    let mut created = Writer::default();
+    created.tpm2b(b"private").tpm2b(b"public").bytes(&[0; 10]);
+    let transport = Scripted::new([
+        srk_response(),
+        marshal::test_response(&[], &created.into_bytes(), true),
+        flush_response(),
+    ]);
+    let mut tpm = Tpm::with_transport(transport.clone());
+    assert_eq!(tpm.seal(b"secret", &[0xAB; 32]).unwrap(), sealed());
+    let sent = transport.commands();
+    assert_eq!(
+        sent,
+        [
+            commands::create_primary(commands::RH_OWNER, &commands::srk_template()),
+            commands::create(SRK_HANDLE, b"secret", &commands::sealed_template(&[0xAB; 32])),
+            commands::flush_context(SRK_HANDLE),
+        ]
+    );
+}
+
+/// The responses to an unseal up to TPM2_Unseal, which answers `unsealed`.
+fn unseal_script(unsealed: Vec<u8>) -> Vec<Vec<u8>> {
+    let mut name = Writer::default();
+    name.tpm2b(b"name");
+    let mut nonce = Writer::default();
+    nonce.tpm2b(&[9; 16]);
+    vec![
+        srk_response(),
+        marshal::test_response(&[OBJECT_HANDLE], &name.into_bytes(), true),
+        flush_response(),
+        marshal::test_response(&[SESSION_HANDLE], &nonce.into_bytes(), false),
+        marshal::test_response(&[], &[], false),
+        unsealed,
+    ]
+}
+
+#[test]
+fn unseal_satisfies_the_pcr_policy_and_flushes_everything() {
+    let mut data = Writer::default();
+    data.tpm2b(b"secret");
+    let mut script = unseal_script(marshal::test_response(&[], &data.into_bytes(), true));
+    script.push(flush_response());
+    let transport = Scripted::new(script);
+    let mut tpm = Tpm::with_transport(transport.clone());
+    assert_eq!(&**tpm.unseal(&sealed(), &[11]).unwrap(), b"secret");
+
+    let sent = transport.commands();
+    assert_eq!(sent.len(), 7);
+    assert_eq!(sent[1], commands::load(SRK_HANDLE, b"private", b"public"));
+    assert_eq!(sent[2], commands::flush_context(SRK_HANDLE));
+    assert_eq!(sent[3][..10], [0x80, 0x01, 0, 0, 0, 0x2B, 0, 0, 0x01, 0x76]);
+    let pcr11 = PcrSelection {
+        hash: 0x000B,
+        mask: 1 << 11,
+    };
+    assert_eq!(sent[4], commands::policy_pcr(SESSION_HANDLE, pcr11));
+    // TPM2_Unseal of the object, in the policy session (whose nonce is random).
+    assert_eq!(sent[5][6..14], [0, 0, 0x01, 0x5E, 0x80, 0, 0, 1]);
+    assert_eq!(sent[5][18..22], SESSION_HANDLE.to_be_bytes());
+    assert_eq!(sent[6], commands::flush_context(OBJECT_HANDLE));
+}
+
+#[test]
+fn a_failed_unseal_flushes_its_session() {
+    let mut script = unseal_script(error_response(0x99D));
+    script.extend([flush_response(), flush_response()]);
+    let transport = Scripted::new(script);
+    let mut tpm = Tpm::with_transport(transport.clone());
+    let err = tpm.unseal(&sealed(), &[11]).unwrap_err();
+    assert!(err.is_sealed_elsewhere(), "{err}");
+    let sent = transport.commands();
+    assert_eq!(sent[6], commands::flush_context(SESSION_HANDLE));
+    assert_eq!(sent[7], commands::flush_context(OBJECT_HANDLE));
+
+    // A blob of another TPM does not load: nothing else is sent.
+    let transport = Scripted::new([srk_response(), error_response(0x1DF), flush_response()]);
+    let mut tpm = Tpm::with_transport(transport.clone());
+    assert!(tpm.unseal(&sealed(), &[11]).unwrap_err().is_sealed_elsewhere());
+    assert_eq!(transport.commands().len(), 3);
+    assert!(!TpmError::Response(ResponseCode(0x902)).is_sealed_elsewhere());
+}
+
+#[test]
+fn sealed_blobs_round_trip() {
+    let blob = sealed().to_blob();
+    assert_eq!(blob[..9], [0, 7, b'p', b'r', b'i', b'v', b'a', b't', b'e']);
+    assert_eq!(Sealed::from_blob(&blob).unwrap(), sealed());
+    assert!(Sealed::from_blob(&blob[..blob.len() - 1]).is_err());
+    assert!(Sealed::from_blob(&[blob.as_slice(), &[0]].concat()).is_err());
+}
+
 /// End-to-end against `swtpm` (from `$SWTPM` or `PATH`), e.g.
 /// `nix shell nixpkgs#swtpm -c cargo test -p dust-init swtpm -- --ignored`.
 mod swtpm {
@@ -391,5 +515,74 @@ mod swtpm {
         // The primary key is derived from the endorsement seed: same key in a new session.
         let mut tpm = swtpm.connect();
         assert_eq!(tpm.ak_public().unwrap(), quote.ak_public);
+    }
+
+    /// The policy digest a trial session computes for PolicyPCR over the current values.
+    fn trial_policy(tpm: &mut Tpm, selection: PcrSelection) -> Vec<u8> {
+        const SE_TRIAL: u8 = 0x03;
+        let command = marshal::command(0x176, &[0x4000_0007, 0x4000_0007], marshal::Auth::None, |w| {
+            w.tpm2b(&[1; 16]).tpm2b(&[]).u8(SE_TRIAL).u16(0x0010).u16(0x000B);
+        });
+        let session = commands::parse_start_auth_session(&tpm.execute(&command).unwrap()).unwrap();
+        commands::parse_policy_pcr(&tpm.execute(&commands::policy_pcr(session, selection)).unwrap()).unwrap();
+        let command = marshal::command(0x189, &[session], marshal::Auth::None, |_| {});
+        let response = tpm.execute(&command).unwrap();
+        let digest = marshal::response(&response, 0)
+            .unwrap()
+            .params
+            .tpm2b()
+            .unwrap()
+            .to_vec();
+        tpm.flush(session);
+        digest
+    }
+
+    fn extend(tpm: &mut Tpm, pcr: u32) {
+        let command = marshal::command(0x182, &[pcr], marshal::Auth::Password(&[]), |w| {
+            w.u32(1).u16(0x000B).bytes(&[0x42; 32]);
+        });
+        marshal::response(&tpm.execute(&command).unwrap(), 0).unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs swtpm"]
+    fn seals_to_pcr_11() {
+        let pcr11 = PcrSelection {
+            hash: 0x000B,
+            mask: 1 << 11,
+        };
+        let swtpm = Swtpm::spawn();
+        let mut tpm = swtpm.connect();
+        let policy = tpm.pcr_policy(&[11]).unwrap();
+        assert_eq!(trial_policy(&mut tpm, pcr11), policy);
+        assert_eq!(
+            hex::encode(policy),
+            "fd32fa22c52cfc8e1a0c29eb38519f87084cab0b04b0d8f020a4d38b2f4e223e",
+            "PCR 11 of a fresh TPM is zeros"
+        );
+
+        let sealed = tpm.seal(b"256 bits of secret", &policy).unwrap();
+        assert_eq!(&**tpm.unseal(&sealed, &[11]).unwrap(), b"256 bits of secret");
+        drop(tpm);
+        // The storage key is derived from the owner seed: the blob loads in a new session.
+        let mut tpm = swtpm.connect();
+        assert_eq!(&**tpm.unseal(&sealed, &[11]).unwrap(), b"256 bits of secret");
+
+        let mut tampered = sealed.clone();
+        *tampered.private.last_mut().unwrap() ^= 1;
+        let err = tpm.unseal(&tampered, &[11]).unwrap_err();
+        assert!(err.is_sealed_elsewhere(), "{err}");
+
+        extend(&mut tpm, 11);
+        assert_ne!(tpm.pcr_policy(&[11]).unwrap(), policy);
+        assert_eq!(trial_policy(&mut tpm, pcr11), tpm.pcr_policy(&[11]).unwrap());
+        let err = tpm.unseal(&sealed, &[11]).unwrap_err();
+        assert!(err.is_sealed_elsewhere(), "{err}");
+
+        // Another TPM: its own owner seed.
+        let other = Swtpm::spawn();
+        let mut tpm = other.connect();
+        let err = tpm.unseal(&sealed, &[11]).unwrap_err();
+        assert!(err.is_sealed_elsewhere(), "{err}");
     }
 }

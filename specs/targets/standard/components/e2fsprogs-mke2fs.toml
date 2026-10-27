@@ -1,0 +1,52 @@
+version = "{e2fsprogs.version}"
+kind = "application"
+summary = "mke2fs, creating ext4 filesystems (statically linked)"
+license = "GPL-2.0-only"
+homepage = "https://e2fsprogs.sourceforge.net"
+purl = "pkg:generic/e2fsprogs@{version}"
+cpe = "e2fsprogs_project:e2fsprogs"
+
+[sources.src]
+from = "e2fsprogs"
+
+# dust-init runs `mke2fs` to create the filesystem of the encrypted state partition, once
+# decrypted. Only `mke2fs.static`, with e2fsprogs' own libraries (libuuid and libblkid included)
+# linked in, with ThinLTO; its built-in configuration (there is no /etc/mke2fs.conf).
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--enable-libuuid",
+    "--enable-libblkid",
+    "--disable-nls",
+    "--disable-fsck",
+    "--disable-uuidd",
+    "--disable-debugfs",
+    "--disable-imager",
+    "--disable-resizer",
+    "--disable-defrag",
+    "--disable-e2initrd-helper",
+    "--disable-fuse2fs",
+    "--without-libarchive",
+    "--with-crond-dir=no",
+    "--with-systemd-unit-dir=no",
+    "--with-udev-rules-dir=no",
+    "CFLAGS=-O2 -flto=thin",
+]
+run.dir = "{work:build}"
+
+[[build]]
+make.dir = "{work:build}"
+make.args = ["libs"]
+
+[[build]]
+make.dir = "{work:build}/misc"
+make.args = ["mke2fs.static"]
+
+[[build]]
+install.from = "{work:build}/misc/mke2fs.static"
+install.to = "{dest}/usr/bin/mke2fs"
+install.mode = 0o755

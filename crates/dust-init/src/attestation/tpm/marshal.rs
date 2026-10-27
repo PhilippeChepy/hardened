@@ -63,25 +63,32 @@ pub enum Auth<'a> {
     None,
     /// One TPM_RS_PW session carrying this password (TPM_ST_SESSIONS).
     Password(&'a [u8]),
+    /// One policy session, flushed once the command succeeds. Without PolicyAuthValue or
+    /// PolicyPassword in its policy, it carries no HMAC.
+    Policy { session: u32, nonce: &'a [u8] },
 }
 
 /// Marshals a command: header, handle area, authorization area, then what `params` writes.
 pub fn command(code: u32, handles: &[u32], auth: Auth<'_>, params: impl FnOnce(&mut Writer)) -> Vec<u8> {
-    let tag = match auth {
-        Auth::None => ST_NO_SESSIONS,
-        Auth::Password(_) => ST_SESSIONS,
+    // TPMS_AUTH_COMMAND: sessionHandle, nonceCaller, sessionAttributes (continueSession clear),
+    // hmac (the password itself for TPM_RS_PW).
+    let session = match auth {
+        Auth::None => None,
+        Auth::Password(password) => Some((RS_PW, &[][..], password)),
+        Auth::Policy { session, nonce } => Some((session, nonce, &[][..])),
     };
     let mut w = Writer::default();
-    w.u16(tag).u32(0).u32(code);
+    w.u16(if session.is_some() { ST_SESSIONS } else { ST_NO_SESSIONS })
+        .u32(0)
+        .u32(code);
     for &handle in handles {
         w.u32(handle);
     }
-    if let Auth::Password(password) = auth {
-        // authorizationSize, then TPMS_AUTH_COMMAND: sessionHandle, nonceCaller,
-        // sessionAttributes, hmac (the password itself for TPM_RS_PW).
+    if let Some((handle, nonce, hmac)) = session {
         let mut session = Writer::default();
-        session.u32(RS_PW).tpm2b(&[]).u8(0).tpm2b(password);
+        session.u32(handle).tpm2b(nonce).u8(0).tpm2b(hmac);
         let session = session.into_bytes();
+        // authorizationSize, then the session.
         w.u32(len_u32(&session)).bytes(&session);
     }
     params(&mut w);
@@ -250,6 +257,30 @@ mod tests {
             0, 0,                                        // nonceCaller
             0,                                           // sessionAttributes
             0, 2, b'p', b'w',                            // hmac = password
+        ];
+        assert_eq!(cmd, expected);
+    }
+
+    #[test]
+    fn policy_session_command_framing() {
+        let cmd = command(
+            0x15E,
+            &[0x8000_0001],
+            Auth::Policy {
+                session: 0x0300_0000,
+                nonce: b"nc",
+            },
+            |_| {},
+        );
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x02, 0, 0, 0, 0x1D, 0, 0, 0x01, 0x5E, // header (29 bytes)
+            0x80, 0, 0, 0x01,                            // handle
+            0, 0, 0, 0x0B,                               // authorizationSize
+            0x03, 0, 0, 0,                               // policy session
+            0, 2, b'n', b'c',                            // nonceCaller
+            0,                                           // sessionAttributes
+            0, 0,                                        // hmac: none
         ];
         assert_eq!(cmd, expected);
     }

@@ -66,7 +66,7 @@ fn configure(registry: &RegistrySettings) -> anyhow::Result<()> {
 ///
 /// `configs` is deprecated in containerd 2 (until 2.7) in favor of `config_path`, whose
 /// `hosts.toml` holds no credentials: it remains the way to give credentials to every CRI pull
-/// that carries none.
+/// that carries none. With containerd 2.7, a credential helper takes its place.
 fn with_credentials(base: &str, configs: toml::Table) -> anyhow::Result<String> {
     let mut config: toml::Table = base.parse().context("parsing the image's containerd configuration")?;
     if !configs.is_empty() {

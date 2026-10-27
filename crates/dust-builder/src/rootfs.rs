@@ -5,6 +5,9 @@
 //! - every ELF file is a static executable or a kernel module: no dynamic loader, no shared
 //!   library, so nothing to resolve or preload at run time;
 //! - nothing is setuid/setgid or world-writable.
+//!
+//! Executables are then stripped of their symbol tables and debug information
+//! ([`unstripped`], run by image assembly), whatever their component's build left in them.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
@@ -123,6 +126,52 @@ impl Manifest {
         );
         Ok(())
     }
+}
+
+impl Manifest {
+    /// Updates the sizes and checksums of `paths` (regular files of `root`) after they changed.
+    pub fn rehash(&mut self, root: &Path, paths: &[String]) -> anyhow::Result<()> {
+        for path in paths {
+            let Some(Entry::File { size, sha256, .. }) = self.entries.get_mut(path) else {
+                bail!("/{path} is not a file of the root filesystem");
+            };
+            let file = root.join(path);
+            *size = std::fs::metadata(&file)?.len();
+            *sha256 = Sha256::of_file(&file)?;
+        }
+        Ok(())
+    }
+}
+
+/// The executables of the root filesystem that still carry a symbol table or debug information,
+/// by path: what image assembly strips. Kernel modules (relocatable, and signed) are left alone.
+pub fn unstripped(root: &Path, manifest: &Manifest) -> anyhow::Result<Vec<String>> {
+    let mut paths = Vec::new();
+    for (path, entry) in &manifest.entries {
+        if let Entry::File { .. } = entry {
+            let bytes = std::fs::read(root.join(path))?;
+            if is_unstripped(&bytes).with_context(|| format!("parsing /{path}"))? {
+                paths.push(path.clone());
+            }
+        }
+    }
+    Ok(paths)
+}
+
+fn is_unstripped(bytes: &[u8]) -> anyhow::Result<bool> {
+    use goblin::elf::header::{ET_DYN, ET_EXEC};
+    if !bytes.starts_with(b"\x7fELF") {
+        return Ok(false);
+    }
+    let elf = goblin::elf::Elf::parse(bytes)?;
+    if ![ET_EXEC, ET_DYN].contains(&elf.header.e_type) {
+        return Ok(false);
+    }
+    Ok(elf.section_headers.iter().any(|section| {
+        elf.shdr_strtab
+            .get_at(section.sh_name)
+            .is_some_and(|name| name == ".symtab" || name.starts_with(".debug_"))
+    }))
 }
 
 /// Merges the root outputs of `components` into `dest`, which is recreated.
@@ -269,5 +318,13 @@ mod tests {
                 .starts_with("dynamically linked")
         );
         assert_eq!(dynamic_linking(b"#!/bin/false\n").unwrap(), None);
+    }
+
+    #[test]
+    fn finds_unstripped_executables() {
+        // The test binary has its symbol table.
+        let exe = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        assert!(is_unstripped(&exe).unwrap());
+        assert!(!is_unstripped(b"#!/bin/false\n").unwrap());
     }
 }

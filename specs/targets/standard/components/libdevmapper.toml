@@ -1,0 +1,48 @@
+version = "{lvm2.version}"
+kind = "library"
+summary = "Device-mapper library from LVM2, statically linked into cryptsetup"
+license = "LGPL-2.1-only"
+homepage = "https://sourceware.org/lvm2/"
+purl = "pkg:generic/lvm2@{version}"
+cpe = "lvm2_project:lvm2"
+
+[sources.src]
+from = "lvm2"
+
+# Only the static library (and its tools, which stay in scratch space). Without udev, it creates
+# the /dev/mapper nodes itself.
+[[build]]
+run.cmd = [
+    "./configure",
+    "--prefix=/usr",
+    "--enable-static_link",
+    "--disable-shared",
+    "--disable-readline",
+    "--disable-selinux",
+    "--disable-udev_sync",
+    "--disable-udev-systemd-background-jobs",
+    "--disable-blkid_wiping",
+    "--disable-dmeventd",
+    "--disable-cmirrord",
+    "--disable-lvmpolld",
+    "--disable-nls",
+    "--with-thin=none",
+    "--with-cache=none",
+    "--with-vdo=none",
+    "--with-writecache=none",
+    "--with-integrity=none",
+    "CFLAGS=-O2 -flto=thin",
+]
+
+[[build]]
+make.args = ["device-mapper"]
+
+# Headers and static library, in their `/usr` layout: linked into cryptsetup, nothing goes to the
+# tree.
+[[build]]
+make.dir = "{src}/libdm"
+make.install = true
+make.dest = "{out:dev}"
+
+[[build]]
+remove = "{out:dev}/usr/sbin/*"

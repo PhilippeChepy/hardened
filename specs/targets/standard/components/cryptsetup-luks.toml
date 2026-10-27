@@ -1,0 +1,73 @@
+version = "{cryptsetup.version}"
+kind = "application"
+summary = "cryptsetup, the LUKS2 and dm-crypt setup tool (statically linked)"
+license = "GPL-2.0-or-later"
+homepage = "https://gitlab.com/cryptsetup/cryptsetup"
+purl = "pkg:generic/cryptsetup@{version}"
+cpe = "cryptsetup_project:cryptsetup"
+
+depends-on = ["pkgconf"]
+
+[vars]
+libcrypto = "{dep:standard/libcrypto/dev}/usr"
+libdevmapper = "{dep:standard/libdevmapper/dev}/usr"
+libjson-c = "{dep:standard/libjson-c/dev}/usr"
+libpopt = "{dep:standard/libpopt/dev}/usr"
+libuuid = "{dep:standard/libuuid/dev}/usr"
+
+[sources.src]
+from = "cryptsetup"
+
+# dust-init runs `cryptsetup` to format and open the encrypted state partition. Only the LUKS2
+# tool, as `cryptsetup.static` (libcryptsetup and its libraries linked in, with ThinLTO); its
+# crypto is OpenSSL's, in user space (no kernel crypto API), and the volume key is in the
+# dm-crypt table (no kernel keyring). No blkid: dust-init knows what the partition holds. The
+# libraries are given directly rather than through pkg-config, whose sysroot could only name one
+# output; popt and libuuid are found through the compiler and linker flags.
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--enable-static-cryptsetup",
+    "--disable-shared",
+    "--with-crypto_backend=openssl",
+    "--disable-kernel_crypto",
+    "--disable-asciidoc",
+    "--disable-ssh-token",
+    "--disable-external-tokens",
+    "--disable-veritysetup",
+    "--disable-integritysetup",
+    "--disable-luks2-reencryption",
+    "--disable-blkid",
+    "--disable-hw-opal",
+    "--disable-keyring",
+    "--disable-selinux",
+    "--disable-udev",
+    "--disable-nls",
+    "CFLAGS=-O2 -flto=thin",
+    "CPPFLAGS=-I{vars.libpopt}/include -I{vars.libuuid}/include",
+    "LDFLAGS=-L{vars.libpopt}/lib -L{vars.libuuid}/lib",
+    "LIBCRYPTO_CFLAGS=-I{vars.libcrypto}/include",
+    "LIBCRYPTO_LIBS=-L{vars.libcrypto}/lib -lcrypto",
+    "LIBCRYPTO_STATIC_CFLAGS=-I{vars.libcrypto}/include",
+    "LIBCRYPTO_STATIC_LIBS=-L{vars.libcrypto}/lib -lcrypto",
+    "DEVMAPPER_CFLAGS=-I{vars.libdevmapper}/include",
+    "DEVMAPPER_LIBS=-L{vars.libdevmapper}/lib -ldevmapper -lm",
+    "DEVMAPPER_STATIC_CFLAGS=-I{vars.libdevmapper}/include",
+    "DEVMAPPER_STATIC_LIBS=-L{vars.libdevmapper}/lib -ldevmapper -lm",
+    "JSON_C_CFLAGS=-I{vars.libjson-c}/include",
+    "JSON_C_LIBS=-L{vars.libjson-c}/lib -ljson-c",
+]
+run.dir = "{work:build}"
+
+[[build]]
+make.dir = "{work:build}"
+make.args = ["cryptsetup.static"]
+
+[[build]]
+install.from = "{work:build}/cryptsetup.static"
+install.to = "{dest}/usr/bin/cryptsetup"
+install.mode = 0o755

@@ -1,0 +1,27 @@
+version = "{popt.version}"
+kind = "library"
+summary = "Command line option parsing library, statically linked into cryptsetup"
+license = "MIT"
+homepage = "https://github.com/rpm-software-management/popt"
+purl = "pkg:generic/popt@{version}"
+cpe = "popt_project:popt"
+
+[sources.src]
+from = "popt"
+
+# Headers, static library and pkg-config file, in their `/usr` layout: linked into cryptsetup,
+# nothing goes to the tree.
+[[build]]
+configure.dest = "{out:dev}"
+configure.args = [
+    "--libdir=/usr/lib",
+    "--enable-static",
+    "--disable-shared",
+    "--disable-nls",
+    "CFLAGS=-O2 -flto=thin",
+]
+
+# Without its libtool archive, which names its dependencies at their install path, not in
+# their outputs: users link with the flags they are given.
+[[build]]
+remove = "{out:dev}/usr/lib/*.la"

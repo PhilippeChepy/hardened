@@ -21,6 +21,8 @@
 | CA certificates | registry TLS | — |
 | dust-init | init/agent | static PIE (musl, libunwind; Rust LTO) |
 | dust-api | mTLS API proxy, a sandboxed process of dust-init | static PIE (musl, libunwind; Rust LTO) |
+| cryptsetup | formats and opens the encrypted state partition (LUKS2), run by dust-init | static (musl, OpenSSL's libcrypto, json-c, libdevmapper, popt, libuuid; LTO) |
+| mke2fs | creates the filesystem of the encrypted state partition, run by dust-init | static (musl, e2fsprogs' libraries; LTO) |
 
 The `kubernetes-1-37` image adds (see [Kubernetes](#kubernetes)):
 
@@ -34,9 +36,9 @@ The `kubernetes-1-37` image adds (see [Kubernetes](#kubernetes)):
 Everything is compiled by clang (LLVM), linked by lld, against musl and compiler-rt (no GCC,
 glibc or libgcc), and every program is statically linked: the image has no dynamic loader and no
 shared library. What ships is built with ThinLTO: musl (but its start files, its
-dynamic linker's entry and mimalloc), libunwind, libseccomp, runc's C code and pause
-(`-flto=thin`), the Rust binaries (the workspace's release profile, `lto = "thin"`) and the kernel
-(`CONFIG_LTO_CLANG_THIN`); Go has no LTO. musl's allocator is mimalloc 3 in its hardened mode
+dynamic linker's entry and mimalloc), libunwind, libseccomp, runc's C code, pause, cryptsetup,
+mke2fs and the libraries linked into them (`-flto=thin`), the Rust binaries (the workspace's
+release profile, `lto = "thin"`) and the kernel (`CONFIG_LTO_CLANG_THIN`); Go has no LTO. musl's allocator is mimalloc 3 in its hardened mode
 (`MI_SECURE`), built into musl (patches and glue in [`specs/targets/tools/components/musl`](../specs/targets/tools/components/musl), after
 Chimera Linux's mimalloc 2 integration). The build tools link musl dynamically.
 
@@ -68,7 +70,8 @@ into `/run/hardened`.
    4. runs DHCPv4 on every physical NIC (IPv6 uses kernel SLAAC);
    5. fetches metadata and user-data, then validates the user-data and applies the hostname,
       sysctls and kernel modules;
-   6. grows the state partition with the disk and mounts it on `/var`;
+   6. grows the state partition with the disk and mounts it on `/var`, first unlocking it with the
+      TPM (or formatting it) when user-data enables its encryption;
    7. starts and supervises containerd (and, when kubelet runs, first makes every mount shared and
       writes kubelet's configuration);
    8. serves the control API on `/run/dust/control.sock` and starts the sandboxed `dust-api`
@@ -95,16 +98,18 @@ GPT
 ├── 1  esp                 64 MiB FAT32     EFI/BOOT/BOOTX64.EFI
 ├── 2  root-x86-64         erofs (lz4hc)    read-only, GPT flag 60
 ├── 3  root-x86-64-verity  dm-verity tree   read-only, GPT flag 60
-└── 4  var                 ext4 (64 MiB)    grown by dust-init to the end of the disk
+└── 4  var                 ext4 (64 MiB)    grown by dust-init to the end of the disk;
+                                            LUKS2 with ext4 inside when encrypted
 ```
 
 The partition UUIDs of the root and its hash tree are the two halves of the root hash, as with
 systemd-repart. The other UUIDs, the verity salt and the filesystem UUID are derived from the
 root filesystem manifest, so identical inputs give an identical image.
 
-The image ships an empty 64 MiB ext4 state partition, formatted at build time, so the OS needs no
-mkfs, fsck or resize tools. When the disk has grown since the GPT was written (its backup header
-is no longer on the last sector), dust-init moves the end of partition 4 to the end of the disk,
+The image ships an empty 64 MiB ext4 state partition, formatted at build time, so an unencrypted
+`/var` needs no mkfs, fsck or resize tools. When the disk has grown since the GPT was written (its
+backup header is no longer on the last sector), dust-init moves the end of partition 4 to the end
+of the disk (on a MiB boundary),
 replaces the GUID it has in the image (the same on every machine, derived from the root
 partition's) by a random one, keeping it on later resizes, rewrites the GPT and tells the
 kernel with `BLKPG_RESIZE_PARTITION` (the root disk is busy, so the table can't be re-read). On
@@ -114,6 +119,17 @@ already fills the partition). A resized volume is therefore picked up on the nex
 There is no fsck: the ext4 journal makes unclean shutdowns safe, metadata checksums detect
 corruption, and `/var` is mounted `errors=remount-ro`. If the partition is missing or does not
 mount, `/var` is a tmpfs, nothing persists and dust-init logs a warning.
+
+**Encryption** (`settings.hardened.storage.encryption = "tpm"`, off by default) makes partition 4 a
+LUKS2 volume (aes-xts-plain64, 4 KiB sectors) whose key, random, is sealed to the TPM under a PCR 11
+policy: only this TPM, booting this image, unseals it. The sealed key is a token of the LUKS2
+header. The first encrypted boot formats the partition with the image's static `cryptsetup`, then
+creates the filesystem with its static `mke2fs`; later boots unseal the key and open it as
+`/dev/mapper/state`, which is mounted on `/var` and grown like the plain one. When the key cannot be
+unsealed (a new image, a cleared TPM, another host), the partition is formatted again and the state
+is lost; when encryption cannot be set up at all, `/var` is a tmpfs, never an unencrypted
+filesystem. What backs `/var`, and why, is in the API (`Machine/Storage`, `hctl storage`). The
+reference is [state-encryption.md](state-encryption.md).
 
 ## Workloads
 
@@ -127,7 +143,9 @@ generated from the CRI protos vendored by the containerd release that ships in t
   `settings.container-registry`: dust-init writes them, before containerd starts, as `hosts.toml`
   files in `/run/containerd/certs.d` (containerd's `config_path`) and in the CRI plugin's
   `configs` of the configuration it generates, `/run/containerd/config.toml` (the image's, plus
-  those).
+  those; generated at every boot, even without registry settings). `configs` is deprecated in
+  containerd 2 and removed in 2.7: credentials will then go through a credential helper of stock
+  containerd (see the roadmap).
 - **System images** are "from scratch" images holding a single static binary; today only
   `pause`. A component declares its image (`b.container_image`) and places files in
   it during its build. dust-builder archives that as a reproducible OCI image and ships it in
@@ -326,7 +344,10 @@ environments holding its target otherwise. Every tree keeps the merged-`/usr` la
 4. **Assemble:** merge the trees of the exported target's components. A path owned by two
    components is an error. The build fails on setuid/setgid or world-writable files, and on any
    ELF file that is not a static executable or a kernel module (an interpreter, `DT_NEEDED`
-   libraries, or a shared library).
+   libraries, or a shared library). Then every executable that still has a symbol table or debug
+   information is stripped (`llvm-strip --strip-all`, from the environment; deterministic), once
+   for all components, whatever their builds did; kernel modules are left alone, their signature
+   covers them. The manifest records the stripped files.
 5. **Seal:** `mkfs.erofs` with fixed timestamps and all files owned by root, then `veritysetup
    format`.
 6. **UKI:** ukify (from the systemd source tree) with the kernel, the command line and
@@ -396,13 +417,15 @@ line, rather than inline tables.
 | Bugs in the API | TLS and network handling in an unprivileged container; role checks before forwarding |
 | Supply chain | Pinned and checksummed sources, offline builds, SBOM including every linked library |
 | Silent configuration drift | Configuration comes only from user-data and the API; unknown keys are rejected |
+| Copies of the state disk (snapshots, detached volumes) | Optional LUKS2 encryption of `/var`, its key sealed to the vTPM and the booted image (PCR 11) |
 
 ## Known gaps / roadmap
 
 - **Time:** no NTP/SNTP client yet; time comes from the hypervisor clock.
 - **Registries:** credentials go through the CRI plugin's `configs`, deprecated in containerd 2
-  and removed in 2.7; a later containerd needs another way (a credential helper or a patch, as
-  Bottlerocket's `credentials.toml`).
+  and removed in 2.7. The plan for 2.7 is a credential helper with stock containerd (no patch):
+  dust-init would give it the credentials of `settings.container-registry`, with the same
+  one-entry-per-host lookup.
 - **Platforms:** Exoscale only (and qemu).
 - **Secure Boot and modules:** UKIs and kernel modules are signed with development keys unless
   `build/keys/` holds release keys (`db.{key,crt}`, `modules.pem`). Only the kernel's build sees
@@ -414,7 +437,10 @@ line, rather than inline tables.
   test VM); graceful shutdown per pod (dust-init gives every container the same 20 s, ignoring
   `terminationGracePeriodSeconds` and priorities); `/etc/machine-id` (absent: cAdvisor and the
   node's `machineID` read it); a full check of static pod YAML (only its top level is checked);
-  the Bottlerocket settings not supported yet (see
-  [kubernetes-target.md](kubernetes-target.md#compared-to-bottlerocket)).
-- **State encryption:** `/var` is a plain ext4 filesystem; the design to encrypt it with a key
-  sealed to the TPM is in [state-encryption.md](state-encryption.md).
+  Bottlerocket's kubelet settings not supported yet (among others `provider-id`,
+  `server-tls-bootstrap`, `credential-providers`, `pod-pids-limit`, `container-log-*`, the CPU,
+  memory and topology managers, `shutdown-grace-period*`).
+- **State encryption:** off by default. The key is bound to plain PCR 11, so an image update
+  formats `/var`; a signed PCR policy (`PolicyAuthorize`, ukify's `.pcrsig`) would keep it across
+  images we sign. No integrity protection (dm-integrity), no TPM parameter encryption, no recovery
+  key ([state-encryption.md](state-encryption.md)).

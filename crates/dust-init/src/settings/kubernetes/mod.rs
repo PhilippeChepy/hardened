@@ -48,6 +48,12 @@ pub struct KubeletConfig {
     pub system_reserved: BTreeMap<ReservedResource, Quantity>,
     /// Replaces kubelet's defaults as a whole: a signal left out is not checked.
     pub eviction_hard: BTreeMap<EvictionSignal, Threshold>,
+    /// Thresholds below which kubelet evicts pods once they last their grace period.
+    pub eviction_soft: BTreeMap<EvictionSignal, Threshold>,
+    /// One per soft threshold, and only for those.
+    pub eviction_soft_grace_period: BTreeMap<EvictionSignal, Duration>,
+    /// Seconds a pod evicted on a soft threshold gets to stop, at most.
+    pub eviction_max_pod_grace_period: Option<u32>,
     pub image_gc: ImageGc,
 }
 
@@ -130,6 +136,12 @@ struct RawKubernetesSettings {
     system_reserved: BTreeMap<ReservedResource, Quantity>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     eviction_hard: BTreeMap<EvictionSignal, Threshold>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    eviction_soft: BTreeMap<EvictionSignal, Threshold>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    eviction_soft_grace_period: BTreeMap<EvictionSignal, Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eviction_max_pod_grace_period: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_gc_high_threshold_percent: Option<Percent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,6 +183,14 @@ impl TryFrom<RawKubernetesSettings> for KubernetesSettings {
             maximum_age: raw.image_maximum_gc_age,
         };
         image_gc.check()?;
+        check_soft_eviction(&raw.eviction_soft, &raw.eviction_soft_grace_period)?;
+        // Bottlerocket's type, a non-negative `i32`, as kubelet's.
+        if raw
+            .eviction_max_pod_grace_period
+            .is_some_and(|seconds| i32::try_from(seconds).is_err())
+        {
+            return Err("eviction-max-pod-grace-period must be from 0 to 2147483647 (seconds)".into());
+        }
         Ok(Self::Enabled(Box::new(KubeletConfig {
             api_server,
             cluster_certificate,
@@ -185,6 +205,9 @@ impl TryFrom<RawKubernetesSettings> for KubernetesSettings {
             kube_reserved: raw.kube_reserved,
             system_reserved: raw.system_reserved,
             eviction_hard: raw.eviction_hard,
+            eviction_soft: raw.eviction_soft,
+            eviction_soft_grace_period: raw.eviction_soft_grace_period,
+            eviction_max_pod_grace_period: raw.eviction_max_pod_grace_period,
             image_gc,
         })))
     }
@@ -208,6 +231,9 @@ impl From<KubernetesSettings> for RawKubernetesSettings {
                 kube_reserved: BTreeMap::new(),
                 system_reserved: BTreeMap::new(),
                 eviction_hard: BTreeMap::new(),
+                eviction_soft: BTreeMap::new(),
+                eviction_soft_grace_period: BTreeMap::new(),
+                eviction_max_pod_grace_period: None,
                 image_gc_high_threshold_percent: None,
                 image_gc_low_threshold_percent: None,
                 image_minimum_gc_age: None,
@@ -230,12 +256,36 @@ impl From<KubernetesSettings> for RawKubernetesSettings {
             kube_reserved: config.kube_reserved,
             system_reserved: config.system_reserved,
             eviction_hard: config.eviction_hard,
+            eviction_soft: config.eviction_soft,
+            eviction_soft_grace_period: config.eviction_soft_grace_period,
+            eviction_max_pod_grace_period: config.eviction_max_pod_grace_period,
             image_gc_high_threshold_percent: config.image_gc.high_threshold_percent,
             image_gc_low_threshold_percent: config.image_gc.low_threshold_percent,
             image_minimum_gc_age: config.image_gc.minimum_age,
             image_maximum_gc_age: config.image_gc.maximum_age,
         }
     }
+}
+
+/// kubelet refuses a soft threshold without a grace period; a grace period without a soft
+/// threshold is rejected too, as it would be ignored (a typo, most likely).
+fn check_soft_eviction(
+    soft: &BTreeMap<EvictionSignal, Threshold>,
+    grace_periods: &BTreeMap<EvictionSignal, Duration>,
+) -> Result<(), String> {
+    if let Some(signal) = soft.keys().find(|signal| !grace_periods.contains_key(signal)) {
+        return Err(format!(
+            "eviction-soft.\"{}\" needs its eviction-soft-grace-period",
+            signal.as_str()
+        ));
+    }
+    if let Some(signal) = grace_periods.keys().find(|signal| !soft.contains_key(signal)) {
+        return Err(format!(
+            "eviction-soft-grace-period.\"{}\" has no eviction-soft threshold",
+            signal.as_str()
+        ));
+    }
+    Ok(())
 }
 
 /// kubelet refuses to start with a `kubernetes.io` or `k8s.io` label it may not set itself

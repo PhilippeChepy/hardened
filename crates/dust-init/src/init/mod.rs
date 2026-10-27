@@ -175,7 +175,7 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
     sysctl::apply(&settings.kernel.sysctl);
     kmod::load(&settings.kernel.modules);
 
-    storage::mount_state().await?;
+    let storage = storage::mount_state(&reaper, settings.hardened.storage.encryption).await?;
     for dir in ["/var/lib/containerd", "/var/lib/dust", workloads::LOG_DIR] {
         std::fs::create_dir_all(dir)?;
     }
@@ -216,6 +216,7 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
             booted_at,
         },
         settings: settings.clone(),
+        storage,
         logs,
         workloads: OnceLock::new(),
         tpm,

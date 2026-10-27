@@ -78,8 +78,33 @@ As in Bottlerocket (`settings.pki.*.data`), PEM values are the base64 of the who
 
 Client roles come from the certificate's Organization (O):
 
-- `hardened:reader`: version, logs, settings, workload listing and logs, attestation evidence.
+- `hardened:reader`: version, logs, settings, storage state, workload listing and logs,
+  attestation evidence.
 - `hardened:admin`: everything, including workload changes, reboot and shutdown.
+
+## `settings.hardened.storage`
+
+The state partition, mounted on `/var`: the only persistent storage.
+
+```toml
+[settings.hardened.storage]
+encryption = "tpm"
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `encryption` | `none`, `tpm` | `none` | `tpm`: the partition is LUKS2, its key sealed to the TPM and PCR 11 (the booted image) |
+
+With `tpm`, the machine needs a TPM 2.0 (a vTPM). The first boot formats the partition (what it
+held is lost), and so does any boot whose TPM cannot unseal the key: **a new image starts with an
+empty `/var`**, as does a cleared TPM or a disk moved to another machine. If the partition cannot
+be set up otherwise (no TPM, a TPM or disk error), `/var` is a tmpfs: nothing is written to the
+disk unencrypted.
+
+Turning encryption off does not decrypt or wipe the partition: dust-init then leaves it alone and
+`/var` is a tmpfs, until encryption is turned back on (invalid user-data falls back to the
+defaults, which must not destroy the state). `hctl storage` shows what backs `/var` on this boot,
+and why. See [state-encryption.md](state-encryption.md).
 
 ## `settings.kubernetes`
 
@@ -134,6 +159,9 @@ manifest = "YXBpVmVyc2lvbjogdjEK..."  # base64 of a Pod manifest, YAML or JSON
 | `static-pods.<name>.enabled` | bool | `true` | |
 | `kube-reserved.<resource>`, `system-reserved.<resource>` | quantity (`100m`, `512Mi`, `1Gi`, `129e6`) | none | Resources kept from pods for Kubernetes daemons and the system; `<resource>` is `cpu`, `memory`, `ephemeral-storage` or `pid` |
 | `eviction-hard.<signal>` | quantity, or percentage below 100 (`"15%"`) | kubelet's | Thresholds below which kubelet evicts pods; `<signal>` is `memory.available`, `nodefs.available`, `nodefs.inodesFree`, `imagefs.available`, `imagefs.inodesFree` or `pid.available`. Set, it replaces kubelet's defaults as a whole: a signal left out is not checked |
+| `eviction-soft.<signal>` | quantity, or percentage below 100 | none | Thresholds below which kubelet evicts pods once they last `eviction-soft-grace-period`; same signals as `eviction-hard` |
+| `eviction-soft-grace-period.<signal>` | duration (`1m30s`) | | How long a soft threshold must be crossed before evicting; one per `eviction-soft` signal, and only for those |
+| `eviction-max-pod-grace-period` | 0 to 2147483647 (seconds) | kubelet's (`0`) | The longest a pod evicted on a soft threshold gets to stop |
 | `image-gc-high-threshold-percent` | 0 to 100, number or string | 85 | Disk usage above which images are always collected |
 | `image-gc-low-threshold-percent` | 0 to 100, number or string | 80 | Disk usage image collection brings it back to; must be below the high threshold (both checked, with kubelet's defaults for the one left out) |
 | `image-minimum-gc-age` | duration (`1h30m`, `90s`; h, m, s, ms in that order) | `2m` | An unused image is not collected before |
@@ -205,11 +233,37 @@ password = "s3cr3t"
 | `auth` | base64 of `<username>:<password>` | Redacted in `GetSettings` |
 | `identitytoken` | string | A registry identity token. Redacted in `GetSettings` |
 
-A registry is reached with HTTPS, or HTTP when its scheme says so or its port is 80. dust-init writes
-the mirrors as containerd `hosts.toml` files in `/run/containerd/certs.d` (its `config_path`) and
-the credentials in containerd's configuration (`/run/containerd/config.toml`, mode 0600), before
-containerd starts. Credentials apply to pulls that carry none: a pod's image pull secrets take
-precedence. A credential is looked up by the host containerd contacts, so a mirror needs its own.
+A registry is reached with HTTPS, or HTTP when its scheme says so or its port is 80. Credentials
+apply to pulls that carry none: a pod's image pull secrets take precedence.
+
+**One `credentials` entry per host, mirrors included.** containerd looks credentials up by the
+host it contacts: pulling `docker.io/library/nginx` through `mirror.example.com` asks for
+`mirror.example.com`'s, not Docker Hub's. A registry's credentials are never copied to its
+mirrors (as in Bottlerocket): give each mirror that needs them its own entry.
+
+```toml
+[[settings.container-registry.mirrors]]
+registry = "docker.io"
+endpoint = ["https://mirror.example.com"]
+
+# Used when the mirror answers (registry-1.docker.io's would not be).
+[[settings.container-registry.credentials]]
+registry = "mirror.example.com"
+username = "mirror-user"
+password = "mirror-password"
+
+# Used when the pull falls back to Docker Hub.
+[[settings.container-registry.credentials]]
+registry = "docker.io"
+username = "hub-user"
+password = "hub-password"
+```
+
+dust-init writes the mirrors as containerd `hosts.toml` files in `/run/containerd/certs.d` (its
+`config_path`), and always runs containerd with a configuration it generates at every boot,
+`/run/containerd/config.toml` (mode 0600): the image's, plus the credentials in the CRI plugin's
+`configs`, even when there are none. `configs` is deprecated in containerd 2 and removed in 2.7;
+credentials will then go through a credential helper, with the same settings.
 
 ## `settings.hardened.containers.<name>`
 

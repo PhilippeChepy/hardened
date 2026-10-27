@@ -191,7 +191,7 @@ fn main() -> anyhow::Result<()> {
             print!("{}", job.recipe.plan);
         }
         Command::Image { target, options } => {
-            image::build_image(&paths, &target.id, options)?;
+            image::build_image(&paths, &target.id, options, false)?;
         }
         Command::Run(args) => run::run(&paths, &args)?,
         Command::Test(args) => run::test(&paths, &args)?,

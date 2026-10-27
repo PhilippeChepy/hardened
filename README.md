@@ -18,7 +18,7 @@ UEFI ─▶ UKI (systemd-stub + kernel + cmdline with the dm-verity root hash, s
               └─▶ dust-init (PID 1)
                    ├─ mounts, sysctls, signed kernel modules (from the verity root only)
                    ├─ DHCP, platform metadata, user-data
-                   ├─ /var: state partition, grown to fill the disk
+                   ├─ /var: state partition, grown to fill the disk (optionally LUKS2, key sealed to the vTPM)
                    ├─ containerd (CRI) ──▶ pods: workloads (user-data or API)
                    ├─ control API on a unix socket, vTPM attestation evidence
                    └─ dust-api (mTLS, sandboxed process)
@@ -41,6 +41,9 @@ UEFI ─▶ UKI (systemd-stub + kernel + cmdline with the dm-verity root hash, s
 - **Platforms.** Exoscale, and qemu for local testing.
 - **Remote attestation.** dust-init can serve PCRs, the TCG event log, and TPM2 quotes signed by a
   restricted attestation key. TPM 2.0 commands are encoded by hand, with no TSS library.
+- **Encrypted state, optionally.** With `settings.hardened.storage.encryption = "tpm"`, `/var` is
+  LUKS2, its key sealed to the vTPM and to the booted image (PCR 11): a copy of the disk is
+  unreadable ([docs/state-encryption.md](docs/state-encryption.md)).
 
 ## Quick start
 
@@ -51,7 +54,7 @@ is much slower.
 ```sh
 cargo builder image       # build the standard target's components, then its image  →  build/out/
 cargo builder run         # boot it in qemu (OVMF + swtpm), serial console on stdio
-cargo builder test        # boot it headless and wait for the smoke-test markers
+cargo builder test        # boot it headless (6 boots on one disk) and wait for the smoke-test markers
 ```
 
 The first build compiles the whole toolchain from source (LLVM twice, musl, Rust, Go...), then the image's components, which can take some time. Later builds are incremental: each

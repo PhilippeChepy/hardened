@@ -37,6 +37,8 @@ use crate::targets::{Format, Partition};
 const MIB: u64 = 1 << 20;
 const SECTOR: u64 = 512;
 const VERITY_BLOCK: u64 = 4096;
+/// Where the ESP starts on the disk, after the GPT.
+const ESP_START: u64 = MIB;
 
 const ESP_TYPE: Uuid = uuid!("C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
 const ROOT_X86_64_TYPE: Uuid = uuid!("4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709");
@@ -52,9 +54,23 @@ const KERNEL_RELEASE: Output = Output::new(name!("kernel"), "kernel.release");
 const UKI_STUB: Output = Output::new(name!("systemd-stub"), "linuxx64.efi.stub");
 const UKIFY: Output = Output::new(name!("systemd-stub"), "ukify");
 
+/// The option the test variant adds to the kernel command line (see [`TEST_VARIANT`]).
+const TEST_VARIANT_OPTION: &str = "hardened.test-variant=1";
+/// The test variant of an image: a disk holding only an ESP, with a UKI whose command line has
+/// [`TEST_VARIANT_OPTION`] too. Booted from it, with the image's disk attached, the machine runs
+/// the same root filesystem, but systemd-stub measures another UKI into PCR 11: to the TPM, it is
+/// another image.
+pub const TEST_VARIANT: &str = "boot-variant.raw";
+
 /// Builds the target `target_id` (its components, the tools exporting it, and what they need),
-/// and writes its image, SBOM and file manifest to `build/out/`.
-pub fn build_image(paths: &Paths, target_id: &str, options: crate::build::Options) -> anyhow::Result<()> {
+/// and writes its image, SBOM and file manifest to `build/out/`; with `test_variant`, also its
+/// [`TEST_VARIANT`], next to its `disk.raw`.
+pub fn build_image(
+    paths: &Paths,
+    target_id: &str,
+    options: crate::build::Options,
+    test_variant: bool,
+) -> anyhow::Result<()> {
     let version = crate::recipe::WORKSPACE_VERSION;
     let pipeline = Pipeline::load(paths)?;
     let target = pipeline.targets.get(target_id)?;
@@ -103,6 +119,7 @@ pub fn build_image(paths: &Paths, target_id: &str, options: crate::build::Option
             manifest.add_generated(&rootfs, &path, component.recipe.name(), &archive, 0o644)?;
         }
     }
+    strip(&assembly, &rootfs, &mut manifest)?;
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
     std::fs::write(dir.join("manifest.json"), &manifest_json)?;
     let manifest_digest = Sha256::digest(&manifest_json);
@@ -117,13 +134,30 @@ pub fn build_image(paths: &Paths, target_id: &str, options: crate::build::Option
         .to_owned();
     let cmdline = kernel_cmdline(&verity, &target.kernel_cmdline);
     std::fs::write(dir.join("cmdline"), &cmdline)?;
-    let uki = build_uki(paths, &assembly, &built, (&kernel, &stub), &dir, &release)?;
+    let uki = build_uki(paths, &assembly, &built, (&kernel, &stub), &dir, &release, "")?;
 
     eprintln!("==> writing disk image");
     let esp = dir.join("esp.img");
     write_esp(&esp, &uki, &manifest_digest, target.partition.esp_size)?;
     let raw = dir.join("disk.raw");
     write_disk(&dir, &verity, &manifest_digest, &target.partition)?;
+    if test_variant {
+        eprintln!("==> writing the test variant ({TEST_VARIANT_OPTION})");
+        std::fs::write(dir.join("cmdline-variant"), format!("{cmdline} {TEST_VARIANT_OPTION}"))?;
+        let uki = build_uki(paths, &assembly, &built, (&kernel, &stub), &dir, &release, "-variant")?;
+        let esp = dir.join("esp-variant.img");
+        write_esp(&esp, &uki, &manifest_digest, target.partition.esp_size)?;
+        write_boot_disk(
+            &dir.join(TEST_VARIANT),
+            &esp,
+            &manifest_digest,
+            target.partition.esp_size,
+        )?;
+    } else if let Err(e) = std::fs::remove_file(dir.join(TEST_VARIANT))
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(e.into());
+    }
 
     let out = paths.out();
     std::fs::create_dir_all(&out)?;
@@ -163,6 +197,34 @@ pub fn build_image(paths: &Paths, target_id: &str, options: crate::build::Option
 
     eprintln!("==> {}", qcow2.display());
     eprintln!("==> {}", sbom.display());
+    Ok(())
+}
+
+/// Strips the executables of the root filesystem with the tools' `llvm-strip`, once for all: C
+/// programs keep their symbol tables unless their build strips them, and Rust's release profile
+/// keeps them too. `--strip-all` on an executable is deterministic; kernel modules are left
+/// alone (their signature covers them).
+fn strip(image: &Image, rootfs: &Path, manifest: &mut crate::rootfs::Manifest) -> anyhow::Result<()> {
+    let paths = crate::rootfs::unstripped(rootfs, manifest)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "==> stripping {}",
+        paths.iter().map(|p| format!("/{p}")).collect::<Vec<_>>().join(" ")
+    );
+    let files: Vec<String> = paths.iter().map(|path| format!("/rootfs/{path}")).collect();
+    image
+        .container(format!("llvm-strip --strip-all {}", files.join(" ")))
+        .mount(rootfs, "/rootfs")
+        .run()?;
+    manifest.rehash(rootfs, &paths)?;
+    let left = crate::rootfs::unstripped(rootfs, manifest)?;
+    ensure!(
+        left.is_empty(),
+        "still unstripped after llvm-strip: {}",
+        left.join(", ")
+    );
     Ok(())
 }
 
@@ -267,7 +329,9 @@ fn kernel_cmdline(verity: &Verity, extra: &[String]) -> String {
 
 /// Builds the UKI with ukify and signs it, and the kernel inside, with the Secure Boot key in
 /// `build/keys`. `--sign-kernel` is explicit: systemd-sbsign cannot check if it is signed already.
-/// The signatures' signing time is `SOURCE_DATE_EPOCH`, otherwise the current time.
+/// The signatures' signing time is `SOURCE_DATE_EPOCH`, otherwise the current time. Its command
+/// line is `dir/cmdline<suffix>`, and it is written to `dir/uki<suffix>.efi`.
+#[allow(clippy::too_many_arguments)]
 fn build_uki(
     paths: &Paths,
     image: &Image,
@@ -275,15 +339,16 @@ fn build_uki(
     (kernel, stub): (&Unit, &Unit),
     dir: &Path,
     release: &str,
+    suffix: &str,
 ) -> anyhow::Result<PathBuf> {
     let keys = paths.keys();
     image
         .container(format!(
             "python3 /uki/assembler build --efi-arch x64 --stub /uki/stub \
-               --linux /uki/linux --uname {release} --cmdline @/image/cmdline \
+               --linux /uki/linux --uname {release} --cmdline @/image/cmdline{suffix} \
                --os-release @/rootfs/usr/lib/os-release \
                --signtool systemd-sbsign --sign-kernel --secureboot-private-key /keys/db.key --secureboot-certificate /keys/db.crt \
-               --output /image/uki.efi >&2"
+               --output /image/uki{suffix}.efi >&2"
         ))
         .mount_ro(crate::build::locate(built, stub, &UKIFY)?, "/uki/assembler")
         .mount_ro(crate::build::locate(built, stub, &UKI_STUB)?, "/uki/stub")
@@ -294,7 +359,7 @@ fn build_uki(
         .mount(dir, "/image")
         .env("SOURCE_DATE_EPOCH", crate::SOURCE_DATE_EPOCH.to_string())
         .run()?;
-    Ok(dir.join("uki.efi"))
+    Ok(dir.join(format!("uki{suffix}.efi")))
 }
 
 fn write_esp(path: &Path, uki: &Path, manifest_digest: &Sha256, size: u64) -> anyhow::Result<()> {
@@ -332,7 +397,7 @@ fn write_disk(dir: &Path, verity: &Verity, manifest_digest: &Sha256, partition: 
     let (esp_size, var_size) = (partition.esp_size, partition.state_size);
     let path = dir.join("disk.raw");
     let align = |n: u64| n.div_ceil(MIB) * MIB;
-    let esp_start = MIB;
+    let esp_start = ESP_START;
     let root_start = esp_start + esp_size;
     let hash_start = root_start + align(verity.data_size());
     let var_start = hash_start + align(verity.hash_size);
@@ -383,6 +448,35 @@ fn write_disk(dir: &Path, verity: &Verity, manifest_digest: &Sha256, partition: 
         .logical_block_size(gpt::disk::LogicalBlockSize::Lb512)
         .create_from_device(file, Some(derived_uuid("disk", manifest_digest)))?;
     disk.update_partitions(partitions)?;
+    let mut file = disk.write()?;
+    let sectors = u32::try_from(total / SECTOR - 1).unwrap_or(u32::MAX);
+    gpt::mbr::ProtectiveMBR::with_lb_size(sectors).overwrite_lba0(&mut file)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Writes a disk holding only the ESP image `esp`, of `esp_size` bytes.
+fn write_boot_disk(path: &Path, esp: &Path, manifest_digest: &Sha256, esp_size: u64) -> anyhow::Result<()> {
+    let total = ESP_START + esp_size + MIB;
+    let mut file = create_sized(path, total)?;
+    file.seek(SeekFrom::Start(ESP_START))?;
+    std::io::copy(&mut File::open(esp)?, &mut file)?;
+    let partition = gpt::partition::Partition {
+        part_type_guid: Type {
+            guid: ESP_TYPE,
+            os: OperatingSystem::None,
+        },
+        part_guid: derived_uuid("variant esp", manifest_digest),
+        first_lba: ESP_START / SECTOR,
+        last_lba: (ESP_START + esp_size) / SECTOR - 1,
+        flags: 0,
+        name: "esp".to_owned(),
+    };
+    let mut disk = gpt::GptConfig::new()
+        .writable(true)
+        .logical_block_size(gpt::disk::LogicalBlockSize::Lb512)
+        .create_from_device(file, Some(derived_uuid("variant disk", manifest_digest)))?;
+    disk.update_partitions(BTreeMap::from([(1, partition)]))?;
     let mut file = disk.write()?;
     let sectors = u32::try_from(total / SECTOR - 1).unwrap_or(u32::MAX);
     gpt::mbr::ProtectiveMBR::with_lb_size(sectors).overwrite_lba0(&mut file)?;

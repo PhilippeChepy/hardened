@@ -12,6 +12,8 @@ service Machine {
   rpc Logs(LogsRequest) returns (stream LogEntry);
   // Effective settings (user-data merged with API changes), secrets redacted, as TOML.
   rpc GetSettings(google.protobuf.Empty) returns (SettingsResponse);
+  // What backs /var on this boot: the state partition (plain or encrypted), or a tmpfs.
+  rpc Storage(google.protobuf.Empty) returns (StorageResponse);
   rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
@@ -42,6 +44,30 @@ message LogEntry {
 
 message SettingsResponse {
   string toml = 1;
+}
+
+message StorageResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // The state partition, unencrypted.
+    STATE_PLAIN = 1;
+    // The encrypted state partition, opened with the key the TPM unsealed.
+    STATE_ENCRYPTED_UNLOCKED = 2;
+    // The encrypted state partition, formatted on this boot: what it held is gone (see reason).
+    STATE_ENCRYPTED_FORMATTED = 3;
+    // A tmpfs: nothing persists (see reason).
+    STATE_TMPFS = 4;
+  }
+  State state = 1;
+  // Why the partition was formatted (STATE_ENCRYPTED_FORMATTED) or is not used (STATE_TMPFS).
+  string reason = 2;
+  // The state partition (e.g. /dev/vda4); empty for a tmpfs.
+  string partition = 3;
+  // What is mounted on /var: the partition, or its decrypted device (/dev/mapper/state).
+  string device = 4;
+  // Size of the filesystem on /var, and what is available to unprivileged users.
+  uint64 size_bytes = 5;
+  uint64 available_bytes = 6;
 }
 
 // Containers run by dust through containerd.

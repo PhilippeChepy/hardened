@@ -26,6 +26,13 @@ impl ResponseCode {
         matches!(self.0, YIELDED | TESTING | RETRY)
     }
 
+    /// The error of a format-one code from the TPM (`TPM_RC_POLICY_FAIL`...), without the
+    /// handle, session or parameter it names.
+    pub fn format_one(self) -> Option<u16> {
+        let code = self.code();
+        (self.layer() == 0 && code & RC_FMT1 != 0).then_some(RC_FMT1 | (code & 0x3F))
+    }
+
     /// Software layer that produced the code (0 for the TPM itself).
     fn layer(self) -> u32 {
         self.0 >> 16
@@ -170,6 +177,10 @@ mod tests {
         assert_eq!(ResponseCode(0x9A2).to_string(), "TPM_RC_BAD_AUTH (session 1, 0x9a2)");
         assert_eq!(ResponseCode(0x2C3).to_string(), "TPM_RC_HASH (parameter 2, 0x2c3)");
         assert_eq!(ResponseCode(0x0A6).to_string(), "TPM_RC_CURVE (0xa6)");
+        assert_eq!(ResponseCode(0x99D).format_one(), Some(0x09D));
+        assert_eq!(ResponseCode(0x1DF).format_one(), Some(0x09F));
+        assert_eq!(ResponseCode(0x921).format_one(), None);
+        assert_eq!(ResponseCode(0x8_099D).format_one(), None);
     }
 
     #[test]

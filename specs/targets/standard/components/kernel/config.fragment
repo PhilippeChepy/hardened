@@ -141,6 +141,9 @@ CONFIG_MD=y
 CONFIG_BLK_DEV_DM=y
 CONFIG_DM_INIT=y
 CONFIG_DM_VERITY=y
+# The encrypted state partition (LUKS2, aes-xts-plain64); cryptsetup does its own crypto in user
+# space, so the kernel's crypto API stays closed to it (no AF_ALG skcipher).
+CONFIG_DM_CRYPT=y
 
 # --- Filesystems -----------------------------------------------------------------------------
 CONFIG_MISC_FILESYSTEMS=y
@@ -341,10 +344,14 @@ CONFIG_IP_VS_OVF=y
 CONFIG_IP_VS_NFCT=y
 CONFIG_IP_SCTP=y
 
-# --- Crypto: dm-verity, module signatures, WireGuard; AF_ALG hashes for Cilium ---------------
+# --- Crypto: dm-verity, dm-crypt, module signatures, WireGuard; AF_ALG hashes for Cilium -----
 CONFIG_CRYPTO_SHA1=y
 CONFIG_CRYPTO_SHA256=y
 CONFIG_CRYPTO_SHA512=y
+# aes-xts-plain64 for dm-crypt: AES-NI (with VAES), and the generic code where it is missing.
+CONFIG_CRYPTO_AES=y
+CONFIG_CRYPTO_AES_NI_INTEL=y
+CONFIG_CRYPTO_XTS=y
 CONFIG_CRYPTO_USER_API_HASH=y
 CONFIG_CRYPTO_USER_API_AEAD=n
 # Page-cache write primitives disabled outright, as in sks-templates

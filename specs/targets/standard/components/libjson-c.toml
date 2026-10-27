@@ -1,0 +1,25 @@
+version = "{json-c.version}"
+kind = "library"
+summary = "json-c JSON library, statically linked into cryptsetup"
+license = "MIT"
+homepage = "https://github.com/json-c/json-c"
+purl = "pkg:generic/json-c@{version}"
+cpe = "json-c_project:json-c"
+
+depends-on = ["cmake"]
+
+[sources.src]
+from = "json-c"
+
+# Headers, static library and pkg-config file, in their `/usr` layout: linked into cryptsetup,
+# nothing goes to the tree.
+[[build]]
+cmake.dest = "{out:dev}"
+cmake.args = [
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DBUILD_STATIC_LIBS=ON",
+    "-DBUILD_APPS=OFF",
+    "-DBUILD_TESTING=OFF",
+    "-DDISABLE_WERROR=ON",
+    "-DCMAKE_C_FLAGS=-flto=thin",
+]

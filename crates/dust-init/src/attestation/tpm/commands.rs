@@ -4,18 +4,28 @@ use super::TpmError;
 use super::marshal::{self, Auth, Reader, Writer};
 
 const CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const CC_CREATE: u32 = 0x0000_0153;
+const CC_LOAD: u32 = 0x0000_0157;
 const CC_QUOTE: u32 = 0x0000_0158;
+const CC_UNSEAL: u32 = 0x0000_015E;
 const CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const CC_START_AUTH_SESSION: u32 = 0x0000_0176;
 const CC_PCR_READ: u32 = 0x0000_017E;
+const CC_POLICY_PCR: u32 = 0x0000_017F;
 
+pub const RH_OWNER: u32 = 0x4000_0001;
+const RH_NULL: u32 = 0x4000_0007;
 pub const RH_ENDORSEMENT: u32 = 0x4000_000B;
 
 pub const ALG_SHA1: u16 = 0x0004;
 pub const ALG_SHA256: u16 = 0x000B;
 pub const ALG_SHA384: u16 = 0x000C;
+const ALG_AES: u16 = 0x0006;
+const ALG_KEYEDHASH: u16 = 0x0008;
 const ALG_ECDSA: u16 = 0x0018;
 const ALG_NULL: u16 = 0x0010;
 const ALG_ECC: u16 = 0x0023;
+const ALG_CFB: u16 = 0x0043;
 const ECC_NIST_P256: u16 = 0x0003;
 
 /// TPMA_OBJECT bits.
@@ -23,8 +33,13 @@ const FIXED_TPM: u32 = 1 << 1;
 const FIXED_PARENT: u32 = 1 << 4;
 const SENSITIVE_DATA_ORIGIN: u32 = 1 << 5;
 const USER_WITH_AUTH: u32 = 1 << 6;
+const NO_DA: u32 = 1 << 10;
 const RESTRICTED: u32 = 1 << 16;
+const DECRYPT: u32 = 1 << 17;
 const SIGN: u32 = 1 << 18;
+
+/// TPM_SE_POLICY.
+const SE_POLICY: u8 = 0x01;
 
 /// TPM_GENERATED_VALUE: "\xffTCG", proves a TPMS_ATTEST was produced by the TPM.
 const TPM_GENERATED: u32 = 0xFF54_4347;
@@ -123,6 +138,43 @@ pub fn ak_template() -> Vec<u8> {
     w.into_bytes()
 }
 
+/// TPMT_PUBLIC of the storage key sealed objects are created under: the TCG's ECC P-256 storage
+/// root key template (restricted decryption key, AES-128-CFB for its children), with empty auth
+/// and no dictionary-attack protection.
+pub fn srk_template() -> Vec<u8> {
+    let mut w = Writer::default();
+    w.u16(ALG_ECC)
+        .u16(ALG_SHA256)
+        .u32(FIXED_TPM | FIXED_PARENT | SENSITIVE_DATA_ORIGIN | USER_WITH_AUTH | NO_DA | RESTRICTED | DECRYPT)
+        .tpm2b(&[]) // authPolicy
+        // TPMS_ECC_PARMS: symmetric (algorithm, keyBits, mode), scheme, curveID, kdf.
+        .u16(ALG_AES)
+        .u16(128)
+        .u16(ALG_CFB)
+        .u16(ALG_NULL)
+        .u16(ECC_NIST_P256)
+        .u16(ALG_NULL)
+        // unique: empty TPMS_ECC_POINT.
+        .tpm2b(&[])
+        .tpm2b(&[]);
+    w.into_bytes()
+}
+
+/// TPMT_PUBLIC of a sealed data object that only a policy session satisfying `policy` (a SHA-256
+/// policy digest) can unseal: `userWithAuth` is clear, so its (empty) auth value cannot.
+pub fn sealed_template(policy: &[u8]) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.u16(ALG_KEYEDHASH)
+        .u16(ALG_SHA256)
+        .u32(FIXED_TPM | FIXED_PARENT | NO_DA)
+        .tpm2b(policy)
+        // TPMS_KEYEDHASH_PARMS: no scheme (a data object).
+        .u16(ALG_NULL)
+        // unique: empty TPM2B_DIGEST.
+        .tpm2b(&[]);
+    w.into_bytes()
+}
+
 /// TPM2_CreatePrimary under `hierarchy` (authorized with an empty password).
 pub fn create_primary(hierarchy: u32, template: &[u8]) -> Vec<u8> {
     marshal::command(CC_CREATE_PRIMARY, &[hierarchy], Auth::Password(&[]), |w| {
@@ -146,6 +198,99 @@ pub fn parse_create_primary(response: &[u8]) -> Result<(u32, Vec<u8>), TpmError>
     let public = params.tpm2b()?;
     // creationData, creationHash, creationTicket and name follow; dust-init needs none of them.
     Ok((handle, public.to_vec()))
+}
+
+/// TPM2_Create of a data object holding `data` under `parent` (authorized with an empty
+/// password).
+pub fn create(parent: u32, data: &[u8], template: &[u8]) -> Vec<u8> {
+    marshal::command(CC_CREATE, &[parent], Auth::Password(&[]), |w| {
+        w.sized(|w| {
+            // TPMS_SENSITIVE_CREATE: userAuth, data.
+            w.tpm2b(&[]).tpm2b(data);
+        })
+        .tpm2b(template)
+        .tpm2b(&[]); // outsideInfo
+        encode_selections(w, &[]); // creationPCR
+    })
+}
+
+/// The TPM2B_PRIVATE and TPM2B_PUBLIC contents of the created object.
+pub fn parse_create(response: &[u8]) -> Result<(Vec<u8>, Vec<u8>), TpmError> {
+    let mut params = marshal::response(response, 0)?.params;
+    let private = params.tpm2b()?;
+    let public = params.tpm2b()?;
+    // creationData, creationHash and creationTicket follow; dust-init needs none of them.
+    Ok((private.to_vec(), public.to_vec()))
+}
+
+/// TPM2_Load of an object created under `parent` (authorized with an empty password).
+pub fn load(parent: u32, private: &[u8], public: &[u8]) -> Vec<u8> {
+    marshal::command(CC_LOAD, &[parent], Auth::Password(&[]), |w| {
+        w.tpm2b(private).tpm2b(public);
+    })
+}
+
+/// The transient handle of the loaded object.
+pub fn parse_load(response: &[u8]) -> Result<u32, TpmError> {
+    let marshal::Response { mut handles, .. } = marshal::response(response, 1)?;
+    handles.u32()
+}
+
+/// TPM2_StartAuthSession of an unbound, unsalted policy session hashing with SHA-256.
+pub fn start_policy_session(nonce: &[u8]) -> Vec<u8> {
+    marshal::command(CC_START_AUTH_SESSION, &[RH_NULL, RH_NULL], Auth::None, |w| {
+        w.tpm2b(nonce)
+            .tpm2b(&[]) // encryptedSalt
+            .u8(SE_POLICY)
+            .u16(ALG_NULL) // symmetric: no parameter encryption
+            .u16(ALG_SHA256);
+    })
+}
+
+/// The handle of the started session.
+pub fn parse_start_auth_session(response: &[u8]) -> Result<u32, TpmError> {
+    let marshal::Response { mut handles, .. } = marshal::response(response, 1)?;
+    handles.u32()
+}
+
+/// TPM2_PolicyPCR over `selection` at their current values (an empty `pcrDigest`).
+pub fn policy_pcr(session: u32, selection: PcrSelection) -> Vec<u8> {
+    marshal::command(CC_POLICY_PCR, &[session], Auth::None, |w| {
+        w.tpm2b(&[]);
+        encode_selections(w, &[selection]);
+    })
+}
+
+pub fn parse_policy_pcr(response: &[u8]) -> Result<(), TpmError> {
+    marshal::response(response, 0)?.params.finish()
+}
+
+/// The policy digest TPM2_PolicyPCR leaves in a fresh SHA-256 session for `selection` at
+/// values whose concatenation hashes to `pcr_digest` (TPM 2.0 Part 3, §23.7).
+pub fn policy_pcr_digest(selection: PcrSelection, pcr_digest: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut selections = Writer::default();
+    encode_selections(&mut selections, &[selection]);
+    Sha256::new()
+        .chain_update([0; 32])
+        .chain_update(CC_POLICY_PCR.to_be_bytes())
+        .chain_update(selections.into_bytes())
+        .chain_update(pcr_digest)
+        .finalize()
+        .into()
+}
+
+/// TPM2_Unseal of `object`, authorized by the policy `session`.
+pub fn unseal(object: u32, session: u32, nonce: &[u8]) -> Vec<u8> {
+    marshal::command(CC_UNSEAL, &[object], Auth::Policy { session, nonce }, |_| {})
+}
+
+/// The unsealed data.
+pub fn parse_unseal(response: &[u8]) -> Result<Vec<u8>, TpmError> {
+    let mut params = marshal::response(response, 0)?.params;
+    let data = params.tpm2b()?.to_vec();
+    params.finish()?;
+    Ok(data)
 }
 
 /// TPM2_Quote with `key` (authorized with an empty password) and its own signing scheme.
@@ -222,6 +367,8 @@ pub fn parse_quote_info(attest: &[u8]) -> Result<QuoteInfo<'_>, TpmError> {
 mod tests {
     use super::*;
 
+    const POLICY_PCR11_ZEROS: &str = "fd32fa22c52cfc8e1a0c29eb38519f87084cab0b04b0d8f020a4d38b2f4e223e";
+
     const SHA256_PCRS_0_1_7: PcrSelection = PcrSelection {
         hash: ALG_SHA256,
         mask: 0b1000_0011,
@@ -264,6 +411,137 @@ mod tests {
             0, 0, 0, 0,                                  // creationPCR
         ];
         assert_eq!(create_primary(RH_ENDORSEMENT, &ak_template()), expected);
+    }
+
+    #[test]
+    fn create_primary_srk_command_bytes() {
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x02, 0, 0, 0, 0x43, 0, 0, 0x01, 0x31, // header (67 bytes)
+            0x40, 0, 0, 0x01,                            // TPM_RH_OWNER
+            0, 0, 0, 9, 0x40, 0, 0, 0x09, 0, 0, 0, 0, 0, // TPM_RS_PW, empty password
+            0, 4, 0, 0, 0, 0,                            // inSensitive: empty userAuth, data
+            0, 0x1A,                                     // inPublic (26 bytes)
+            0, 0x23, 0, 0x0B,                            //   ECC, nameAlg SHA256
+            0, 0x03, 0x04, 0x72,                         //   objectAttributes
+            0, 0,                                        //   authPolicy
+            0, 0x06, 0, 0x80, 0, 0x43,                   //   symmetric: AES-128-CFB
+            0, 0x10,                                     //   scheme: NULL
+            0, 0x03,                                     //   curve: NIST P-256
+            0, 0x10,                                     //   kdf: NULL
+            0, 0, 0, 0,                                  //   unique: empty point
+            0, 0,                                        // outsideInfo
+            0, 0, 0, 0,                                  // creationPCR
+        ];
+        assert_eq!(create_primary(RH_OWNER, &srk_template()), expected);
+    }
+
+    #[test]
+    fn create_sealed_object_command_bytes() {
+        #[rustfmt::skip]
+        let mut expected = vec![
+            0x80, 0x02, 0, 0, 0, 0x5B, 0, 0, 0x01, 0x53, // header (91 bytes)
+            0x80, 0, 0, 0,                               // parentHandle
+            0, 0, 0, 9, 0x40, 0, 0, 0x09, 0, 0, 0, 0, 0, // TPM_RS_PW, empty password
+            0, 8, 0, 0, 0, 4, b'k', b'e', b'y', b'!',    // inSensitive: empty userAuth, data
+            0, 0x2E,                                     // inPublic (46 bytes)
+            0, 0x08, 0, 0x0B,                            //   KEYEDHASH, nameAlg SHA256
+            0, 0, 0x04, 0x12,                            //   objectAttributes
+            0, 0x20,                                     //   authPolicy (32 bytes)
+        ];
+        expected.extend([0xAB; 32]);
+        #[rustfmt::skip]
+        expected.extend([
+            0, 0x10,                                     //   scheme: NULL
+            0, 0,                                        //   unique: empty
+            0, 0,                                        // outsideInfo
+            0, 0, 0, 0,                                  // creationPCR
+        ]);
+        assert_eq!(create(0x8000_0000, b"key!", &sealed_template(&[0xAB; 32])), expected);
+    }
+
+    #[test]
+    fn policy_session_command_bytes() {
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x01, 0, 0, 0, 0x1F, 0, 0, 0x01, 0x76, // header (31 bytes)
+            0x40, 0, 0, 0x07, 0x40, 0, 0, 0x07,          // tpmKey, bind: TPM_RH_NULL
+            0, 4, 1, 2, 3, 4,                            // nonceCaller
+            0, 0,                                        // encryptedSalt
+            0x01,                                        // TPM_SE_POLICY
+            0, 0x10,                                     // symmetric: NULL
+            0, 0x0B,                                     // authHash: SHA256
+        ];
+        assert_eq!(start_policy_session(&[1, 2, 3, 4]), expected);
+
+        let pcr11 = PcrSelection {
+            hash: ALG_SHA256,
+            mask: 1 << 11,
+        };
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x01, 0, 0, 0, 0x1A, 0, 0, 0x01, 0x7F, // header (26 bytes)
+            0x03, 0, 0, 0,                               // policySession
+            0, 0,                                        // pcrDigest: the current values
+            0, 0, 0, 1, 0, 0x0B, 3, 0, 0x08, 0,          // pcrs: sha256, PCR 11
+        ];
+        assert_eq!(policy_pcr(0x0300_0000, pcr11), expected);
+    }
+
+    #[test]
+    fn load_and_unseal_command_bytes() {
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x02, 0, 0, 0, 0x22, 0, 0, 0x01, 0x57, // header (34 bytes)
+            0x80, 0, 0, 0,                               // parentHandle
+            0, 0, 0, 9, 0x40, 0, 0, 0x09, 0, 0, 0, 0, 0, // TPM_RS_PW, empty password
+            0, 2, 0xA, 0xB, 0, 1, 0xC,                   // inPrivate, inPublic
+        ];
+        assert_eq!(load(0x8000_0000, &[0xA, 0xB], &[0xC]), expected);
+
+        #[rustfmt::skip]
+        let expected = [
+            0x80, 0x02, 0, 0, 0, 0x1B, 0, 0, 0x01, 0x5E, // header (27 bytes)
+            0x80, 0, 0, 1,                               // itemHandle
+            0, 0, 0, 9, 0x03, 0, 0, 0, 0, 0, 0, 0, 0,    // policy session, no nonce, no hmac
+        ];
+        assert_eq!(unseal(0x8000_0001, 0x0300_0000, &[]), expected);
+    }
+
+    #[test]
+    fn parses_sealing_responses() {
+        let mut params = Writer::default();
+        params.tpm2b(b"private").tpm2b(b"public").bytes(&[0; 9]);
+        let rsp = marshal::test_response(&[], &params.into_bytes(), true);
+        assert_eq!(parse_create(&rsp).unwrap(), (b"private".to_vec(), b"public".to_vec()));
+
+        let mut params = Writer::default();
+        params.tpm2b(b"name");
+        let rsp = marshal::test_response(&[0x8000_0001], &params.into_bytes(), true);
+        assert_eq!(parse_load(&rsp).unwrap(), 0x8000_0001);
+
+        let mut params = Writer::default();
+        params.tpm2b(&[7; 16]);
+        let rsp = marshal::test_response(&[0x0300_0000], &params.into_bytes(), false);
+        assert_eq!(parse_start_auth_session(&rsp).unwrap(), 0x0300_0000);
+
+        let mut params = Writer::default();
+        params.tpm2b(b"secret");
+        let rsp = marshal::test_response(&[], &params.into_bytes(), true);
+        assert_eq!(parse_unseal(&rsp).unwrap(), b"secret");
+    }
+
+    /// TPM2_PolicyPCR on sha256:11 when PCR 11 is all zeros, as computed by a TPM (swtpm, through
+    /// a trial session and TPM2_PolicyGetDigest).
+    #[test]
+    fn policy_pcr_digest_known_answer() {
+        use sha2::{Digest, Sha256};
+        let pcr11 = PcrSelection {
+            hash: ALG_SHA256,
+            mask: 1 << 11,
+        };
+        let digest = policy_pcr_digest(pcr11, &Sha256::digest([0; 32]));
+        assert_eq!(hex::encode(digest), POLICY_PCR11_ZEROS);
     }
 
     #[test]

@@ -1,0 +1,37 @@
+version = "{openssl.version}"
+kind = "library"
+summary = "OpenSSL's libcrypto, statically linked into cryptsetup"
+license = "Apache-2.0"
+homepage = "https://www.openssl.org"
+purl = "pkg:generic/openssl@{version}"
+cpe = "openssl:openssl"
+
+[sources.src]
+from = "openssl"
+
+# Headers, static libraries and pkg-config files, in their `/usr` layout: linked into cryptsetup,
+# nothing goes to the tree. No programs, no loadable modules or engines (the default provider is
+# built in), and no configuration file read at startup.
+[[build]]
+run.cmd = [
+    "./Configure",
+    "--prefix=/usr",
+    "--openssldir=/etc/ssl",
+    "--libdir=lib",
+    "no-shared",
+    "no-module",
+    "no-dso",
+    "no-engine",
+    "no-legacy",
+    "no-apps",
+    "no-docs",
+    "no-tests",
+    "no-autoload-config",
+    "CC=cc", # default is gcc
+    "-flto=thin",
+]
+
+[[build]]
+make.args = ["build_libs"]
+make.install = ["install_dev"]
+make.dest = "{out:dev}"

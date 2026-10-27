@@ -1,7 +1,23 @@
 # The standard image. `cargo builder image --target standard` (the default) builds it.
 
 environment = "tools"
-components = ["base-files", "ca-certificates", "kernel", "libseccomp", "runc", "containerd", "pause", "dust"]
+components = [
+    "base-files",
+    "ca-certificates",
+    "kernel",
+    "libseccomp",
+    "runc",
+    "containerd",
+    "pause",
+    "libcrypto",
+    "libjson-c",
+    "libpopt",
+    "libdevmapper",
+    "libuuid",
+    "cryptsetup-luks",
+    "e2fsprogs-mke2fs",
+    "dust",
+]
 
 # Added to the kernel command line: hardening options.
 kernel-cmdline = [

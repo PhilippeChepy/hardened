@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::Context as _;
 use dust_proto::v1::{
     self, ApplyWorkloadRequest, EventLogResponse, HashAlgorithm, ListWorkloadsResponse, LogChunk, LogEntry,
-    LogsRequest, PcrValue, PcrsRequest, PcrsResponse, QuoteRequest, QuoteResponse, SettingsResponse, VersionResponse,
-    WorkloadLogsRequest, WorkloadRef, WorkloadSource,
+    LogsRequest, PcrValue, PcrsRequest, PcrsResponse, QuoteRequest, QuoteResponse, SettingsResponse, StorageResponse,
+    VersionResponse, WorkloadLogsRequest, WorkloadRef, WorkloadSource,
     attestation_server::{Attestation, AttestationServer},
     machine_server::{Machine as MachineService, MachineServer},
     workloads_server::{Workloads, WorkloadsServer},
@@ -27,6 +27,7 @@ use crate::attestation::{self, HashAlg, Tpm, TpmError};
 use crate::logging::LogRecord;
 use crate::machine::{Machine, PowerRequest};
 use crate::settings::{ContainerSettings, ImageWorkload, MountSettings, RestartPolicy};
+use crate::storage;
 use crate::types::{InvalidValue, WorkloadName};
 use crate::workloads::{self, LogDecoder, Manager, Source, State};
 
@@ -148,6 +149,15 @@ impl MachineService for MachineApi {
         }
         let toml = toml::to_string_pretty(&settings).map_err(internal)?;
         Ok(Response::new(SettingsResponse { toml }))
+    }
+
+    async fn storage(&self, _: Request<()>) -> Result<Response<StorageResponse>, Status> {
+        let mut response = storage_response(&self.0.storage);
+        if let Ok(fs) = rustix::fs::statvfs("/var") {
+            response.size_bytes = fs.f_blocks * fs.f_frsize;
+            response.available_bytes = fs.f_bavail * fs.f_frsize;
+        }
+        Ok(Response::new(response))
     }
 
     async fn reboot(&self, _: Request<()>) -> Result<Response<()>, Status> {
@@ -514,6 +524,28 @@ fn pcr_values(values: Vec<(u32, Vec<u8>)>) -> Vec<PcrValue> {
         .collect()
 }
 
+/// The API's view of what backs `/var` (sizes left out).
+fn storage_response(state: &storage::State) -> StorageResponse {
+    use v1::storage_response::State as Proto;
+    let display = |path: &Path| path.display().to_string();
+    let (proto, reason, partition) = match state {
+        storage::State::Plain { partition } => (Proto::Plain, "", display(partition)),
+        storage::State::Unlocked { partition } => (Proto::EncryptedUnlocked, "", display(partition)),
+        storage::State::Formatted { partition, reason } => {
+            (Proto::EncryptedFormatted, reason.as_str(), display(partition))
+        }
+        storage::State::Tmpfs { reason } => (Proto::Tmpfs, reason.as_str(), String::new()),
+    };
+    StorageResponse {
+        state: proto.into(),
+        reason: reason.to_owned(),
+        partition,
+        device: state.device().map(display).unwrap_or_default(),
+        size_bytes: 0,
+        available_bytes: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,6 +574,44 @@ mod tests {
         assert_eq!(workload.env["A"], "1");
         assert_eq!(workload.mounts[0].source.as_str(), "/var/lib/web");
         assert_eq!(workload_spec(&workload), spec());
+    }
+
+    #[test]
+    fn storage_states() {
+        use v1::storage_response::State as Proto;
+        let partition = std::path::PathBuf::from("/dev/vda4");
+        let plain = storage_response(&storage::State::Plain {
+            partition: partition.clone(),
+        });
+        assert_eq!(plain.state(), Proto::Plain);
+        assert_eq!(
+            (plain.partition.as_str(), plain.device.as_str()),
+            ("/dev/vda4", "/dev/vda4")
+        );
+
+        let unlocked = storage_response(&storage::State::Unlocked {
+            partition: partition.clone(),
+        });
+        assert_eq!(unlocked.state(), Proto::EncryptedUnlocked);
+        assert_eq!(unlocked.device, "/dev/mapper/state");
+        assert!(unlocked.reason.is_empty());
+
+        let formatted = storage_response(&storage::State::Formatted {
+            partition,
+            reason: "first boot".into(),
+        });
+        assert_eq!(formatted.state(), Proto::EncryptedFormatted);
+        assert_eq!(
+            (formatted.reason.as_str(), formatted.device.as_str()),
+            ("first boot", "/dev/mapper/state")
+        );
+
+        let tmpfs = storage_response(&storage::State::Tmpfs {
+            reason: "no state partition".into(),
+        });
+        assert_eq!(tmpfs.state(), Proto::Tmpfs);
+        assert_eq!(tmpfs.reason, "no state partition");
+        assert!(tmpfs.partition.is_empty() && tmpfs.device.is_empty());
     }
 
     #[test]

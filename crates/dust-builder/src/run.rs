@@ -44,18 +44,114 @@ pub struct TestArgs {
     no_build: bool,
 }
 
-/// Console lines the smoke test waits for, in order (see `tests/smoke-user-data.toml`).
-const SMOKE_MARKERS: &[&str] = &[
-    "dust-init: boot complete",
-    "hello from a hardened workload",
-    "workload hello exited with code 0",
+/// A boot of the smoke test.
+struct Boot {
+    name: &'static str,
+    /// A disk the firmware boots from instead of the image's (its test variant), if any.
+    boot_disk: Option<&'static str>,
+    tpm: Tpm,
+    /// The console lines it waits for, in order.
+    markers: &'static [&'static str],
+}
+
+/// The vTPM of a boot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tpm {
+    /// The one the previous boot left.
+    Kept,
+    /// A new one, as when the TPM is cleared or the disk moves to another machine.
+    Cleared,
+    /// No TPM at all.
+    Absent,
+}
+
+/// The boots of the smoke test (see `tests/smoke-user-data.toml`), each on the disk the previous
+/// one left. The first formats the encrypted state partition; the second unseals its key and
+/// finds the state of the first (containerd's store, with the bundled images); the third boots
+/// another image (PCR 11 differs), which cannot unseal the key and formats the partition again;
+/// the fourth, that image with a cleared TPM, formats it again too. The fifth has no TPM: `/var`
+/// is a tmpfs, the partition left alone, as the sixth shows by unlocking it with the TPM back.
+const SMOKE_BOOTS: &[Boot] = &[
+    Boot {
+        name: "first boot",
+        boot_disk: None,
+        tpm: Tpm::Kept,
+        markers: &[
+            "dust-init: state partition formatted with encryption",
+            "dust-init: state partition mounted on /var device=/dev/mapper/state",
+            "dust-init: boot complete",
+            "hello from a hardened workload",
+            "workload hello exited with code 0",
+        ],
+    },
+    Boot {
+        name: "second boot, same disk and TPM",
+        boot_disk: None,
+        tpm: Tpm::Kept,
+        markers: &[
+            "dust-init: state partition unlocked with the TPM",
+            "dust-init: state partition mounted on /var device=/dev/mapper/state",
+            "already imported",
+            "dust-init: boot complete",
+            "hello from a hardened workload",
+            "workload hello exited with code 0",
+        ],
+    },
+    Boot {
+        name: "third boot, another image on the same disk and TPM",
+        boot_disk: Some(crate::image::TEST_VARIANT),
+        tpm: Tpm::Kept,
+        markers: &[
+            "its key is sealed to another image (PCR 11 differs)",
+            "dust-init: state partition formatted with encryption",
+            "dust-init: state partition mounted on /var device=/dev/mapper/state",
+            "dust-init: imported bundled image",
+            "dust-init: boot complete",
+        ],
+    },
+    Boot {
+        name: "fourth boot, that image with a cleared TPM",
+        boot_disk: Some(crate::image::TEST_VARIANT),
+        tpm: Tpm::Cleared,
+        markers: &[
+            "the TPM cannot unseal its key (another or a cleared TPM)",
+            "dust-init: state partition formatted with encryption",
+            "dust-init: state partition mounted on /var device=/dev/mapper/state",
+            "dust-init: imported bundled image",
+            "dust-init: boot complete",
+        ],
+    },
+    Boot {
+        name: "fifth boot, without a TPM",
+        boot_disk: Some(crate::image::TEST_VARIANT),
+        tpm: Tpm::Absent,
+        markers: &[
+            "cannot set up the encrypted state partition, /var will not persist",
+            "dust-init: imported bundled image",
+            "dust-init: boot complete",
+            "hello from a hardened workload",
+        ],
+    },
+    Boot {
+        name: "sixth boot, the TPM back",
+        boot_disk: Some(crate::image::TEST_VARIANT),
+        tpm: Tpm::Kept,
+        markers: &[
+            "dust-init: state partition unlocked with the TPM",
+            "dust-init: state partition mounted on /var device=/dev/mapper/state",
+            "already imported",
+            "dust-init: boot complete",
+        ],
+    },
 ];
 
 pub fn run(paths: &Paths, args: &RunArgs) -> anyhow::Result<()> {
     let vm = vm_image(paths, &args.target)?;
     let image = latest_image(paths, &args.target)?;
     let state = paths.build().join("run");
-    let mut cmd = qemu_container(&vm, &image, &state, args)?.interactive().command();
+    let mut cmd = qemu_container(&vm, &image, None, Tpm::Kept, &state, args)?
+        .interactive()
+        .command();
     let status = cmd.status()?;
     ensure!(status.success(), "qemu exited with {status}");
     Ok(())
@@ -63,21 +159,46 @@ pub fn run(paths: &Paths, args: &RunArgs) -> anyhow::Result<()> {
 
 pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
     if !args.no_build {
-        crate::image::build_image(paths, &args.target.id, crate::build::Options::default())?;
+        crate::image::build_image(paths, &args.target.id, crate::build::Options::default(), true)?;
     }
     let vm = vm_image(paths, &args.target)?;
     let image = latest_image(paths, &args.target)?;
+    ensure!(
+        image.with_file_name(crate::image::TEST_VARIANT).exists(),
+        "no test variant of target {0}: run `cargo builder test --target {0}` without --no-build",
+        args.target.id
+    );
     let state = paths.build().join("test");
-    let run_args = RunArgs {
-        target: args.target.clone(),
-        user_data: Some(paths.root.join("tests/smoke-user-data.toml")),
-        disk_size: "4G".into(),
-        keep_state: false,
-        memory_mib: 2048,
-        api_port: 17443,
-    };
+    for (i, boot) in SMOKE_BOOTS.iter().enumerate() {
+        eprintln!("==> {}", boot.name);
+        let run_args = RunArgs {
+            target: args.target.clone(),
+            user_data: Some(paths.root.join("tests/smoke-user-data.toml")),
+            disk_size: "4G".into(),
+            keep_state: i > 0,
+            memory_mib: 2048,
+            api_port: 17443,
+        };
+        if boot.tpm == Tpm::Cleared {
+            std::fs::remove_dir_all(state.join("tpm"))?;
+        }
+        boot_until(&vm, &image, &state, &run_args, boot, Duration::from_secs(args.timeout)).context(boot.name)?;
+    }
+    eprintln!("==> smoke test passed");
+    Ok(())
+}
+
+/// Boots the image (from `boot.boot_disk` if any) until the console has shown every marker, in order, then stops the VM.
+fn boot_until(
+    vm: &Image,
+    image: &Path,
+    state: &Path,
+    run_args: &RunArgs,
+    boot: &Boot,
+    timeout: Duration,
+) -> anyhow::Result<()> {
     let name = format!("hardened-test-{}", std::process::id());
-    let mut child = qemu_container(&vm, &image, &state, &run_args)?
+    let mut child = qemu_container(vm, image, boot.boot_disk, boot.tpm, state, run_args)?
         .name(&name)
         .command()
         .stdin(Stdio::null())
@@ -95,8 +216,8 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
         }
     });
 
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
-    let mut pending = SMOKE_MARKERS.iter().peekable();
+    let deadline = Instant::now() + timeout;
+    let mut pending = boot.markers.iter().peekable();
     let result = loop {
         let Some(marker) = pending.peek() else { break Ok(()) };
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -109,12 +230,12 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
             Err(_) => break Err(anyhow::anyhow!("timed out waiting for {marker:?}")),
         }
     };
+    // Stopped abruptly, as by a crash: what was flushed (the LUKS2 header, the filesystem's
+    // journal) must be enough for the next boot.
     crate::podman::remove(&name);
     let _ = child.kill();
     let _ = child.wait();
-    result?;
-    eprintln!("==> smoke test passed");
-    Ok(())
+    result
 }
 
 fn latest_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<PathBuf> {
@@ -127,9 +248,14 @@ fn latest_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<PathBuf> {
     Ok(image)
 }
 
+/// The VM booting `image`, whose writes go to an overlay in `state`; or, with `boot_disk` (a file
+/// next to `image`), booting from that disk, read-only, with the image's attached. The TPM's
+/// state is kept in `state` too.
 fn qemu_container<'a>(
     vm: &'a Image,
     image: &Path,
+    boot_disk: Option<&str>,
+    tpm: Tpm,
     state: &Path,
     args: &RunArgs,
 ) -> anyhow::Result<crate::podman::Container<'a>> {
@@ -148,25 +274,32 @@ fn qemu_container<'a>(
     };
     let script = format!(
         r#"
-[ -f /state/disk.qcow2 ] || qemu-img create -q -f qcow2 -F raw -b /image/disk.raw /state/disk.qcow2 {disk}
+[ -f /state/disk.qcow2 ] || qemu-img create -q -f qcow2 -F raw -b /image/disk.raw /state/disk.qcow2 {size}
 [ -f /state/vars.fd ] || cp /usr/share/OVMF/OVMF_VARS_4M.fd /state/vars.fd
-swtpm socket --tpm2 --tpmstate dir=/state/tpm --ctrl type=unixio,path=/state/swtpm.sock \
-    --flags startup-clear --daemon
-for _ in $(seq 50); do [ -S /state/swtpm.sock ] && break; sleep 0.1; done
-accel=tcg; [ -w /dev/kvm ] && accel=kvm
+{swtpm}accel=tcg; [ -w /dev/kvm ] && accel=kvm
 exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
     -machine q35,accel=$accel -cpu max -smp 2 -m {memory} \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=/state/vars.fd \
-    -drive file=/state/disk.qcow2,if=virtio,format=qcow2 \
+    -drive file=/state/disk.qcow2,if=none,id=disk,format=qcow2 -device virtio-blk-pci,drive=disk,bootindex=1 \
+    {boot_disk} \
     -netdev user,id=net0,hostfwd=tcp::7443-:7443 -device virtio-net-pci,netdev=net0,romfile= \
-    -chardev socket,id=tpm,path=/state/swtpm.sock -tpmdev emulator,id=tpm0,chardev=tpm \
-    -device tpm-crb,tpmdev=tpm0 \
+    {tpm_device} \
     -device virtio-rng-pci \
     {user_data}
 "#,
-        disk = args.disk_size,
+        size = args.disk_size,
+        boot_disk = boot_disk
+            .map(|disk| {
+                format!(
+                    "-drive file=/image/{disk},if=none,id=boot,format=raw,readonly=on \
+                     -device virtio-blk-pci,drive=boot,bootindex=0"
+                )
+            })
+            .unwrap_or_default(),
         memory = args.memory_mib,
+        swtpm = if tpm == Tpm::Absent { "" } else { SWTPM },
+        tpm_device = if tpm == Tpm::Absent { "" } else { TPM_DEVICE },
     );
     let mut container = vm
         .container(script)
@@ -179,6 +312,16 @@ exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
     }
     Ok(container)
 }
+
+/// Starts the vTPM, its state in `/state/tpm`.
+const SWTPM: &str = r#"rm -f /state/swtpm.sock
+swtpm socket --tpm2 --tpmstate dir=/state/tpm --ctrl type=unixio,path=/state/swtpm.sock \
+    --flags startup-clear --daemon
+for _ in $(seq 50); do [ -S /state/swtpm.sock ] && break; sleep 0.1; done
+"#;
+
+const TPM_DEVICE: &str =
+    "-chardev socket,id=tpm,path=/state/swtpm.sock -tpmdev emulator,id=tpm0,chardev=tpm -device tpm-crb,tpmdev=tpm0";
 
 /// The image of the target's test environment (qemu, OVMF, swtpm and what the script above
 /// runs), its components built if needed.

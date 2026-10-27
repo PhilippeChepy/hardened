@@ -217,6 +217,12 @@ impl From<Duration> for String {
     }
 }
 
+impl AsRef<str> for Duration {
+    fn as_ref(&self) -> &str {
+        &self.text
+    }
+}
+
 impl fmt::Display for Duration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.text)

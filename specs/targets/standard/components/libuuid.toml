@@ -1,0 +1,35 @@
+version = "{util-linux.version}"
+kind = "library"
+summary = "libuuid from util-linux, statically linked into cryptsetup"
+license = "BSD-3-Clause"
+homepage = "https://github.com/util-linux/util-linux"
+purl = "pkg:generic/util-linux@{version}"
+cpe = "kernel:util-linux"
+
+[sources.src]
+from = "util-linux"
+
+# Headers, static library and pkg-config file, in their `/usr` layout: linked into cryptsetup,
+# nothing goes to the tree.
+[[build]]
+configure.dest = "{out:dev}"
+configure.args = [
+    "--disable-all-programs",
+    "--libdir=/usr/lib",
+    "--enable-libuuid",
+    "--enable-static",
+    "--disable-shared",
+    "--disable-nls",
+    "--without-python",
+    "--without-systemd",
+    "--without-udev",
+    "--disable-makeinstall-chown",
+    "--disable-makeinstall-setuid",
+    "--disable-liblastlog2",
+    "CFLAGS=-O2 -flto=thin",
+]
+
+# Without its libtool archive, which names its dependencies at their install path, not in
+# their outputs: users link with the flags they are given.
+[[build]]
+remove = "{out:dev}/usr/lib/*.la"

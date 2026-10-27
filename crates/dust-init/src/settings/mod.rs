@@ -17,7 +17,7 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 
 pub use decode::decode;
-pub use kubernetes::{CloudProvider, KubeletConfig, KubernetesSettings, Quantity, ReservedResource};
+pub use kubernetes::{CloudProvider, EvictionSignal, KubeletConfig, KubernetesSettings, Quantity, ReservedResource};
 pub use registry::{RegistrySettings, cri_auth_configs, hosts_files};
 
 use crate::types::{
@@ -58,9 +58,31 @@ pub struct Settings {
 pub struct HardenedSettings {
     #[serde(default)]
     pub api: ApiSettings,
+    #[serde(default)]
+    pub storage: StorageSettings,
     /// Workloads, keyed by name.
     #[serde(default)]
     pub containers: BTreeMap<WorkloadName, ContainerSettings>,
+}
+
+/// `[settings.hardened.storage]`: the state partition, mounted on `/var`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct StorageSettings {
+    #[serde(default)]
+    pub encryption: Encryption,
+}
+
+/// How the state partition is encrypted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Encryption {
+    /// A plain ext4 filesystem.
+    #[default]
+    None,
+    /// LUKS2, with a random key sealed to the TPM's PCR 11: only this machine, booting this image,
+    /// opens it.
+    Tpm,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +470,9 @@ client-ca = "{cert}"
 certificate = "{cert}"
 private-key = "{key}"
 
+[settings.hardened.storage]
+encryption = "tpm"
+
 [settings.hardened.containers.web]
 image = "nginx:1.29"
 env = {{ FOO = "bar" }}
@@ -470,6 +495,7 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
             panic!("API should be enabled")
         };
         assert_eq!(api.listen.port(), ApiConfig::DEFAULT_PORT);
+        assert_eq!(settings.hardened.storage.encryption, Encryption::Tpm);
         let web = &settings.hardened.containers["web"];
         assert!(web.enabled);
         assert_eq!(web.workload.image.as_str(), "docker.io/library/nginx:1.29");
@@ -491,7 +517,19 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
 
     #[test]
     fn empty_user_data_is_valid() {
-        assert_eq!(UserData::parse(b"").unwrap(), UserData::default());
+        let user_data = UserData::parse(b"").unwrap();
+        assert_eq!(user_data, UserData::default());
+        assert_eq!(user_data.settings.hardened.storage.encryption, Encryption::None);
+    }
+
+    #[test]
+    fn storage_encryption_is_shown() {
+        let settings = UserData::parse(b"[settings.hardened.storage]\nencryption = \"none\"\n")
+            .unwrap()
+            .settings;
+        assert_eq!(settings.hardened.storage.encryption, Encryption::None);
+        let shown = toml::to_string(&Settings::default()).unwrap();
+        assert!(shown.contains("[hardened.storage]\nencryption = \"none\""), "{shown}");
     }
 
     #[test]
@@ -539,6 +577,18 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
                 "name server that is not an IP",
             ),
             ("[settings.dns]\nsearch-list = [\"a b\"]\n", "bad search domain"),
+            (
+                "[settings.hardened.storage]\nencryption = \"luks\"\n",
+                "unknown encryption",
+            ),
+            (
+                "[settings.hardened.storage]\nencryption = true\n",
+                "encryption as a boolean",
+            ),
+            (
+                "[settings.hardened.storage]\nencrypted = \"tpm\"\n",
+                "unknown storage key",
+            ),
         ] {
             assert!(UserData::parse(document.as_bytes()).is_err(), "{why} accepted");
         }
@@ -630,11 +680,19 @@ memory = "256Mi"
 "memory.available" = "15%"
 "nodefs.inodesFree" = "5%"
 "pid.available" = "100"
+
+[settings.kubernetes.eviction-soft]
+"memory.available" = "20%"
+
+[settings.kubernetes.eviction-soft-grace-period]
+"memory.available" = "1m30s"
 "#,
         );
         assert_eq!(config.kube_reserved.len(), 4);
         assert_eq!(config.system_reserved.len(), 1);
         assert_eq!(config.eviction_hard.len(), 3);
+        assert_eq!(config.eviction_soft.len(), 1);
+        assert_eq!(config.eviction_soft_grace_period.len(), 1);
         assert_eq!(config.image_gc.high_threshold_percent.map(|p| p.get()), Some(90));
         assert_eq!(config.image_gc.low_threshold_percent.map(|p| p.get()), Some(70));
         assert_eq!(config.image_gc.maximum_age.as_ref().map(|d| d.as_str()), Some("168h"));
@@ -665,6 +723,25 @@ memory = "256Mi"
                 "unknown eviction signal",
             ),
             ("eviction-hard = { \"memory.available\" = \"100%\" }", "100% threshold"),
+            (
+                "eviction-soft = { \"memory.available\" = \"10%\" }",
+                "soft threshold without grace period",
+            ),
+            (
+                "eviction-soft-grace-period = { \"memory.available\" = \"1m\" }",
+                "grace period without soft threshold",
+            ),
+            (
+                "eviction-soft = { \"memory.available\" = \"10%\" }\n\
+                 eviction-soft-grace-period = { \"memory.available\" = \"soon\" }",
+                "bad grace period",
+            ),
+            ("eviction-soft = { \"memory.used\" = \"10%\" }", "unknown soft signal"),
+            ("eviction-max-pod-grace-period = -1", "negative max pod grace period"),
+            (
+                "eviction-max-pod-grace-period = 2147483648",
+                "max pod grace period beyond i32",
+            ),
             ("image-gc-high-threshold-percent = 101", "percentage above 100"),
             (
                 "image-gc-low-threshold-percent = 90",

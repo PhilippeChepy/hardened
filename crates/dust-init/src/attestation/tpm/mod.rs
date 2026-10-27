@@ -1,8 +1,10 @@
-//! TPM 2.0 commands over `/dev/tpmrm0`.
+//! TPM 2.0 commands over `/dev/tpmrm0`: attestation (PCR reads, quotes) and sealing secrets to
+//! PCR values (the state partition's key).
 //!
 //! The kernel resource manager takes one whole command per `write` and returns the whole
 //! response on the next `read`; it also virtualizes transient handles per open file, so the
-//! attestation key lives exactly as long as this [`Tpm`].
+//! attestation key lives exactly as long as this [`Tpm`] (and whatever a failure leaves loaded is
+//! flushed when it is dropped).
 
 mod commands;
 mod marshal;
@@ -17,6 +19,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+use zeroize::{Zeroize, Zeroizing};
 
 use commands::PcrSelection;
 pub use rc::ResponseCode;
@@ -52,6 +55,18 @@ pub enum TpmError {
     PcrsChanged,
     #[error("quote does not match its request: {0}")]
     QuoteMismatch(&'static str),
+}
+
+impl TpmError {
+    /// Whether the TPM refused a sealed object because it is not for this TPM in this state:
+    /// sealed by another TPM, or before its owner hierarchy was cleared (it does not load), or to
+    /// other PCR values (the policy fails). Asking again cannot succeed.
+    pub fn is_sealed_elsewhere(&self) -> bool {
+        const POLICY_FAIL: u16 = 0x09D;
+        const INTEGRITY: u16 = 0x09F;
+        const BINDING: u16 = 0x0A5;
+        matches!(self, Self::Response(rc) if matches!(rc.format_one(), Some(POLICY_FAIL | INTEGRITY | BINDING)))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +116,32 @@ pub struct Quote {
     /// The quoted PCR values, by ascending index: their SHA-256 over the concatenation is the
     /// quote's `pcrDigest`.
     pub pcrs: Vec<(u32, Vec<u8>)>,
+}
+
+/// A secret sealed by [`Tpm::seal`]: the TPM2B_PRIVATE and TPM2B_PUBLIC contents of a data object
+/// of the storage key. Not secret: only the TPM that sealed it unseals it, and only in the PCR
+/// state it was sealed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sealed {
+    pub private: Vec<u8>,
+    pub public: Vec<u8>,
+}
+
+impl Sealed {
+    /// The marshalled TPM2B_PRIVATE then TPM2B_PUBLIC (the layout of systemd's `tpm2-blob`).
+    pub fn to_blob(&self) -> Vec<u8> {
+        let mut w = marshal::Writer::default();
+        w.tpm2b(&self.private).tpm2b(&self.public);
+        w.into_bytes()
+    }
+
+    pub fn from_blob(blob: &[u8]) -> Result<Self, TpmError> {
+        let mut r = marshal::Reader::new(blob);
+        let private = r.tpm2b()?.to_vec();
+        let public = r.tpm2b()?.to_vec();
+        r.finish()?;
+        Ok(Self { private, public })
+    }
 }
 
 /// Sends a marshalled command to a TPM and returns its marshalled response.
@@ -296,6 +337,85 @@ impl Tpm {
         Err(TpmError::PcrsChanged)
     }
 
+    /// The policy digest of TPM2_PolicyPCR over `pcrs` of the SHA-256 bank at their current values:
+    /// what [`Tpm::seal`] binds a secret to.
+    pub fn pcr_policy(&mut self, pcrs: &[u32]) -> Result<[u8; 32], TpmError> {
+        let selection = sha256_selection(pcrs)?;
+        let values = self.pcr_read_mask(HashAlg::Sha256, selection.mask)?;
+        let digest = values
+            .iter()
+            .fold(Sha256::new(), |h, (_, value)| h.chain_update(value))
+            .finalize();
+        Ok(commands::policy_pcr_digest(selection, &digest))
+    }
+
+    /// Seals `secret` under the storage key of the owner hierarchy, unsealable only through
+    /// `policy` (from [`Tpm::pcr_policy`]).
+    ///
+    /// The secret crosses the TPM interface in clear (no parameter encryption): on a vTPM, the
+    /// hypervisor sees it anyway.
+    pub fn seal(&mut self, secret: &[u8], policy: &[u8; 32]) -> Result<Sealed, TpmError> {
+        let primary = self.storage_key()?;
+        let mut command = commands::create(primary, secret, &commands::sealed_template(policy));
+        let created = self
+            .execute(&command)
+            .and_then(|response| commands::parse_create(&response));
+        command.zeroize();
+        self.flush(primary);
+        let (private, public) = created?;
+        Ok(Sealed { private, public })
+    }
+
+    /// Unseals what [`Tpm::seal`] sealed to the current values of `pcrs` (SHA-256 bank), through a
+    /// policy session.
+    pub fn unseal(&mut self, sealed: &Sealed, pcrs: &[u32]) -> Result<Zeroizing<Vec<u8>>, TpmError> {
+        let selection = sha256_selection(pcrs)?;
+        let primary = self.storage_key()?;
+        let loaded = self
+            .execute(&commands::load(primary, &sealed.private, &sealed.public))
+            .and_then(|response| commands::parse_load(&response));
+        // A loaded object no longer needs its parent.
+        self.flush(primary);
+        let object = loaded?;
+        let unsealed = self.unseal_object(object, selection);
+        self.flush(object);
+        unsealed
+    }
+
+    fn unseal_object(&mut self, object: u32, selection: PcrSelection) -> Result<Zeroizing<Vec<u8>>, TpmError> {
+        let response = self.execute(&commands::start_policy_session(&nonce()?))?;
+        let session = commands::parse_start_auth_session(&response)?;
+        let mut unseal = || {
+            commands::parse_policy_pcr(&self.execute(&commands::policy_pcr(session, selection))?)?;
+            let response = Zeroizing::new(self.execute(&commands::unseal(object, session, &nonce()?))?);
+            commands::parse_unseal(&response).map(Zeroizing::new)
+        };
+        let unsealed = unseal();
+        // A successful Unseal flushed the session (continueSession is clear).
+        if unsealed.is_err() {
+            self.flush(session);
+        }
+        unsealed
+    }
+
+    /// The storage key: a primary key of the owner hierarchy, the same at every boot (derived from
+    /// the hierarchy's seed and the template), until the TPM is cleared.
+    fn storage_key(&mut self) -> Result<u32, TpmError> {
+        let response = self.execute(&commands::create_primary(commands::RH_OWNER, &commands::srk_template()))?;
+        Ok(commands::parse_create_primary(&response)?.0)
+    }
+
+    /// Flushes a transient object or session, logging a failure: the resource manager flushes
+    /// whatever is left when the TPM is closed.
+    fn flush(&mut self, handle: u32) {
+        let flushed = self
+            .execute(&commands::flush_context(handle))
+            .and_then(|response| commands::parse_flush_context(&response));
+        if let Err(e) = flushed {
+            tracing::warn!(handle = format_args!("{handle:#x}"), "flushing a TPM context: {e}");
+        }
+    }
+
     /// The attestation key, created as a primary key of the endorsement hierarchy on first use.
     ///
     /// Primary keys derive from the hierarchy seed and the template, so every boot yields the same
@@ -341,17 +461,32 @@ impl Tpm {
 impl Drop for Tpm {
     fn drop(&mut self) {
         if let Some(ak) = self.ak.take() {
-            let flushed = self
-                .execute(&commands::flush_context(ak.handle))
-                .and_then(|response| commands::parse_flush_context(&response));
-            if let Err(e) = flushed {
-                tracing::warn!(
-                    handle = format_args!("{:#x}", ak.handle),
-                    "flushing the attestation key: {e}"
-                );
-            }
+            self.flush(ak.handle);
         }
     }
+}
+
+/// A selection of the SHA-256 bank, of at least one PCR.
+fn sha256_selection(pcrs: &[u32]) -> Result<PcrSelection, TpmError> {
+    let mask = pcr_mask(pcrs)?;
+    if mask == 0 {
+        return Err(TpmError::NoPcrSelected);
+    }
+    Ok(PcrSelection {
+        hash: commands::ALG_SHA256,
+        mask,
+    })
+}
+
+/// A session nonce: at least 16 bytes for a SHA-256 session.
+fn nonce() -> Result<[u8; 16], TpmError> {
+    let mut nonce = [0; 16];
+    let mut filled = 0;
+    while filled < nonce.len() {
+        filled += rustix::rand::getrandom(&mut nonce[filled..], rustix::rand::GetRandomFlags::empty())
+            .map_err(io::Error::from)?;
+    }
+    Ok(nonce)
 }
 
 /// The bitmap of `pcrs`, rejecting indices past PCR 23.

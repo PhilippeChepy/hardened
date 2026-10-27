@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dust_proto::Role;
 use dust_proto::v1::machine_client::MachineClient;
 use dust_proto::v1::machine_server::{Machine, MachineServer};
-use dust_proto::v1::{LogEntry, LogsRequest, SettingsResponse, VersionResponse};
+use dust_proto::v1::{LogEntry, LogsRequest, SettingsResponse, StorageResponse, VersionResponse};
 use rcgen::{BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair};
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::oneshot;
@@ -34,6 +34,13 @@ impl Machine for FakeDust {
 
     async fn get_settings(&self, _: Request<()>) -> Result<Response<SettingsResponse>, Status> {
         Err(Status::unimplemented("fake"))
+    }
+
+    async fn storage(&self, _: Request<()>) -> Result<Response<StorageResponse>, Status> {
+        Ok(Response::new(StorageResponse {
+            reason: "fake".into(),
+            ..Default::default()
+        }))
     }
 
     async fn reboot(&self, _: Request<()>) -> Result<Response<()>, Status> {
@@ -157,6 +164,8 @@ async fn reader_can_read_but_not_reboot() {
     // Server streaming, forwarded through trailers.
     let mut logs = reader.logs(LogsRequest::default()).await.unwrap().into_inner();
     assert!(logs.message().await.unwrap().is_none());
+
+    assert_eq!(reader.storage(()).await.unwrap().into_inner().reason, "fake");
 
     let denied = reader.reboot(()).await.unwrap_err();
     assert_eq!(denied.code(), Code::PermissionDenied, "{denied:?}");

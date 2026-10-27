@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 use crate::init::containerd;
 use crate::init::service::{Service, Spec};
 use crate::process::Reaper;
-use crate::settings::{CloudProvider, KubeletConfig, Quantity, ReservedResource};
+use crate::settings::{CloudProvider, EvictionSignal, KubeletConfig, Quantity, ReservedResource};
 use crate::types::Hostname;
 
 const PROGRAM: &str = "/usr/bin/kubelet";
@@ -151,11 +151,9 @@ fn kubelet_configuration(config: &KubeletConfig) -> String {
             .map(|(resource, quantity)| (resource.as_str().to_owned(), quantity.as_str().into()))
             .collect()
     };
-    let eviction_hard: Map<String, Value> = config
-        .eviction_hard
-        .iter()
-        .map(|(signal, threshold)| (signal.as_str().to_owned(), threshold.as_str().into()))
-        .collect();
+    let eviction_hard = by_signal(&config.eviction_hard);
+    let eviction_soft = by_signal(&config.eviction_soft);
+    let grace_periods = by_signal(&config.eviction_soft_grace_period);
     let mut configuration = json!({
         "apiVersion": "kubelet.config.k8s.io/v1beta1",
         "kind": "KubeletConfiguration",
@@ -192,6 +190,18 @@ fn kubelet_configuration(config: &KubeletConfig) -> String {
             (!eviction_hard.is_empty()).then(|| eviction_hard.into()),
         ),
         (
+            "evictionSoft",
+            (!eviction_soft.is_empty()).then(|| eviction_soft.into()),
+        ),
+        (
+            "evictionSoftGracePeriod",
+            (!grace_periods.is_empty()).then(|| grace_periods.into()),
+        ),
+        (
+            "evictionMaxPodGracePeriod",
+            config.eviction_max_pod_grace_period.map(Value::from),
+        ),
+        (
             "imageGCHighThresholdPercent",
             config.image_gc.high_threshold_percent.map(|p| p.get().into()),
         ),
@@ -214,6 +224,14 @@ fn kubelet_configuration(config: &KubeletConfig) -> String {
         }
     }
     pretty(&configuration)
+}
+
+/// Eviction settings by signal name, as kubelet's configuration takes them.
+fn by_signal<V: AsRef<str>>(values: &BTreeMap<EvictionSignal, V>) -> Map<String, Value> {
+    values
+        .iter()
+        .map(|(signal, value)| (signal.as_str().to_owned(), value.as_ref().into()))
+        .collect()
 }
 
 /// A kubeconfig with one cluster, the API server trusted through the cluster CA, and `user`.
@@ -317,6 +335,9 @@ mod tests {
             "kubeReserved",
             "systemReserved",
             "evictionHard",
+            "evictionSoft",
+            "evictionSoftGracePeriod",
+            "evictionMaxPodGracePeriod",
             "imageGCHighThresholdPercent",
             "imageGCLowThresholdPercent",
             "imageMinimumGCAge",
@@ -335,6 +356,7 @@ mod tests {
 cluster-domain = "corp.internal"
 cluster-dns-ip = "10.96.0.10"
 max-pods = 50
+eviction-max-pod-grace-period = 60
 cloud-provider = "external"
 image-gc-high-threshold-percent = 90
 image-gc-low-threshold-percent = "70"
@@ -359,6 +381,12 @@ pid = "1000"
 [settings.kubernetes.eviction-hard]
 "memory.available" = "15%"
 "nodefs.inodesFree" = "5%"
+
+[settings.kubernetes.eviction-soft]
+"memory.available" = "20%"
+
+[settings.kubernetes.eviction-soft-grace-period]
+"memory.available" = "1m30s"
 
 [settings.kubernetes.static-pods.web]
 manifest = "{pod}"
@@ -395,6 +423,12 @@ manifest = "{pod}"
             configuration["evictionHard"],
             json(r#"{"memory.available": "15%", "nodefs.inodesFree": "5%"}"#)
         );
+        assert_eq!(configuration["evictionSoft"], json(r#"{"memory.available": "20%"}"#));
+        assert_eq!(
+            configuration["evictionSoftGracePeriod"],
+            json(r#"{"memory.available": "1m30s"}"#)
+        );
+        assert_eq!(configuration["evictionMaxPodGracePeriod"], 60);
         assert_eq!(configuration["imageGCHighThresholdPercent"], 90);
         assert_eq!(configuration["imageGCLowThresholdPercent"], 70);
         assert_eq!(configuration["imageMinimumGCAge"], "5m");

@@ -9,6 +9,7 @@ use crate::attestation::Tpm;
 use crate::logging::LogRing;
 use crate::platform::Platform;
 use crate::settings::Settings;
+use crate::storage;
 use crate::types::Hostname;
 use crate::workloads::Manager;
 
@@ -39,6 +40,8 @@ pub struct Machine {
     /// Settings from user-data, fixed for the life of the boot. Workloads applied through the
     /// API live in [`Manager`] only.
     pub settings: Settings,
+    /// What backs `/var`, fixed at boot.
+    pub storage: storage::State,
     pub logs: LogRing,
     /// Set once containerd is connected. Until then (or if it never connects), the workload
     /// calls of the API are unavailable; the rest of the API works, to diagnose it remotely.

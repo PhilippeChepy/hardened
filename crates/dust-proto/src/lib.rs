@@ -62,6 +62,7 @@ impl Role {
             "/hardened.v1.Machine/Version",
             "/hardened.v1.Machine/Logs",
             "/hardened.v1.Machine/GetSettings",
+            "/hardened.v1.Machine/Storage",
             "/hardened.v1.Workloads/List",
             "/hardened.v1.Workloads/Logs",
             "/hardened.v1.Attestation/Pcrs",
@@ -101,6 +102,7 @@ mod tests {
     #[test]
     fn unknown_methods_require_admin() {
         assert_eq!(Role::required_for("/hardened.v1.Machine/Version"), Role::Reader);
+        assert_eq!(Role::required_for("/hardened.v1.Machine/Storage"), Role::Reader);
         assert_eq!(Role::required_for("/hardened.v1.Machine/Reboot"), Role::Admin);
         assert_eq!(Role::required_for("/hardened.v1.Future/Thing"), Role::Admin);
         assert!(Role::Admin > Role::Reader);
