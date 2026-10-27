@@ -33,8 +33,21 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("net.ipv6.conf.default.accept_redirects", "0"),
 ];
 
+/// Applied when kubelet runs, before user-data overrides: pod traffic is routed through the
+/// host. IPv6 forwarding is left to user-data: it would turn off the router advertisements SLAAC
+/// configures addresses from.
+const KUBERNETES: &[(&str, &str)] = &[("net.ipv4.ip_forward", "1")];
+
 pub fn apply_defaults() {
-    for (key, value) in DEFAULTS {
+    apply_static(DEFAULTS);
+}
+
+pub fn apply_kubernetes_defaults() {
+    apply_static(KUBERNETES);
+}
+
+fn apply_static(values: &[(&str, &str)]) {
+    for (key, value) in values {
         match key.parse::<SysctlKey>() {
             Ok(key) => set(&key, value),
             Err(e) => warn!("{e}"),
@@ -58,7 +71,7 @@ fn set(key: &SysctlKey, value: &str) {
 mod tests {
     #[test]
     fn defaults_are_valid_keys() {
-        for (key, _) in super::DEFAULTS {
+        for (key, _) in super::DEFAULTS.iter().chain(super::KUBERNETES) {
             assert!(key.parse::<super::SysctlKey>().is_ok(), "{key}");
         }
     }

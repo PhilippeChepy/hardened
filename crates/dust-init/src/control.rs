@@ -143,7 +143,7 @@ impl MachineService for MachineApi {
                     enabled: true,
                     workload,
                 };
-                settings.containers.insert(status.name, container);
+                settings.hardened.containers.insert(status.name, container);
             }
         }
         let toml = toml::to_string_pretty(&settings).map_err(internal)?;
@@ -241,10 +241,9 @@ impl Workloads for WorkloadsApi {
 
 impl WorkloadsApi {
     fn manager(&self) -> Result<&Arc<Manager>, Status> {
-        self.0
-            .workloads
-            .get()
-            .ok_or_else(|| Status::unavailable("workloads are unavailable: containerd is not connected"))
+        self.0.workloads.get().ok_or_else(|| {
+            Status::unavailable("workloads are unavailable: containerd is not connected, or kubelet runs the pods")
+        })
     }
 
     /// Refuses changes to workloads defined by user-data: the API only manages
@@ -256,9 +255,9 @@ impl WorkloadsApi {
                 "workload {name} is defined by user-data"
             ))),
             // A disabled user-data workload is not running, but still owns its name.
-            None if self.0.settings.containers.contains_key(name) => Err(Status::failed_precondition(format!(
-                "workload {name} is defined by user-data"
-            ))),
+            None if self.0.settings.hardened.containers.contains_key(name) => Err(Status::failed_precondition(
+                format!("workload {name} is defined by user-data"),
+            )),
             None if must_exist => Err(Status::not_found(format!("no workload named {name}"))),
             None => Ok(()),
         }

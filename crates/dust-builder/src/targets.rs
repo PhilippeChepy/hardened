@@ -50,6 +50,8 @@ pub struct Target {
     pub seed: Option<Arc<Seed>>,
     /// The target whose image it builds on.
     pub environment: Option<ComponentName>,
+    /// The targets it `extends`, nearest first: where the recipes of their components are.
+    pub extends: Vec<ComponentName>,
     pub components: Vec<ComponentName>,
     /// Added to the kernel command line of its image.
     pub kernel_cmdline: Vec<String>,
@@ -187,6 +189,10 @@ fn resolve(
         "a seed or an environment: what it builds on"
     );
     ensure!(environment.as_ref() != Some(id), "in its own environment");
+    let extends = match parent {
+        Some(p) => std::iter::once(p.id.clone()).chain(p.extends.iter().cloned()).collect(),
+        None => Vec::new(),
+    };
     let mut components = parent.map(|p| p.components.clone()).unwrap_or_default();
     components.extend(file.components.iter().cloned());
     let mut seen = std::collections::BTreeSet::new();
@@ -229,6 +235,7 @@ fn resolve(
         id: id.clone(),
         seed,
         environment,
+        extends,
         components,
         kernel_cmdline,
         partition,
@@ -276,6 +283,7 @@ mod tests {
         let gpu = targets.get("gpu").unwrap();
         let names: Vec<&str> = gpu.components.iter().map(ComponentName::as_str).collect();
         assert_eq!(names, ["kernel", "runc", "dust", "nvidia"]);
+        assert_eq!(gpu.extends, [crate::name!("standard")]);
         assert_eq!(
             gpu.environment.as_ref().map(ComponentName::as_str),
             Some("tools"),

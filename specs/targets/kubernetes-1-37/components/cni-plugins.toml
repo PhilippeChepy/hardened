@@ -1,0 +1,35 @@
+version = "1.9.1"
+kind = "application"
+summary = "Reference CNI plugins (loopback, bridge, host-local, portmap), run by containerd to set up pod networks"
+license = "Apache-2.0"
+homepage = "https://www.cni.dev"
+purl = "pkg:golang/github.com/containernetworking/plugins@v{version}"
+
+depends-on = ["go"]
+
+[sources.src]
+url = "https://github.com/containernetworking/plugins/archive/refs/tags/v{version}.tar.gz"
+sha256 = "34bd82d47e981940751619c9cc44c095bb90bfcaf8d71865cbb822c37690a764"
+
+# Pure Go, static. In containerd's first CNI binary directory (base-files' containerd
+# configuration), on the read-only root.
+[[build]]
+go-build.commands = [
+    ["./plugins/main/loopback", "/usr/libexec/cni/loopback"],
+    ["./plugins/main/bridge", "/usr/libexec/cni/bridge"],
+    ["./plugins/ipam/host-local", "/usr/libexec/cni/host-local"],
+    ["./plugins/meta/portmap", "/usr/libexec/cni/portmap"],
+]
+go-build.vars = [["github.com/containernetworking/plugins/pkg/utils/buildversion.BuildVersion", "v{version}"]]
+
+# Where cluster network add-ons (Calico, Cilium, flannel...) install their plugins and write
+# their configuration, through hostPath volumes: writable places, created by dust-init.
+# containerd's second binary directory is /opt/cni/bin, and it reads its configuration from
+# /run/cni/net.d.
+[[build]]
+symlink.target = "../../var/lib/cni/bin"
+symlink.link = "{dest}/opt/cni/bin"
+
+[[build]]
+symlink.target = "../../run/cni/net.d"
+symlink.link = "{dest}/etc/cni/net.d"

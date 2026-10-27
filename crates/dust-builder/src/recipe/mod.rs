@@ -325,13 +325,16 @@ impl Recipes {
         self.components.values().chain(self.overrides.values())
     }
 
-    /// The recipe of `unit`: as its target overrides it, if it does.
-    pub fn get(&self, unit: &Unit) -> anyhow::Result<&Recipe> {
-        (self
-            .overrides
-            .get(unit)
-            .or_else(|| self.components.get(&unit.component)))
-        .with_context(|| format!("no recipe for {unit}"))
+    /// The recipe of `unit`: as its target overrides it, else as the nearest of the targets it
+    /// `extends` does (their own components included), else the shared one.
+    pub fn get(&self, unit: &Unit, extends: &[ComponentName]) -> anyhow::Result<&Recipe> {
+        let overrides = std::iter::once(&unit.target).chain(extends).find_map(|target| {
+            self.overrides.get(&Unit {
+                target: target.clone(),
+                component: unit.component.clone(),
+            })
+        });
+        (overrides.or_else(|| self.components.get(&unit.component))).with_context(|| format!("no recipe for {unit}"))
     }
 
     /// The units whose targets override their recipes.
@@ -352,6 +355,43 @@ mod tests {
         for bad in ["perl", "tools/", "/perl", "tools/a/b", "Tools/perl"] {
             assert!(bad.parse::<Unit>().is_err(), "{bad:?} accepted");
         }
+    }
+
+    #[test]
+    fn extended_targets_lend_their_recipes() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipe = |version: &str| {
+            format!(
+                "version = \"{version}\"\nkind = \"library\"\nsummary = \"s\"\nlicense = \"MIT\"\n\
+                 homepage = \"https://example.org\"\npurl = \"pkg:generic/x@{{version}}\"\n"
+            )
+        };
+        for (path, version) in [
+            ("components/shared.toml", "1"),
+            ("targets/base/components/own.toml", "2"),
+            ("targets/child/components/shared.toml", "3"),
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, recipe(version)).unwrap();
+        }
+        for target in ["base", "child"] {
+            std::fs::write(dir.path().join(format!("targets/{target}/spec.toml")), "").unwrap();
+        }
+        let recipes = Recipes::resolve(declarative::load(dir.path()).unwrap()).unwrap();
+        let version = |unit: &str, extends: &[ComponentName]| {
+            let recipe = recipes.get(&unit.parse().unwrap(), extends)?;
+            anyhow::Ok(recipe.meta.version.clone())
+        };
+        let base = [name!("base")];
+        assert_eq!(version("child/own", &base).unwrap(), "2", "the extended target's own");
+        assert_eq!(
+            version("child/shared", &base).unwrap(),
+            "3",
+            "the target's override first"
+        );
+        assert_eq!(version("base/shared", &[]).unwrap(), "1", "the shared one last");
+        assert!(version("child/own", &[]).is_err(), "only through extends");
     }
 
     #[test]

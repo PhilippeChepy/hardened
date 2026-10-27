@@ -4,7 +4,9 @@
 
 mod containerd;
 mod kmod;
+mod kubelet;
 mod mounts;
+mod service;
 mod sysctl;
 
 use std::io::Write as _;
@@ -21,7 +23,7 @@ use crate::logging::{self, LogRing};
 use crate::machine::{Machine, MachineInfo, PowerRequest};
 use crate::platform::{Metadata, Platform};
 use crate::process::Reaper;
-use crate::settings::{ApiSettings, DnsSettings, Settings, UserData};
+use crate::settings::{ApiSettings, DnsSettings, KubernetesSettings, Settings, UserData};
 use crate::types::Hostname;
 use crate::workloads::{self, Manager, Source};
 use crate::{control, net, power, storage};
@@ -30,6 +32,15 @@ use crate::{control, net, power, storage};
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
 /// Pause between attempts to connect to containerd.
 const CONNECT_RETRY: Duration = Duration::from_secs(10);
+/// Time left to kubelet to exit after SIGTERM when shutting down; its pods are stopped next.
+const KUBELET_GRACE: Duration = Duration::from_secs(10);
+
+/// Who runs the pods: dust-init's workload manager, or kubelet. Not both: kubelet stops the pods
+/// it does not know of.
+enum Pods {
+    Workloads(tokio::task::JoinHandle<()>),
+    Kubelet(tokio::task::JoinHandle<service::Service>),
+}
 
 pub fn run() -> ! {
     std::panic::set_hook(Box::new(|info| {
@@ -150,6 +161,17 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
     set_hostname(&hostname)?;
     info!(%hostname, instance_id = instance_id.as_deref().unwrap_or("none"), "identity configured");
 
+    let kubelet = match &settings.kubernetes {
+        KubernetesSettings::Enabled(config) if kubelet::installed() => Some(config),
+        KubernetesSettings::Enabled(_) => {
+            error!("settings.kubernetes is enabled, but this image has no kubelet");
+            None
+        }
+        KubernetesSettings::Disabled => None,
+    };
+    if kubelet.is_some() {
+        sysctl::apply_kubernetes_defaults();
+    }
     sysctl::apply(&settings.kernel.sysctl);
     kmod::load(&settings.kernel.modules);
 
@@ -157,8 +179,13 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
     for dir in ["/var/lib/containerd", "/var/lib/dust", workloads::LOG_DIR] {
         std::fs::create_dir_all(dir)?;
     }
+    let kubelet_args = kubelet.and_then(|config| {
+        kubelet::prepare(config, &hostname)
+            .inspect_err(|e| error!("cannot prepare kubelet, it will not run: {e:#}"))
+            .ok()
+    });
 
-    let containerd = containerd::Containerd::start(reaper.clone());
+    let containerd = containerd::start(reaper.clone(), &settings.container_registry);
 
     let tpm = match Tpm::open(Path::new(Tpm::DEVICE)) {
         Ok(Some(tpm)) => {
@@ -200,13 +227,16 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
             error!("control API stopped: {e:#}");
         }
     });
-    let api = match &settings.api {
+    let api = match &settings.hardened.api {
         ApiSettings::Enabled(api) => Api::start(reaper.clone(), api)
             .inspect_err(|e| error!("cannot start the API: {e:#}"))
             .ok(),
         ApiSettings::Disabled => None,
     };
-    let starting = tokio::spawn(start_workloads(machine.clone()));
+    let pods = match kubelet_args {
+        Some(args) => Pods::Kubelet(tokio::spawn(start_kubelet(reaper.clone(), args))),
+        None => Pods::Workloads(tokio::spawn(start_workloads(machine.clone()))),
+    };
 
     let request = power_rx.recv().await.unwrap_or(PowerRequest::PowerOff);
     info!(?request, "shutting down");
@@ -214,10 +244,23 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
         api.stop().await;
     }
     // A start still in progress is abandoned first, then whatever it started is stopped.
-    starting.abort();
-    let _ = starting.await;
-    if let Some(workloads) = machine.workloads.get() {
-        workloads.shutdown(SHUTDOWN_GRACE).await;
+    match pods {
+        Pods::Workloads(starting) => {
+            starting.abort();
+            let _ = starting.await;
+            if let Some(workloads) = machine.workloads.get() {
+                workloads.shutdown(SHUTDOWN_GRACE).await;
+            }
+        }
+        Pods::Kubelet(starting) => {
+            starting.abort();
+            if let Ok(kubelet) = starting.await {
+                kubelet.stop(KUBELET_GRACE).await;
+                if let Err(e) = workloads::stop_all_pods(Path::new(containerd::SOCKET), SHUTDOWN_GRACE).await {
+                    warn!("cannot stop kubelet's pods: {e:#}");
+                }
+            }
+        }
     }
     containerd.stop(Duration::from_secs(10)).await;
     drop(machine);
@@ -228,31 +271,19 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
 /// the API-managed ones. The control API and dust-api already run, so a containerd that never
 /// comes up can be diagnosed remotely (its log tail is copied to dust-init's).
 async fn start_workloads(machine: Arc<Machine>) {
-    let mut failures = 0u32;
-    let workloads = loop {
-        match Manager::connect(
+    let workloads = until_containerd_answers("workloads unavailable", || {
+        Manager::connect(
             Path::new(containerd::SOCKET),
             Path::new("/var/lib/dust"),
             Path::new(workloads::LOG_DIR),
             Path::new(workloads::BUNDLED_IMAGES),
             Duration::from_secs(60),
         )
-        .await
-        {
-            Ok(workloads) => break workloads,
-            Err(e) => {
-                error!("cannot connect to containerd, workloads unavailable: {e:#}");
-                if failures == 0 {
-                    containerd::log_tail(40);
-                }
-                failures += 1;
-                tokio::time::sleep(CONNECT_RETRY).await;
-            }
-        }
-    };
+    })
+    .await;
     let workloads = machine.workloads.get_or_init(|| workloads);
 
-    for (name, container) in machine.settings.containers.iter().filter(|(_, c)| c.enabled) {
+    for (name, container) in machine.settings.hardened.containers.iter().filter(|(_, c)| c.enabled) {
         if let Err(e) = workloads
             .apply(name, container.workload.clone(), Source::UserData)
             .await
@@ -264,6 +295,44 @@ async fn start_workloads(machine: Arc<Machine>) {
         error!("cannot start API-managed workloads: {e:#}");
     }
     info!("boot complete");
+}
+
+/// Imports the bundled images (the pod sandbox's) once containerd answers, then starts kubelet.
+/// dust-init's own workloads stay unavailable.
+async fn start_kubelet(reaper: Reaper, args: Vec<String>) -> service::Service {
+    until_containerd_answers("kubelet not started", || {
+        workloads::import_bundled(
+            Path::new(containerd::SOCKET),
+            Path::new(workloads::BUNDLED_IMAGES),
+            Duration::from_secs(60),
+        )
+    })
+    .await;
+    let kubelet = kubelet::start(reaper, args);
+    info!("boot complete");
+    kubelet
+}
+
+/// Calls `connect` until it succeeds, every [`CONNECT_RETRY`]; containerd's log tail is copied
+/// to dust-init's after the first failure.
+async fn until_containerd_answers<T, F>(consequence: &str, mut connect: impl FnMut() -> F) -> T
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    let mut failures = 0u32;
+    loop {
+        match connect().await {
+            Ok(connected) => return connected,
+            Err(e) => {
+                error!("cannot connect to containerd, {consequence}: {e:#}");
+                if failures == 0 {
+                    containerd::log_tail(40);
+                }
+                failures += 1;
+                tokio::time::sleep(CONNECT_RETRY).await;
+            }
+        }
+    }
 }
 
 fn set_hostname(hostname: &Hostname) -> anyhow::Result<()> {

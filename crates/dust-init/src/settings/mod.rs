@@ -8,6 +8,8 @@
 //! [`crate::types`]), so a `Settings` value is valid by construction.
 
 mod decode;
+mod kubernetes;
+mod registry;
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
@@ -15,6 +17,8 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 
 pub use decode::decode;
+pub use kubernetes::{CloudProvider, KubeletConfig, KubernetesSettings, Quantity, ReservedResource};
+pub use registry::{RegistrySettings, cri_auth_configs, hosts_files};
 
 use crate::types::{
     Certificates, ContainerPath, DomainName, Hostname, ImageRef, InvalidValue, ModuleName, PrivateKey, SysctlKey,
@@ -29,6 +33,8 @@ pub struct UserData {
     pub settings: Settings,
 }
 
+/// The settings: Bottlerocket's groups where it has them (with its keys), hardened's own under
+/// `hardened`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Settings {
@@ -38,6 +44,18 @@ pub struct Settings {
     pub network: NetworkSettings,
     #[serde(default)]
     pub dns: DnsSettings,
+    #[serde(default)]
+    pub kubernetes: KubernetesSettings,
+    #[serde(default)]
+    pub container_registry: RegistrySettings,
+    #[serde(default)]
+    pub hardened: HardenedSettings,
+}
+
+/// `[settings.hardened]`: what Bottlerocket has no setting for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct HardenedSettings {
     #[serde(default)]
     pub api: ApiSettings,
     /// Workloads, keyed by name.
@@ -150,7 +168,7 @@ impl ApiConfig {
     }
 }
 
-/// `[settings.api]` as written in user-data.
+/// `[settings.hardened.api]` as written in user-data.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawApiSettings {
@@ -208,7 +226,7 @@ impl From<ApiSettings> for RawApiSettings {
     }
 }
 
-/// `[settings.containers.<name>]`: a workload declared in user-data.
+/// `[settings.hardened.containers.<name>]`: a workload declared in user-data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawContainerSettings", into = "RawContainerSettings")]
 pub struct ContainerSettings {
@@ -368,12 +386,23 @@ pub enum Error {
     Encoding(String),
     #[error("invalid user-data: {0}")]
     Toml(#[from] toml::de::Error),
+    #[error("invalid user-data: {0}")]
+    Conflict(&'static str),
 }
 
 impl UserData {
     /// Decodes and parses raw user-data as fetched from the platform.
     pub fn parse(raw: &[u8]) -> Result<Self, Error> {
-        Ok(toml::from_str(&decode(raw)?)?)
+        let user_data: Self = toml::from_str(&decode(raw)?)?;
+        // kubelet stops and removes the pods it did not create, in the runtime they share.
+        if matches!(user_data.settings.kubernetes, KubernetesSettings::Enabled(_))
+            && user_data.settings.hardened.containers.values().any(|c| c.enabled)
+        {
+            return Err(Error::Conflict(
+                "settings.hardened.containers cannot run next to kubelet (settings.kubernetes): use settings.kubernetes.static-pods",
+            ));
+        }
+        Ok(user_data)
     }
 }
 
@@ -413,13 +442,13 @@ autoload = true
 [settings.kernel.modules.dccp]
 allowed = false
 
-[settings.api]
+[settings.hardened.api]
 enabled = true
 client-ca = "{cert}"
 certificate = "{cert}"
 private-key = "{key}"
 
-[settings.containers.web]
+[settings.hardened.containers.web]
 image = "nginx:1.29"
 env = {{ FOO = "bar" }}
 restart = "on-failure"
@@ -437,11 +466,11 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
         assert!(!modules["dccp"].allowed && !modules["dccp"].autoload);
         assert_eq!(settings.dns.name_servers.len(), 2);
         assert_eq!(settings.dns.search_list[0].as_str(), "corp.example.com");
-        let ApiSettings::Enabled(api) = &settings.api else {
+        let ApiSettings::Enabled(api) = &settings.hardened.api else {
             panic!("API should be enabled")
         };
         assert_eq!(api.listen.port(), ApiConfig::DEFAULT_PORT);
-        let web = &settings.containers["web"];
+        let web = &settings.hardened.containers["web"];
         assert!(web.enabled);
         assert_eq!(web.workload.image.as_str(), "docker.io/library/nginx:1.29");
         assert_eq!(web.workload.restart, RestartPolicy::OnFailure);
@@ -456,8 +485,8 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
         assert!(!text.contains("BEGIN"), "certificates serialize as base64");
         // The containers table round-trips (the API table cannot: its key is redacted).
         let back: BTreeMap<WorkloadName, ContainerSettings> =
-            toml::from_str(&toml::to_string(&settings.containers).unwrap()).unwrap();
-        assert_eq!(back, settings.containers);
+            toml::from_str(&toml::to_string(&settings.hardened.containers).unwrap()).unwrap();
+        assert_eq!(back, settings.hardened.containers);
     }
 
     #[test]
@@ -470,23 +499,26 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
         for (document, why) in [
             ("[settings.hots]\nhostname = \"x\"\n", "unknown table"),
             ("[settings.network]\nhostname = \"-x\"\n", "bad hostname"),
-            ("[settings.api]\nenabled = true\n", "API without TLS material"),
+            ("[settings.hardened.api]\nenabled = true\n", "API without TLS material"),
             (
-                "[settings.api]\nenabled = true\nclient-ca = \"x\"\ncertificate = \"x\"\nprivate-key = \"x\"\n",
+                "[settings.hardened.api]\nenabled = true\nclient-ca = \"x\"\ncertificate = \"x\"\nprivate-key = \"x\"\n",
                 "bad PEM",
             ),
-            ("[settings.containers.Web]\nimage = \"i\"\n", "bad workload name"),
-            ("[settings.containers.x]\nimage = \"\"\n", "empty image"),
             (
-                "[settings.containers.x]\nimage = \"i\"\nrestart = \"sometimes\"\n",
+                "[settings.hardened.containers.Web]\nimage = \"i\"\n",
+                "bad workload name",
+            ),
+            ("[settings.hardened.containers.x]\nimage = \"\"\n", "empty image"),
+            (
+                "[settings.hardened.containers.x]\nimage = \"i\"\nrestart = \"sometimes\"\n",
                 "bad restart policy",
             ),
             (
-                "[settings.containers.x]\nimage = \"i\"\nenv = { \"A=B\" = \"c\" }\n",
+                "[settings.hardened.containers.x]\nimage = \"i\"\nenv = { \"A=B\" = \"c\" }\n",
                 "bad env name",
             ),
             (
-                "[settings.containers.x]\nimage = \"i\"\nargs = [\"a\\u0000b\"]\n",
+                "[settings.hardened.containers.x]\nimage = \"i\"\nargs = [\"a\\u0000b\"]\n",
                 "NUL in args",
             ),
             ("[settings.kernel.sysctl]\n\"../x\" = \"1\"\n", "bad sysctl key"),
@@ -500,6 +532,8 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
             ),
             ("[settings.kernel.modules.x]\nload = true\n", "former module key"),
             ("[settings.network]\nnameservers = [\"1.1.1.1\"]\n", "former DNS key"),
+            ("[settings.api]\nenabled = false\n", "former API table"),
+            ("[settings.containers.x]\nimage = \"i\"\n", "former containers table"),
             (
                 "[settings.dns]\nname-servers = [\"dns.example\"]\n",
                 "name server that is not an IP",
@@ -510,11 +544,210 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
         }
     }
 
+    /// An enabled `[settings.kubernetes]`, with `extra` keys.
+    fn kubernetes(extra: &str) -> String {
+        let (cert, _) = pki();
+        format!(
+            "[settings.kubernetes]\nenabled = true\napi-server = \"https://k8s.example.com:6443\"\n\
+             cluster-certificate = \"{cert}\"\nbootstrap-token = \"abcdef.0123456789abcdef\"\n{extra}\n"
+        )
+    }
+
+    fn kubelet(extra: &str) -> Box<KubeletConfig> {
+        match UserData::parse(kubernetes(extra).as_bytes())
+            .unwrap()
+            .settings
+            .kubernetes
+        {
+            KubernetesSettings::Enabled(config) => config,
+            KubernetesSettings::Disabled => panic!("kubernetes should be enabled"),
+        }
+    }
+
+    #[test]
+    fn kubernetes_settings() {
+        let config = kubelet("");
+        assert_eq!(config.bootstrap_token.expose(), "abcdef.0123456789abcdef");
+        assert_eq!(config.api_server.as_str(), "https://k8s.example.com:6443");
+        assert_eq!(config.cluster_domain.as_str(), "cluster.local");
+
+        let settings = UserData::parse(kubernetes("").as_bytes()).unwrap().settings;
+        let text = toml::to_string(&settings).unwrap();
+        assert!(text.contains("bootstrap-token = \"<redacted>\""), "{text}");
+        assert!(!text.contains("0123456789abcdef"));
+
+        // Disabled, it needs nothing and does not conflict with workloads.
+        let document =
+            "[settings.kubernetes]\nenabled = false\n[settings.hardened.containers.web]\nimage = \"nginx\"\n";
+        let settings = UserData::parse(document.as_bytes()).unwrap().settings;
+        assert_eq!(settings.kubernetes, KubernetesSettings::Disabled);
+        let document = kubernetes("[settings.hardened.containers.web]\nimage = \"nginx\"\nenabled = false");
+        assert!(
+            UserData::parse(document.as_bytes()).is_ok(),
+            "a disabled workload does not conflict"
+        );
+    }
+
+    #[test]
+    fn cluster_dns_takes_one_address_or_a_list() {
+        assert_eq!(
+            kubelet("cluster-dns-ip = \"10.96.0.10\"")
+                .cluster_dns_ip
+                .as_slice()
+                .len(),
+            1
+        );
+        let both = kubelet("cluster-dns-ip = [\"10.96.0.10\", \"fd00::a\"]");
+        assert_eq!(both.cluster_dns_ip.as_slice().len(), 2);
+        let settings = UserData::parse(kubernetes("cluster-dns-ip = \"10.96.0.10\"").as_bytes())
+            .unwrap()
+            .settings;
+        assert!(
+            toml::to_string(&settings)
+                .unwrap()
+                .contains("cluster-dns-ip = \"10.96.0.10\"")
+        );
+    }
+
+    #[test]
+    fn kubernetes_resources_and_image_gc() {
+        let config = kubelet(
+            r#"image-gc-high-threshold-percent = 90
+image-gc-low-threshold-percent = "70"
+image-minimum-gc-age = "5m"
+image-maximum-gc-age = "168h"
+
+[settings.kubernetes.kube-reserved]
+cpu = "100m"
+memory = "512Mi"
+ephemeral-storage = "1Gi"
+pid = "1000"
+
+[settings.kubernetes.system-reserved]
+memory = "256Mi"
+
+[settings.kubernetes.eviction-hard]
+"memory.available" = "15%"
+"nodefs.inodesFree" = "5%"
+"pid.available" = "100"
+"#,
+        );
+        assert_eq!(config.kube_reserved.len(), 4);
+        assert_eq!(config.system_reserved.len(), 1);
+        assert_eq!(config.eviction_hard.len(), 3);
+        assert_eq!(config.image_gc.high_threshold_percent.map(|p| p.get()), Some(90));
+        assert_eq!(config.image_gc.low_threshold_percent.map(|p| p.get()), Some(70));
+        assert_eq!(config.image_gc.maximum_age.as_ref().map(|d| d.as_str()), Some("168h"));
+    }
+
+    #[test]
+    fn rejects_invalid_kubernetes_settings() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut documents: Vec<(String, &str)> = [
+            (
+                "node-labels = { \"node-role.kubernetes.io/worker\" = \"\" }",
+                "label kubelet may not set",
+            ),
+            ("node-labels = { \"a b\" = \"x\" }", "bad label key"),
+            ("node-labels = { app = \"a,b\" }", "bad label value"),
+            ("node-taints = { dedicated = [\"gpu:Sometimes\"] }", "bad taint effect"),
+            ("max-pods = 0", "no pods"),
+            ("cloud-provider = \"aws\"", "unknown cloud provider"),
+            ("node-ip = \"192.0.2.1\"", "node-ip, which does not exist"),
+            ("cluster-dns-ip = [\"kube-dns\"]", "cluster DNS that is not an IP"),
+            ("client-key = \"x\"", "client certificate credentials"),
+            ("kubelet-version = \"1.37\"", "unknown key"),
+            ("kube-reserved = { gpu = \"1\" }", "unknown reserved resource"),
+            ("kube-reserved = { cpu = \"-1\" }", "negative reservation"),
+            ("system-reserved = { memory = \"1GB\" }", "bad quantity"),
+            (
+                "eviction-hard = { \"memory.free\" = \"1%\" }",
+                "unknown eviction signal",
+            ),
+            ("eviction-hard = { \"memory.available\" = \"100%\" }", "100% threshold"),
+            ("image-gc-high-threshold-percent = 101", "percentage above 100"),
+            (
+                "image-gc-low-threshold-percent = 90",
+                "low threshold above the default high one",
+            ),
+            (
+                "image-gc-high-threshold-percent = 60\nimage-gc-low-threshold-percent = 60",
+                "equal thresholds",
+            ),
+            ("image-maximum-gc-age = \"1m\"", "maximum age below the default minimum"),
+            ("image-minimum-gc-age = \"5 minutes\"", "bad duration"),
+            (
+                "[settings.hardened.containers.web]\nimage = \"nginx\"",
+                "workloads next to kubelet",
+            ),
+            (
+                "[settings.kubernetes.static-pods.web]\nenabled = true",
+                "static pod without manifest",
+            ),
+        ]
+        .into_iter()
+        .map(|(extra, why)| (kubernetes(extra), why))
+        .collect();
+        let without = |key: &str| {
+            kubernetes("")
+                .lines()
+                .filter(|line| !line.starts_with(key))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        documents.extend([
+            (without("bootstrap-token"), "no bootstrap token"),
+            (without("api-server"), "no API server"),
+            (without("cluster-certificate"), "no cluster CA"),
+            (kubernetes("").replace("abcdef.0123456789abcdef", "abcdef"), "bad token"),
+            (
+                kubernetes("").replace("https://k8s.example.com:6443", "http://k8s"),
+                "plain HTTP API server",
+            ),
+            (
+                kubernetes(&format!(
+                    "[settings.kubernetes.static-pods.Web]\nmanifest = \"{}\"",
+                    STANDARD.encode("apiVersion: v1\nkind: Pod\nmetadata: {}\n")
+                )),
+                "bad static pod name",
+            ),
+            (
+                kubernetes(&format!(
+                    "[settings.kubernetes.static-pods.web]\nmanifest = \"{}\"",
+                    STANDARD.encode("apiVersion: apps/v1\nkind: Deployment\nmetadata: {}\n")
+                )),
+                "static pod that is not a Pod",
+            ),
+        ]);
+        for (document, why) in documents {
+            assert!(UserData::parse(document.as_bytes()).is_err(), "{why} accepted");
+        }
+    }
+
+    #[test]
+    fn container_registry_settings() {
+        let document = r#"
+[[settings.container-registry.mirrors]]
+registry = "docker.io"
+endpoint = ["https://mirror.example.com"]
+
+[[settings.container-registry.credentials]]
+registry = "docker.io"
+username = "me"
+password = "hunter2"
+"#;
+        let settings = UserData::parse(document.as_bytes()).unwrap().settings;
+        assert_eq!(settings.container_registry.mirrors.len(), 1);
+        assert_eq!(settings.container_registry.credentials.len(), 1);
+        let shown = toml::to_string(&settings).unwrap();
+        assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
     #[test]
     fn rejects_mounts_outside_var() {
         for source in ["/etc", "/var", "/var/../etc", "var/lib"] {
             let doc = format!(
-                "[settings.containers.x]\nimage = \"i\"\nmounts = [{{ source = \"{source}\", destination = \"/d\" }}]\n"
+                "[settings.hardened.containers.x]\nimage = \"i\"\nmounts = [{{ source = \"{source}\", destination = \"/d\" }}]\n"
             );
             assert!(UserData::parse(doc.as_bytes()).is_err(), "{source} accepted");
         }

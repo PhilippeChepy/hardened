@@ -4,7 +4,7 @@
 [settings.network]
 hostname = "smoke"
 
-[settings.containers.hello]
+[settings.hardened.containers.hello]
 image = "docker.io/library/busybox:1.37"
 command = ["sh", "-c", "echo hello from a hardened workload; cat /proc/self/cgroup"]
 restart = "never"

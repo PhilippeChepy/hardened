@@ -22,6 +22,15 @@
 | dust-init | init/agent | static PIE (musl, libunwind; Rust LTO) |
 | dust-api | mTLS API proxy, a sandboxed process of dust-init | static PIE (musl, libunwind; Rust LTO) |
 
+The `kubernetes-1-37` image adds (see [Kubernetes](#kubernetes)):
+
+| Component | Why it is there | Linking |
+| --- | --- | --- |
+| kubelet 1.37 | Kubernetes node agent, run by dust-init | static Go, no libc |
+| CNI plugins | `loopback`, `bridge`, `host-local`, `portmap`, run by containerd | static Go, no libc |
+| mount, umount | from util-linux: kubelet mounts the tmpfs of secrets and bind mounts with them | static (musl, libmount, libblkid; LTO) |
+| iptables-nft, nft | run on the host by CNI plugins (`portmap`, `bridge` with `ipMasq`, add-ons' own) | static (musl, libnftnl, libmnl; LTO) |
+
 Everything is compiled by clang (LLVM), linked by lld, against musl and compiler-rt (no GCC,
 glibc or libgcc), and every program is statically linked: the image has no dynamic loader and no
 shared library. What ships is built with ThinLTO: musl (but its start files, its
@@ -60,19 +69,21 @@ into `/run/hardened`.
    5. fetches metadata and user-data, then validates the user-data and applies the hostname,
       sysctls and kernel modules;
    6. grows the state partition with the disk and mounts it on `/var`;
-   7. starts and supervises containerd;
+   7. starts and supervises containerd (and, when kubelet runs, first makes every mount shared and
+      writes kubelet's configuration);
    8. serves the control API on `/run/dust/control.sock` and starts the sandboxed `dust-api`
       (if enabled);
    9. connects to containerd through CRI, retrying every 10 s until it answers, imports the
-      bundled system images, then starts the user-data workloads and the API-managed workloads;
+      bundled system images, then starts the user-data workloads and the API-managed workloads,
+      or kubelet instead when user-data enables it;
    10. logs `boot complete`.
 
    The API does not wait for containerd. If containerd never comes up, the machine stays
    reachable: workload calls answer `unavailable`, while logs (containerd's tail is copied to
    dust-init's log after the first failed attempt), settings, attestation and power calls work.
 5. **Shutdown:** a power request comes from the API, a signal or the ACPI power button. dust-init
-   then stops dust-api and the workloads (SIGTERM, then SIGKILL after 20 s), stops containerd,
-   unmounts `/var` and calls `reboot(2)`.
+   then stops dust-api and the workloads (SIGTERM, then SIGKILL after 20 s), or kubelet and every
+   pod, stops containerd, unmounts `/var` and calls `reboot(2)`.
 
 If boot fails, dust-init logs the error and reboots 30 seconds later. A panic in a task is logged
 and does not bring PID 1 down.
@@ -112,7 +123,11 @@ generated from the CRI protos vendored by the containerd release that ships in t
 
 - **Pods:** each workload is a pod sandbox with one container. The sandbox runs the bundled
   `pause` process (built from Kubernetes' `pause.c`).
-- **Images** are pulled through the CRI image service.
+- **Images** are pulled through the CRI image service, with the mirrors and credentials of
+  `settings.container-registry`: dust-init writes them, before containerd starts, as `hosts.toml`
+  files in `/run/containerd/certs.d` (containerd's `config_path`) and in the CRI plugin's
+  `configs` of the configuration it generates, `/run/containerd/config.toml` (the image's, plus
+  those).
 - **System images** are "from scratch" images holding a single static binary; today only
   `pause`. A component declares its image (`b.container_image`) and places files in
   it during its build. dust-builder archives that as a reproducible OCI image and ships it in
@@ -126,7 +141,39 @@ generated from the CRI protos vendored by the containerd release that ships in t
   (`RuntimeDefault`), `no_new_privileges` and the default capability set.
 - **Logs** are written by containerd in the kubelet log format under `/var/log/pods/`. dust-init
   decodes them for the API and, with `console = true`, for the serial console.
-- **Networking:** pods share the host network namespace; no CNI plugins are shipped yet.
+- **Networking:** pods share the host network namespace (kubelet's pods use CNI, see below).
+
+## Kubernetes
+
+The `kubernetes-1-37` target extends `standard` with kubelet 1.37, the reference CNI plugins,
+static `mount` and `umount` (kubelet runs them for the tmpfs of secret and projected volumes, and
+bind mounts), and `iptables` (its nf_tables variant only) and `nft`, which CNI plugins run. The
+Kubernetes release is pinned once, by `standard/pause` (`{pause.kubernetes}`), so the sandbox
+image and kubelet come from the same one. dust-init is the same binary: it runs kubelet when the image has `/usr/bin/kubelet`
+and user-data enables `settings.kubernetes` ([user-data.md](user-data.md#settingskubernetes)).
+
+- **kubelet** runs on the host, unconfined, supervised like containerd (restarted with backoff,
+  its output in `/var/log/kubelet.log`, copied and truncated past 64 MiB). It uses containerd's CRI
+  socket, the cgroupfs driver on cgroup v2 (no systemd), webhook authentication and
+  authorization, no read-only port. dust-init writes its `KubeletConfiguration`, kubeconfigs and
+  bootstrap token to `/run/kubelet` at every boot from user-data (TLS bootstrapping; kubelet
+  then rotates its client certificate); kubelet keeps its state in `/var/lib/kubelet`. It starts once containerd has the
+  bundled images (the sandbox image is the bundled `pause`, pinned by containerd's configuration).
+  Static pods from user-data are written to its `staticPodPath`, `/run/kubelet/manifests`.
+- **Pods:** kubelet removes the pods it did not create, so dust-init runs no workload of its own
+  then: `settings.hardened.containers` is rejected and the workload API is unavailable.
+- **Mounts:** dust-init makes every mount shared (`/` recursively, as systemd does) before
+  containerd starts, for mount propagation.
+- **CNI:** containerd looks for plugins in `/usr/libexec/cni` (the image's) then `/opt/cni/bin`, a
+  link to `/var/lib/cni/bin` where network add-ons install theirs; its configuration directory is
+  `/run/cni/net.d`, linked from `/etc/cni/net.d`, where add-ons write it. `iptables` and `nft`
+  are in `/usr/bin`, the `PATH` dust-init gives containerd (and so the plugins) and kubelet.
+- **Kernel:** the same as `standard`'s, whose configuration covers kube-proxy (nftables and
+  iptables-nft modes, IPVS), bridges and overlays, BPF, and the keys kubelet checks.
+- **Shutdown:** kubelet's graceful node shutdown relies on systemd, so dust-init stops kubelet, then
+  every container and pod sandbox through CRI.
+
+The target's reference is [kubernetes-target.md](kubernetes-target.md).
 
 ## API
 
@@ -199,6 +246,8 @@ tools      FROM bootstrap        compiler-rt, musl, libc++, the userland, LLVM, 
                                  build systems, libraries, Rust, the image tools and the test VM
                                  (qemu, OVMF, swtpm)
 standard   FROM tools            the image: base-files, kernel, runc, containerd, pause, dust...
+kubernetes-1-37                  standard's components, then mount, iptables, nft, the CNI
+  FROM tools, extends standard   plugins and kubelet
 ```
 
 A target's `components` build on its environment's image (bootstrap's, on the seed), each with
@@ -214,8 +263,9 @@ with `targets/<target>/components/<component>.toml`, merged over it: tables merg
 (metadata, `[vars]`, `[sources]`...), any other value replaces (`depends-on`, the `[[build]]`
 steps as a whole). Recipes put what a target may change in `[vars]`: bootstrap's make, CMake,
 Python and LLVM override only `prefix` (`/cross`) and their flags, to be built static on the seed
-alone. `extends` starts a target from another: its components come first, `kernel-cmdline` adds
-to its own.
+alone. `extends` starts a target from another: its components come first, built from the same
+recipes (a target's own, then those of the targets it extends, nearest first, then the shared
+ones), and `kernel-cmdline` adds to its own.
 
 StageX's tools are linked dynamically against a musl at the very paths of ours (`/lib/ld-musl-
 x86_64.so.1`, `/usr/lib/libc.so`), so StageX never reaches a later environment: `bootstrap`
@@ -350,7 +400,9 @@ line, rather than inline tables.
 ## Known gaps / roadmap
 
 - **Time:** no NTP/SNTP client yet; time comes from the hypervisor clock.
-- **Registries:** no registry credentials or mirrors in user-data yet.
+- **Registries:** credentials go through the CRI plugin's `configs`, deprecated in containerd 2
+  and removed in 2.7; a later containerd needs another way (a credential helper or a patch, as
+  Bottlerocket's `credentials.toml`).
 - **Platforms:** Exoscale only (and qemu).
 - **Secure Boot and modules:** UKIs and kernel modules are signed with development keys unless
   `build/keys/` holds release keys (`db.{key,crt}`, `modules.pem`). Only the kernel's build sees
@@ -358,4 +410,11 @@ line, rather than inline tables.
   Enrolling keys in the cloud's UEFI variable store is up to the deployment.
 - **Attestation:** SEV-SNP and TDX evidence, and the remote-attestation management flow
   (key release).
-- **Kubernetes:** kubelet as a privileged system container, with CNI.
+- **Kubernetes:** an end-to-end test of a node joining a cluster (it needs a control plane in the
+  test VM); graceful shutdown per pod (dust-init gives every container the same 20 s, ignoring
+  `terminationGracePeriodSeconds` and priorities); `/etc/machine-id` (absent: cAdvisor and the
+  node's `machineID` read it); a full check of static pod YAML (only its top level is checked);
+  the Bottlerocket settings not supported yet (see
+  [kubernetes-target.md](kubernetes-target.md#compared-to-bottlerocket)).
+- **State encryption:** `/var` is a plain ext4 filesystem; the design to encrypt it with a key
+  sealed to the TPM is in [state-encryption.md](state-encryption.md).

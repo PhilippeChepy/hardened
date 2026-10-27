@@ -1,5 +1,8 @@
-# containerd configuration, passed by dust-init with --config. dust-init drives containerd
-# through CRI; `{pause.version}` is replaced by dust-builder with the bundled pause image's version.
+# containerd configuration. dust-init adds the registry credentials of user-data
+# (settings.container-registry) to the CRI plugin's `configs`, writes the result to
+# /run/containerd/config.toml and passes it with --config; the mirrors go to `config_path`. dust-init
+# drives containerd through CRI; `{pause.version}` is replaced by dust-builder with the bundled pause
+# image's version.
 version = 3
 root = "/var/lib/containerd"
 state = "/run/containerd"
@@ -36,10 +39,12 @@ disabled_plugins = [
         BinaryName = "/usr/bin/runc"
         SystemdCgroup = false
 
-  # Pods use the host network for now: no CNI plugins are shipped. The configuration directory
-  # must be writable (the root is not), and is rebuilt at every boot.
+  # dust-init's workloads use the host network, so CNI only serves kubelet's pods: the plugins
+  # of the image (first, on the read-only root), then those cluster network add-ons install
+  # (/opt/cni/bin, a link into /var). Neither exists in an image without kubelet. The
+  # configuration directory must be writable (the root is not), and is rebuilt at every boot.
   [plugins.'io.containerd.cri.v1.runtime'.cni]
-    bin_dirs = ["/usr/lib/cni"]
+    bin_dirs = ["/usr/libexec/cni", "/opt/cni/bin"]
     conf_dir = "/run/cni/net.d"
 
 [plugins.'io.containerd.transfer.v1.local']

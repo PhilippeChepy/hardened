@@ -1,0 +1,45 @@
+version = "1.3.2"
+kind = "library"
+summary = "Netlink library for the nf_tables subsystem, statically linked into iptables and nft"
+license = "GPL-2.0-or-later"
+homepage = "https://www.netfilter.org/projects/libnftnl/"
+purl = "pkg:generic/libnftnl@{version}"
+cpe = "netfilter:libnftnl"
+
+depends-on = ["pkgconf"]
+
+[vars]
+libmnl = "{dep:kubernetes-1-37/libmnl/dev}/usr"
+
+[sources.src]
+url = "https://www.netfilter.org/projects/libnftnl/files/libnftnl-{version}.tar.xz"
+sha256 = "c97abc3409f8fa396b4462b2bb7f147a3a47a4ddc97cfa0b2f18890c9cfde8b0"
+
+# Like libmnl: static, into an output. libmnl is given directly rather than through pkg-config,
+# whose sysroot could only name one output (and as a command, since configure's arguments take no
+# locations).
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--libdir=/usr/lib",
+    "--enable-static",
+    "--disable-shared",
+    "CFLAGS=-O2 -flto=thin",
+    "LIBMNL_CFLAGS=-I{vars.libmnl}/include",
+    "LIBMNL_LIBS=-L{vars.libmnl}/lib -lmnl",
+]
+run.dir = "{work:build}"
+
+[[build]]
+make.dir = "{work:build}"
+make.install = true
+make.dest = "{out:dev}"
+
+# Without its libtool archive, which names its dependencies at their install path, not in
+# their outputs: users link with the flags they are given.
+[[build]]
+remove = "{out:dev}/usr/lib/*.la"

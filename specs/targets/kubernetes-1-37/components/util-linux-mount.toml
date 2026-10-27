@@ -1,0 +1,47 @@
+version = "2.42.4"
+kind = "application"
+summary = "mount and umount from util-linux, statically linked"
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later"
+homepage = "https://github.com/util-linux/util-linux"
+cpe = "kernel:util-linux"
+
+[sources.src]
+url = "https://www.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-{version}.tar.xz"
+sha256 = "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+
+# kubelet runs `mount` and `umount` (k8s.io/mount-utils) for the tmpfs of secrets and projected
+# volumes, and for bind mounts. Only the static programs (libmount and libblkid linked in, with
+# ThinLTO) ship: the rest of the install stays in scratch space. Not setuid.
+[[build]]
+configure.dest = "{work:install}"
+configure.args = [
+    "--disable-all-programs",
+    "--enable-mount",
+    "--enable-libmount",
+    "--enable-libblkid",
+    "--enable-static-programs=mount,umount",
+    "--disable-shared",
+    "--bindir=/usr/bin",
+    "--sbindir=/usr/sbin",
+    "--libdir=/usr/lib",
+    "--disable-nls",
+    "--without-python",
+    "--without-systemd",
+    "--without-udev",
+    "--without-econf",
+    "--without-libmagic",
+    "--disable-liblastlog2",
+    "--disable-makeinstall-chown",
+    "--disable-makeinstall-setuid",
+    "CFLAGS=-O2 -flto=thin",
+]
+
+[[build]]
+install.from = "{work:install}/usr/bin/mount.static"
+install.to = "{dest}/usr/bin/mount"
+install.mode = 0o755
+
+[[build]]
+install.from = "{work:install}/usr/bin/umount.static"
+install.to = "{dest}/usr/bin/umount"
+install.mode = 0o755

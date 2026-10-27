@@ -65,7 +65,7 @@ pub enum Command {
         #[arg(long, default_value_t = 365)]
         days: u32,
     },
-    /// Prints the user-data [settings.api] section enabling dust-api with the PKI in DIR.
+    /// Prints the user-data [settings.hardened.api] section enabling dust-api with the PKI in DIR.
     UserData {
         #[arg(long)]
         dir: PathBuf,
@@ -277,11 +277,11 @@ fn client(ca_dir: &Path, out: &Path, common_name: &str, role: Role, days: u32) -
     )
 }
 
-/// The `[settings.api]` user-data section for the server certificate in `dir`.
+/// The `[settings.hardened.api]` user-data section for the server certificate in `dir`.
 fn user_data(dir: &Path) -> anyhow::Result<String> {
     let mut toml = String::from(
         "# dust-api TLS material. It includes the server private key: keep the user-data secret.\n\
-         [settings.api]\nenabled = true\n",
+         [settings.hardened.api]\nenabled = true\n",
     );
     for (key, file) in [
         ("client-ca", CA_CERT),
@@ -459,7 +459,7 @@ mod tests {
         init(dir.path(), &names(&["node.example"]), 30).unwrap();
 
         let doc: toml::Table = user_data(dir.path()).unwrap().parse().unwrap();
-        let api = &doc["settings"]["api"];
+        let api = &doc["settings"]["hardened"]["api"];
         assert_eq!(api["enabled"].as_bool(), Some(true));
         for (key, file) in [
             ("client-ca", CA_CERT),

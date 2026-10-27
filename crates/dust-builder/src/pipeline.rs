@@ -65,7 +65,7 @@ impl Pipeline {
         for target in pipeline.targets.values() {
             let provided = pipeline.provided(target)?;
             for unit in units(target) {
-                let recipe = pipeline.recipes.get(&unit)?.clone();
+                let recipe = pipeline.recipes.get(&unit, &target.extends)?.clone();
                 let mut depends = Vec::new();
                 for name in &recipe.depends_on {
                     if let Some(own) = target.components.iter().find(|c| c.as_str() == name) {

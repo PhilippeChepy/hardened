@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cri_api::v1::{
-    ContainerConfig, ContainerEventResponse, ContainerState, ContainerStatusRequest, CreateContainerRequest,
-    GetEventsRequest, ImageSpec, ImageStatusRequest, ListPodSandboxRequest, PodSandboxConfig, PodSandboxFilter,
-    PullImageRequest, RemoveContainerRequest, RemovePodSandboxRequest, RunPodSandboxRequest, StartContainerRequest,
-    StatusRequest, StopContainerRequest, StopPodSandboxRequest, VersionRequest, VersionResponse,
+    ContainerConfig, ContainerEventResponse, ContainerFilter, ContainerState, ContainerStateValue,
+    ContainerStatusRequest, CreateContainerRequest, GetEventsRequest, ImageSpec, ImageStatusRequest,
+    ListContainersRequest, ListPodSandboxRequest, PodSandboxConfig, PodSandboxFilter, PullImageRequest,
+    RemoveContainerRequest, RemovePodSandboxRequest, RunPodSandboxRequest, StartContainerRequest, StatusRequest,
+    StopContainerRequest, StopPodSandboxRequest, VersionRequest, VersionResponse,
     image_service_client::ImageServiceClient, runtime_service_client::RuntimeServiceClient,
 };
 use hyper_util::rt::TokioIo;
@@ -232,6 +233,23 @@ impl Cri {
             .into_iter()
             .map(|sandbox| (SandboxId(sandbox.id), sandbox.labels))
             .collect())
+    }
+
+    /// The running containers, of every sandbox.
+    pub async fn running_containers(&self) -> Result<Vec<ContainerId>, Status> {
+        let filter = ContainerFilter {
+            state: Some(ContainerStateValue {
+                state: ContainerState::ContainerRunning.into(),
+            }),
+            ..Default::default()
+        };
+        let response = self
+            .runtime
+            .clone()
+            .list_containers(ListContainersRequest { filter: Some(filter) })
+            .await?
+            .into_inner();
+        Ok(response.containers.into_iter().map(|c| ContainerId(c.id)).collect())
     }
 
     pub async fn create_container(

@@ -1,0 +1,73 @@
+version = "1.8.13"
+kind = "application"
+summary = "iptables and ip6tables on the nf_tables backend (iptables-nft, statically linked)"
+license = "GPL-2.0-only"
+homepage = "https://www.netfilter.org/projects/iptables/"
+purl = "pkg:generic/iptables@{version}"
+cpe = "netfilter:iptables"
+
+depends-on = ["pkgconf"]
+
+[vars]
+libmnl = "{dep:kubernetes-1-37/libmnl/dev}/usr"
+libnftnl = "{dep:kubernetes-1-37/libnftnl/dev}/usr"
+
+[sources.src]
+url = "https://www.netfilter.org/projects/iptables/files/iptables-{version}.tar.xz"
+sha256 = "1afcd33da9e8f913ace6a2126788162e207e26f5d5e29c6573c0e581ffc58b99"
+
+# CNI plugins (portmap, bridge with ipMasq, Calico's, flannel's) run `iptables` on the host. The
+# extensions are built into the program (`--disable-shared`), so nothing is loaded at run time.
+# Only the nf_tables variant ships: the legacy one is always built, but stays in scratch space
+# (the kernel has no legacy tables), as do the other programs and the `iptables-apply` script.
+# libnftnl's link line carries libmnl after it, as static linking needs.
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--sbindir=/usr/sbin",
+    "--enable-static",
+    "--disable-shared",
+    "--disable-libnfnetlink",
+    "--disable-connlabel",
+    "CFLAGS=-O2 -flto=thin",
+    "libmnl_CFLAGS=-I{vars.libmnl}/include",
+    "libmnl_LIBS=-L{vars.libmnl}/lib -lmnl",
+    "libnftnl_CFLAGS=-I{vars.libnftnl}/include -I{vars.libmnl}/include",
+    "libnftnl_LIBS=-L{vars.libnftnl}/lib -lnftnl -L{vars.libmnl}/lib -lmnl",
+]
+run.dir = "{work:build}"
+
+# `-all-static`, at link time only (configure's tests do not know it): libtool then links the
+# programs fully static, libc included.
+[[build]]
+make.dir = "{work:build}"
+make.args = ["LDFLAGS=-all-static"]
+make.install = true
+make.dest = "{work:install}"
+
+[[build]]
+install.from = "{work:install}/usr/sbin/xtables-nft-multi"
+install.to = "{dest}/usr/bin/xtables-nft-multi"
+install.mode = 0o755
+
+# The multi-call program picks its command from its name.
+[[build]]
+symlinks.dir = "{dest}/usr/bin"
+symlinks.links = [
+    ["iptables", "xtables-nft-multi"],
+    ["iptables-save", "xtables-nft-multi"],
+    ["iptables-restore", "xtables-nft-multi"],
+    ["ip6tables", "xtables-nft-multi"],
+    ["ip6tables-save", "xtables-nft-multi"],
+    ["ip6tables-restore", "xtables-nft-multi"],
+    ["iptables-nft", "xtables-nft-multi"],
+    ["iptables-nft-save", "xtables-nft-multi"],
+    ["iptables-nft-restore", "xtables-nft-multi"],
+    ["ip6tables-nft", "xtables-nft-multi"],
+    ["ip6tables-nft-save", "xtables-nft-multi"],
+    ["ip6tables-nft-restore", "xtables-nft-multi"],
+]

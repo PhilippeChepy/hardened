@@ -1,0 +1,54 @@
+version = "1.1.7"
+kind = "application"
+summary = "nft, the command line tool of the nf_tables packet filter (statically linked)"
+license = "GPL-2.0-only"
+homepage = "https://www.netfilter.org/projects/nftables/"
+purl = "pkg:generic/nftables@{version}"
+cpe = "netfilter:nftables"
+
+depends-on = ["pkgconf"]
+
+[vars]
+libmnl = "{dep:kubernetes-1-37/libmnl/dev}/usr"
+libnftnl = "{dep:kubernetes-1-37/libnftnl/dev}/usr"
+
+[sources.src]
+url = "https://www.netfilter.org/projects/nftables/files/nftables-{version}.tar.xz"
+sha256 = "a6fbf060d8d4fff001517a2b94f356bb4366bfbf0ba366366f9d27cc38caa58f"
+
+# CNI plugins with the nftables backend (and knftables users) run `nft`. No interactive CLI, JSON
+# or man pages; mini-gmp instead of GMP. libnftnl's link line carries libmnl after it, as static
+# linking needs.
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--sysconfdir=/etc",
+    "--enable-static",
+    "--disable-shared",
+    "--disable-man-doc",
+    "--without-cli",
+    "--with-mini-gmp",
+    "CFLAGS=-O2 -flto=thin",
+    "LIBMNL_CFLAGS=-I{vars.libmnl}/include",
+    "LIBMNL_LIBS=-L{vars.libmnl}/lib -lmnl",
+    "LIBNFTNL_CFLAGS=-I{vars.libnftnl}/include -I{vars.libmnl}/include",
+    "LIBNFTNL_LIBS=-L{vars.libnftnl}/lib -lnftnl -L{vars.libmnl}/lib -lmnl",
+]
+run.dir = "{work:build}"
+
+# `-all-static`, at link time only (configure's tests do not know it): libtool then links the
+# programs fully static, libc included.
+[[build]]
+make.dir = "{work:build}"
+make.args = ["LDFLAGS=-all-static"]
+make.install = true
+make.dest = "{work:install}"
+
+[[build]]
+install.from = "{work:install}/usr/sbin/nft"
+install.to = "{dest}/usr/bin/nft"
+install.mode = 0o755

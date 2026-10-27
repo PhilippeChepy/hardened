@@ -8,9 +8,15 @@ license = "Apache-2.0"
 homepage = "https://github.com/kubernetes/kubernetes/tree/master/build/pause"
 purl = "pkg:generic/kubernetes-pause@{version}"
 
-# From the Kubernetes release it comes with.
+# The Kubernetes release the source comes from, the one place it is pinned: kubelet builds from
+# the same release (`{pause.kubernetes}`), so the sandbox and kubelet are bumped together.
+[exports]
+kubernetes-major = "1"
+kubernetes-minor = "37"
+kubernetes = "{pause.kubernetes-major}.{pause.kubernetes-minor}.1"
+
 [sources.src]
-url = "https://raw.githubusercontent.com/kubernetes/kubernetes/v1.37.1/build/pause/linux/pause.c"
+url = "https://raw.githubusercontent.com/kubernetes/kubernetes/v{pause.kubernetes}/build/pause/linux/pause.c"
 sha256 = "14a3fe21ab5f8e62937a2b453e76f3b94b0d3c7c04c3d09bc37195f54c1695ea"
 
 # The sandbox image: the static pause binary, nothing else.
@@ -21,7 +27,22 @@ user = [65535, 65535]
 # Static, as upstream builds it: the pause image contains nothing but this binary, musl and
 # compiler-rt included (with LTO, as everything that ships).
 [[build]]
-run.cmd = ["cc", "-Os", "-flto=thin", "-Wall", "-Werror", "-static", "-s", "-DVERSION=v{version}", "-o", "{work:pause}", "{src}"]
+run.cmd = [
+    "cc",
+    "-Os",
+    "-flto=thin",
+    "-Wall",
+    "-Werror",
+    "-static",
+    "-s",
+    "-DVERSION=v{version}",
+    "-o",
+    "{work:pause}",
+    # C: the source cache names files by checksum, without extension.
+    "-x",
+    "c",
+    "{src}",
+]
 
 [[build]]
 install.from = "{work:pause}"

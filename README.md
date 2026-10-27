@@ -73,12 +73,12 @@ component is cached, keyed by a hash of all its inputs.
 User-data (TOML, optionally gzip and/or base64) declares workloads:
 
 ```toml
-[settings.containers.web]
+[settings.hardened.containers.web]
 image = "docker.io/library/nginx:1.29"
 restart = "always"
 ```
 
-To use the API, generate a PKI and add the `[settings.api]` snippet that `hctl pki user-data`
+To use the API, generate a PKI and add the `[settings.hardened.api]` snippet that `hctl pki user-data`
 prints to your user-data:
 
 ```sh
@@ -94,6 +94,14 @@ cargo run -p hctl -- attest quote --nonce $(openssl rand -hex 32)
 ```
 
 See [docs/user-data.md](docs/user-data.md) for every setting.
+
+### Kubernetes nodes
+
+The `kubernetes-1-37` target (`cargo builder image --target kubernetes-1-37`, artifacts named
+`hardened-kubernetes-1-37-*`) adds kubelet 1.37, the CNI plugins, iptables and nft. With
+[`settings.kubernetes`](docs/user-data.md#settingskubernetes) in its user-data (the API server, the
+cluster CA and a bootstrap token), dust-init runs kubelet and the machine joins the cluster as a
+node.
 
 ## Repository layout
 
@@ -113,6 +121,8 @@ See [docs/user-data.md](docs/user-data.md) for every setting.
 
 - [Architecture](docs/architecture.md): boot flow, disk layout, build system, security model.
 - [User-data reference](docs/user-data.md).
+- [Kubernetes target](docs/kubernetes-target.md): its contents, how a node runs, networking,
+  versions.
 
 ## License
 

@@ -1,0 +1,27 @@
+version = "1.0.5"
+kind = "library"
+summary = "Minimalistic Netlink library, statically linked into iptables and nft"
+license = "LGPL-2.1-or-later"
+homepage = "https://www.netfilter.org/projects/libmnl/"
+purl = "pkg:generic/libmnl@{version}"
+cpe = "netfilter:libmnl"
+
+[sources.src]
+url = "https://www.netfilter.org/projects/libmnl/files/libmnl-{version}.tar.bz2"
+sha256 = "274b9b919ef3152bfb3da3a13c950dd60d6e2bcd54230ffeca298d03b40d0525"
+
+# Headers, static library and pkg-config file, in their `/usr` layout: linked into iptables and
+# nft, nothing goes to the tree.
+[[build]]
+configure.dest = "{out:dev}"
+configure.args = [
+    "--libdir=/usr/lib",
+    "--enable-static",
+    "--disable-shared",
+    "CFLAGS=-O2 -flto=thin",
+]
+
+# Without its libtool archive, which names its dependencies at their install path, not in
+# their outputs: users link with the flags they are given.
+[[build]]
+remove = "{out:dev}/usr/lib/*.la"

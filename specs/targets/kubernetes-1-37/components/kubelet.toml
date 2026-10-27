@@ -1,0 +1,31 @@
+# The release pause comes from (standard's): bump it there.
+version = "{pause.kubernetes}"
+kind = "application"
+summary = "Kubernetes node agent: runs the pods the API server schedules on the node, through CRI"
+license = "Apache-2.0"
+homepage = "https://kubernetes.io"
+purl = "pkg:golang/k8s.io/kubernetes@v{version}"
+cpe = "kubernetes:kubernetes"
+
+depends-on = ["go"]
+
+[sources.src]
+url = "https://github.com/kubernetes/kubernetes/archive/refs/tags/v{version}.tar.gz"
+sha256 = "89295ac375eb0fdfe68a0696d81be615771d6b27c7ad9bb675dc6ffd0d2ce5f3"
+
+# Pure Go and static, as upstream releases it (`CGO_ENABLED=0`). The repository is a Go workspace
+# (the staging modules) vendored upstream with `go work vendor`. The tarball already carries the
+# commit (`gitCommit`, through `export-subst`); the version variables are those of
+# `hack/lib/version.sh`, for both packages reading them. `buildDate` keeps its fixed default.
+[[build]]
+go-build.commands = [["./cmd/kubelet", "/usr/bin/kubelet"]]
+go-build.vars = [
+    ["k8s.io/component-base/version.gitVersion", "v{version}"],
+    ["k8s.io/component-base/version.gitMajor", "{pause.kubernetes-major}"],
+    ["k8s.io/component-base/version.gitMinor", "{pause.kubernetes-minor}"],
+    ["k8s.io/component-base/version.gitTreeState", "clean"],
+    ["k8s.io/client-go/pkg/version.gitVersion", "v{version}"],
+    ["k8s.io/client-go/pkg/version.gitMajor", "{pause.kubernetes-major}"],
+    ["k8s.io/client-go/pkg/version.gitMinor", "{pause.kubernetes-minor}"],
+    ["k8s.io/client-go/pkg/version.gitTreeState", "clean"],
+]

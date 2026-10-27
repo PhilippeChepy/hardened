@@ -13,7 +13,7 @@ mod logs;
 mod pod;
 mod supervisor;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,6 +112,56 @@ pub enum Error {
     ShuttingDown,
 }
 
+/// Connects to containerd (retrying until `timeout`, until its CRI runtime is ready) and imports
+/// the bundled images of `images_dir`: what kubelet needs, when it runs the pods instead of
+/// [`Manager`].
+pub async fn import_bundled(socket: &Path, images_dir: &Path, timeout: Duration) -> anyhow::Result<()> {
+    connect_and_import(socket, images_dir, timeout).await.map(drop)
+}
+
+async fn connect_and_import(socket: &Path, images_dir: &Path, timeout: Duration) -> anyhow::Result<Cri> {
+    let (cri, channel, version) = Cri::connect(socket, timeout).await?;
+    tracing::info!(
+        "connected to {} {} (CRI {})",
+        version.runtime_name,
+        version.runtime_version,
+        version.runtime_api_version
+    );
+    for path in bundled::archives(images_dir).await? {
+        let archive = bundled::Archive::read(&path).await?;
+        let reference = archive.image.reference.clone();
+        let imported = bundled::import(&channel, &cri, archive)
+            .await
+            .with_context(|| format!("importing {} from {}", reference, path.display()))?;
+        match imported {
+            bundled::Imported::Imported => tracing::info!("imported bundled image {reference}"),
+            bundled::Imported::AlreadyPresent => tracing::info!("bundled image {reference} already imported"),
+        }
+    }
+    Ok(cri)
+}
+
+/// Stops every container of the runtime (the stop signal, then SIGKILL after `grace`), then every
+/// pod sandbox, which releases their networks. kubelet's pods are stopped this way at shutdown:
+/// without systemd, kubelet's graceful node shutdown has nothing to hook into.
+pub async fn stop_all_pods(socket: &Path, grace: Duration) -> anyhow::Result<()> {
+    let (cri, ..) = Cri::connect(socket, Duration::from_secs(5)).await?;
+    let containers = cri.running_containers().await.context("listing containers")?;
+    let cri = &cri;
+    let stops = containers.iter().map(|id| async move {
+        if let Err(status) = cri.stop_container(id, grace).await {
+            tracing::warn!("stopping container {id}: {status}");
+        }
+    });
+    futures::future::join_all(stops).await;
+    for (sandbox, _) in cri.sandboxes(HashMap::new()).await.context("listing pod sandboxes")? {
+        if let Err(status) = cri.stop_sandbox(&sandbox).await {
+            tracing::warn!("stopping pod sandbox {sandbox}: {status}");
+        }
+    }
+    Ok(())
+}
+
 struct Workload {
     definition: ImageWorkload,
     source: Source,
@@ -148,25 +198,7 @@ impl Manager {
                 .await
                 .with_context(|| format!("creating {}", dir.display()))?;
         }
-        let (cri, channel, version) = Cri::connect(socket, timeout).await?;
-        tracing::info!(
-            "connected to {} {} (CRI {})",
-            version.runtime_name,
-            version.runtime_version,
-            version.runtime_api_version
-        );
-
-        for path in bundled::archives(images_dir).await? {
-            let archive = bundled::Archive::read(&path).await?;
-            let reference = archive.image.reference.clone();
-            let imported = bundled::import(&channel, &cri, archive)
-                .await
-                .with_context(|| format!("importing {} from {}", reference, path.display()))?;
-            match imported {
-                bundled::Imported::Imported => tracing::info!("imported bundled image {reference}"),
-                bundled::Imported::AlreadyPresent => tracing::info!("bundled image {reference} already imported"),
-            }
-        }
+        let cri = connect_and_import(socket, images_dir, timeout).await?;
 
         // Nothing runs yet: any workload pod is a leftover.
         let leftovers = cri
