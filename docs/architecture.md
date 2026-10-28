@@ -21,6 +21,7 @@
 | CA certificates | registry TLS | — |
 | dust-init | init/agent | static PIE (musl, libunwind; Rust LTO) |
 | dust-api | mTLS API proxy, a sandboxed process of dust-init | static PIE (musl, libunwind; Rust LTO) |
+| dust-ntp | SNTP client, a sandboxed process of dust-init | static PIE (musl, libunwind; Rust LTO) |
 | cryptsetup | formats and opens the encrypted state partition (LUKS2), run by dust-init | static (musl, OpenSSL's libcrypto, json-c, libdevmapper, popt, libuuid; LTO) |
 | mke2fs | creates the filesystem of the encrypted state partition, run by dust-init | static (musl, e2fsprogs' libraries; LTO) |
 
@@ -69,7 +70,8 @@ into `/run/hardened`.
    3. detects the platform from DMI, or from `hardened.platform=` on the kernel command line;
    4. runs DHCPv4 on every physical NIC (IPv6 uses kernel SLAAC);
    5. fetches metadata and user-data, then validates the user-data and applies the hostname,
-      sysctls and kernel modules;
+      starts the sandboxed `dust-ntp` (see [Time](#time)), and applies the sysctls and kernel
+      modules;
    6. grows the state partition with the disk and mounts it on `/var`, first unlocking it with the
       TPM (or formatting it) when user-data enables its encryption;
    7. starts and supervises containerd (and, when kubelet runs, first makes every mount shared and
@@ -86,7 +88,7 @@ into `/run/hardened`.
    dust-init's log after the first failed attempt), settings, attestation and power calls work.
 5. **Shutdown:** a power request comes from the API, a signal or the ACPI power button. dust-init
    then stops dust-api and the workloads (SIGTERM, then SIGKILL after 20 s), or kubelet and every
-   pod, stops containerd, unmounts `/var` and calls `reboot(2)`.
+   pod, stops containerd and dust-ntp, unmounts `/var` and calls `reboot(2)`.
 
 If boot fails, dust-init logs the error and reboots 30 seconds later. A panic in a task is logged
 and does not bring PID 1 down.
@@ -224,6 +226,37 @@ between `fork` and `exec`; `api.rs` only adds its binds, limits and networking s
   CPU, so a flood cannot starve PID 1 or the workloads.
 
 dust-init forwards its output to its own log and restarts it with exponential backoff.
+
+## Time
+
+The clock starts from the hypervisor's (kvm-clock, the RTC). `dust-ntp` keeps it in sync with
+NTP servers, in the background: nothing waits for it.
+
+- **Servers:** `settings.ntp.time-servers`, else those of DHCP (option 42, every interface's,
+  the primary's first), else `pool.ntp.org`; chosen once, at boot.
+- **Protocol:** SNTP (RFC 4330). Every poll interval, dust-ntp resolves each name (up to 4
+  addresses each), queries every address, and keeps the reply with the smallest synchronization
+  distance (the server's root distance plus half the round trip). A request carries a random
+  cookie as its transmit timestamp, which a reply must echo. It drops replies from unsynchronized
+  servers (stratum 16, leap alarm) and ones more than 1.5 s from their reference clock, polls
+  less often after a `RATE` kiss-o'-death, and stops querying an address that sends `DENY` or
+  `RSTR`.
+- **Corrections:** an offset of 0.4 s or more steps the clock (`ADJ_SETOFFSET`); a smaller one goes
+  to the kernel's PLL (`ADJ_OFFSET`, with `STA_PLL`), which slews the clock and learns its
+  frequency error, so time never jumps once in sync. Each correction clears `STA_UNSYNC`, so the
+  kernel copies the clock to the RTC every 11 minutes. The poll interval goes from 32 s up to
+  2048 s while the clock stays within 10 ms, and back down past 50 ms or after a step.
+- **Sandbox:** the one of dust-api ([API](#api)), with uid/gid 65533 (which the control socket
+  does not admit) and `CAP_SYS_TIME`, kept in its bounding and ambient sets. It sees `/etc` and
+  `/run/hardened` (for `resolv.conf` and `hosts`) read-only, and `/run/dust-ntp`, where it writes
+  its status, read-write. Its seccomp allowlist adds UDP sockets, the resolver's calls, `rename`
+  and `clock_adjtime`; its cgroup caps it at 32 MiB, 4 tasks and a tenth of a CPU.
+- **API:** `Machine/Time` (`hctl time`) shows whether the kernel considers the clock synchronized,
+  its error bounds and frequency correction, the servers and where they come from, and the last
+  correction (server, stratum, offset, round trip) or why the last round made none.
+
+Keeping `CAP_SYS_TIME` gives a compromised dust-ntp nothing beyond what anyone answering its
+unauthenticated queries can do: set the clock.
 
 ## Attestation
 
@@ -415,13 +448,16 @@ line, rather than inline tables.
 | Malicious kernel code | Signed modules only (persistent key in `build/keys/`), and modules and firmware load only from the dm-verity root (LoadPin, pinned at boot), so a leaked key alone loads nothing; no module autoloading; lockdown=integrity; no kexec |
 | Escalation through setuid | No setuid binaries (enforced at build time) |
 | Bugs in the API | TLS and network handling in an unprivileged container; role checks before forwarding |
+| Bugs in the NTP client | Run in a sandbox, with `CAP_SYS_TIME` only |
 | Supply chain | Pinned and checksummed sources, offline builds, SBOM including every linked library |
 | Silent configuration drift | Configuration comes only from user-data and the API; unknown keys are rejected |
 | Copies of the state disk (snapshots, detached volumes) | Optional LUKS2 encryption of `/var`, its key sealed to the vTPM and the booted image (PCR 11) |
 
 ## Known gaps / roadmap
 
-- **Time:** no NTP/SNTP client yet; time comes from the hypervisor clock.
+- **Time:** unauthenticated SNTP (no NTS): anyone on the path can shift the clock. The servers are
+  chosen at boot (a DHCP renewal changing option 42 is not followed). Leap second announcements
+  are ignored: the clock is stepped after one. No PTP (`ptp_kvm`) source.
 - **Registries:** credentials go through the CRI plugin's `configs`, deprecated in containerd 2
   and removed in 2.7. The plan for 2.7 is a credential helper with stock containerd (no patch):
   dust-init would give it the credentials of `settings.container-registry`, with the same

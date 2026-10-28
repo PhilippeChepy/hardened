@@ -621,6 +621,7 @@ dependencies = [
  "containerd-api",
  "cri-api",
  "dhcproto",
+ "dust-ntp",
  "dust-proto",
  "flate2",
  "futures",
@@ -652,6 +653,22 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "dust-ntp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

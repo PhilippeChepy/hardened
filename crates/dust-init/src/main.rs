@@ -10,6 +10,7 @@ mod init;
 mod logging;
 mod machine;
 mod net;
+mod ntp;
 mod platform;
 mod power;
 mod process;

@@ -6,6 +6,7 @@ members = [
     "crates/dust-builder",
     "crates/dust-init",
     "crates/dust-api",
+    "crates/dust-ntp",
     "crates/dust-proto",
     "crates/hctl",
 ]
@@ -22,6 +23,7 @@ publish = false
 # In-tree crates
 containerd-api = { path = "crates/containerd-api" }
 cri-api = { path = "crates/cri-api" }
+dust-ntp = { path = "crates/dust-ntp" }
 dust-proto = { path = "crates/dust-proto" }
 
 anyhow = "1.0.104"
@@ -30,6 +32,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 flate2 = "1.1.10"
 futures = "0.3.34"
 hex = "0.4"
+libc = "0.2"
 prost = "0.14.4"
 prost-types = "0.14.4"
 prost-build = "0.14"

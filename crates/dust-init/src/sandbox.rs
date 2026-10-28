@@ -6,8 +6,8 @@
 //! - a read-only tmpfs root (`pivot_root`) holding only its program (static, like every program
 //!   of the image) and the [`Bind`]s of its [`Spec`]: no `/proc`, `/sys`, `/dev`, `/etc`, `/var`
 //!   or libraries, and nothing else to execute;
-//! - a uid/gid without supplementary groups, an empty capability bounding set and
-//!   `no_new_privs`;
+//! - a uid/gid without supplementary groups, no capability but those of its [`Spec`] (in its
+//!   bounding and ambient sets, so they survive the `exec`), and `no_new_privs`;
 //! - a seccomp allowlist ([`BASE_SYSCALLS`] plus the spec's [`Syscalls`]); any other call kills
 //!   it. `clone` is limited to threads;
 //! - a cgroup (`/sys/fs/cgroup/sandbox/<name>`) capping its memory, tasks and CPU.
@@ -55,18 +55,22 @@ pub struct Spec {
     pub env: Vec<(&'static str, String)>,
     /// uid and gid.
     pub id: u32,
-    /// Host paths visible read-only at the same path in the sandbox. They must not be nested.
+    /// Host paths visible at the same path in the sandbox. They must not be nested.
     pub binds: Vec<Bind>,
+    /// Capabilities it keeps; usually none.
+    pub capabilities: CapabilitySet,
     pub limits: Limits,
     /// System calls allowed on top of [`BASE_SYSCALLS`].
     pub syscalls: Syscalls,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bind {
     pub path: &'static str,
     /// Whether files under it may be executed (or mapped executable).
     pub exec: bool,
+    /// Whether it is writable; otherwise read-only.
+    pub writable: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -152,6 +156,7 @@ fn log_confinement(name: &str, pid: u32) {
         pid,
         uid = field("Uid"),
         cap_bounding = field("CapBnd"),
+        cap_ambient = field("CapAmb"),
         no_new_privs = field("NoNewPrivs"),
         seccomp_filters = field("Seccomp_filters"),
         cgroup = cgroup.trim(),
@@ -211,9 +216,9 @@ struct Prepared {
     dirs: Vec<CString>,
     /// Empty files to create in the root, as mount points of file binds.
     files: Vec<CString>,
-    /// Source, target in the root, and whether it may hold executables.
-    binds: Vec<(CString, CString, bool)>,
+    binds: Vec<Mount>,
     id: u32,
+    capabilities: CapabilitySet,
     filters: Vec<BpfProgram>,
 }
 
@@ -227,6 +232,7 @@ impl Prepared {
         let binds: Vec<Bind> = std::iter::once(Bind {
             path: spec.program,
             exec: true,
+            writable: false,
         })
         .chain(spec.binds.iter().copied())
         .collect();
@@ -261,12 +267,29 @@ impl Prepared {
             binds: layout
                 .mounts
                 .iter()
-                .map(|(source, target, exec)| Ok((c_path(source)?, c_path(target)?, *exec)))
+                .map(|(source, target, bind)| {
+                    Ok(Mount {
+                        source: c_path(source)?,
+                        target: c_path(target)?,
+                        exec: bind.exec,
+                        writable: bind.writable,
+                    })
+                })
                 .collect::<anyhow::Result<_>>()?,
             id: spec.id,
+            capabilities: spec.capabilities,
             filters: seccomp_filters(&spec.syscalls)?,
         })
     }
+}
+
+/// A bind mount into the root.
+struct Mount {
+    source: CString,
+    /// In the root, before `pivot_root`.
+    target: CString,
+    exec: bool,
+    writable: bool,
 }
 
 /// The mount points to create in the root (`root`, before `pivot_root`) for binds, each with
@@ -276,7 +299,8 @@ struct Layout {
     /// Parents before their children.
     dirs: Vec<PathBuf>,
     files: Vec<PathBuf>,
-    mounts: Vec<(PathBuf, PathBuf, bool)>,
+    /// Source, target in the root, and the bind's options.
+    mounts: Vec<(PathBuf, PathBuf, Bind)>,
 }
 
 impl Layout {
@@ -295,7 +319,7 @@ impl Layout {
             } else {
                 files.push(in_root(source));
             }
-            mounts.push((source.to_owned(), in_root(source), bind.exec));
+            mounts.push((source.to_owned(), in_root(source), bind));
         }
         Self {
             dirs: dirs.into_iter().collect(),
@@ -373,13 +397,16 @@ fn enter(prepared: &Prepared) -> std::io::Result<()> {
             Mode::from_raw_mode(0o644),
         )?);
     }
-    for (source, target, exec) in &prepared.binds {
-        mount_bind(source.as_c_str(), target.as_c_str())?;
-        let mut flags = MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
-        if !exec {
+    for bind in &prepared.binds {
+        mount_bind(bind.source.as_c_str(), bind.target.as_c_str())?;
+        let mut flags = MountFlags::BIND | MountFlags::NOSUID | MountFlags::NODEV;
+        if !bind.exec {
             flags |= MountFlags::NOEXEC;
         }
-        mount_remount(target.as_c_str(), flags, c"")?;
+        if !bind.writable {
+            flags |= MountFlags::RDONLY;
+        }
+        mount_remount(bind.target.as_c_str(), flags, c"")?;
     }
     mount_remount(root, MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV, c"")?;
     rustix::process::chdir(root)?;
@@ -387,18 +414,37 @@ fn enter(prepared: &Prepared) -> std::io::Result<()> {
     unmount(c".", UnmountFlags::DETACH)?;
     rustix::process::chdir(c"/")?;
 
-    // Empty the bounding set while still privileged; the uid change then clears the others.
-    for capability in CapabilitySet::all().iter() {
+    // Empty the bounding set but for the kept capabilities while still privileged; the uid
+    // change then clears the others (all of them, unless kept).
+    let kept = prepared.capabilities;
+    for capability in CapabilitySet::all().difference(kept).iter() {
         match rustix::thread::remove_capability_from_bounding_set(capability) {
             Ok(()) | Err(rustix::io::Errno::INVAL) => {}
             Err(e) => return Err(e.into()),
         }
+    }
+    if !kept.is_empty() {
+        rustix::thread::set_keep_capabilities(true)?;
     }
     rustix::thread::set_thread_groups(&[])?;
     let (uid, gid) = (Uid::from_raw(prepared.id), Gid::from_raw(prepared.id));
     rustix::thread::set_thread_res_gid(gid, gid, gid)?;
     rustix::thread::set_thread_res_uid(uid, uid, uid)?;
     rustix::thread::clear_ambient_capability_set()?;
+    if !kept.is_empty() {
+        // Permitted kept through the uid change; inheritable and ambient carry them through the
+        // `exec` of a program without file capabilities.
+        rustix::thread::set_keep_capabilities(false)?;
+        let sets = rustix::thread::CapabilitySets {
+            effective: kept,
+            permitted: kept,
+            inheritable: kept,
+        };
+        rustix::thread::set_capabilities(None, sets)?;
+        for capability in kept.iter() {
+            rustix::thread::configure_capability_in_ambient_set(capability, true)?;
+        }
+    }
 
     // Sets no_new_privs, then installs each filter; the strictest verdict wins.
     for filter in &prepared.filters {
@@ -591,7 +637,11 @@ mod tests {
 
     #[test]
     fn layout_mirrors_host_paths() {
-        let bind = |path, exec| Bind { path, exec };
+        let bind = |path, exec| Bind {
+            path,
+            exec,
+            writable: false,
+        };
         let layout = Layout::new(
             Path::new("/run/sandbox/x"),
             &[
@@ -615,7 +665,11 @@ mod tests {
         assert_eq!(layout.files, paths(&["/run/sandbox/x/usr/bin/x"]));
         assert_eq!(
             layout.mounts[2],
-            ("/run/x/tls".into(), "/run/sandbox/x/run/x/tls".into(), false)
+            (
+                "/run/x/tls".into(),
+                "/run/sandbox/x/run/x/tls".into(),
+                bind("/run/x/tls", false)
+            )
         );
     }
 }

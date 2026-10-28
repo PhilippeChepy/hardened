@@ -14,6 +14,8 @@ service Machine {
   rpc GetSettings(google.protobuf.Empty) returns (SettingsResponse);
   // What backs /var on this boot: the state partition (plain or encrypted), or a tmpfs.
   rpc Storage(google.protobuf.Empty) returns (StorageResponse);
+  // Time synchronization: the clock's state, and the NTP client's last correction.
+  rpc Time(google.protobuf.Empty) returns (TimeResponse);
   rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
@@ -68,6 +70,45 @@ message StorageResponse {
   // Size of the filesystem on /var, and what is available to unprivileged users.
   uint64 size_bytes = 5;
   uint64 available_bytes = 6;
+}
+
+message TimeResponse {
+  enum Origin {
+    ORIGIN_UNSPECIFIED = 0;
+    // settings.ntp.time-servers.
+    ORIGIN_SETTINGS = 1;
+    // DHCP (option 42).
+    ORIGIN_DHCP = 2;
+    // The default: pool.ntp.org.
+    ORIGIN_DEFAULT = 3;
+  }
+  // Whether the kernel considers the clock synchronized: corrected recently enough that its
+  // maximum error stays below 16 s.
+  bool synchronized = 1;
+  // The kernel's estimate of the clock's error, and its bound.
+  uint64 estimated_error_us = 2;
+  uint64 max_error_us = 3;
+  // The frequency correction the kernel applies, in parts per million.
+  double frequency_ppm = 4;
+  // The servers queried, in order of preference, and where they come from.
+  repeated string servers = 5;
+  Origin origin = 6;
+  // The last correction, if any: the server, the address that answered, its stratum and
+  // reference (a clock code at stratum 1, its own server's address above).
+  string server = 7;
+  string address = 8;
+  uint32 stratum = 9;
+  string reference = 10;
+  // What the clock was corrected by (positive: it was behind), the round trip, and whether the
+  // clock was stepped rather than slewed.
+  int64 offset_ns = 11;
+  int64 delay_ns = 12;
+  bool stepped = 13;
+  google.protobuf.Timestamp corrected_at = 14;
+  // Seconds between queries.
+  uint32 poll_interval_seconds = 15;
+  // Why the last round corrected nothing; empty if it did.
+  string error = 16;
 }
 
 // Containers run by dust through containerd.

@@ -9,7 +9,7 @@ use anyhow::Context as _;
 use dust_proto::v1::{
     self, ApplyWorkloadRequest, EventLogResponse, HashAlgorithm, ListWorkloadsResponse, LogChunk, LogEntry,
     LogsRequest, PcrValue, PcrsRequest, PcrsResponse, QuoteRequest, QuoteResponse, SettingsResponse, StorageResponse,
-    VersionResponse, WorkloadLogsRequest, WorkloadRef, WorkloadSource,
+    TimeResponse, VersionResponse, WorkloadLogsRequest, WorkloadRef, WorkloadSource,
     attestation_server::{Attestation, AttestationServer},
     machine_server::{Machine as MachineService, MachineServer},
     workloads_server::{Workloads, WorkloadsServer},
@@ -27,9 +27,9 @@ use crate::attestation::{self, HashAlg, Tpm, TpmError};
 use crate::logging::LogRecord;
 use crate::machine::{Machine, PowerRequest};
 use crate::settings::{ContainerSettings, ImageWorkload, MountSettings, RestartPolicy};
-use crate::storage;
 use crate::types::{InvalidValue, WorkloadName};
 use crate::workloads::{self, LogDecoder, Manager, Source, State};
+use crate::{ntp, storage};
 
 /// How often a followed workload log is checked for new output.
 const LOG_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -158,6 +158,12 @@ impl MachineService for MachineApi {
             response.available_bytes = fs.f_bavail * fs.f_frsize;
         }
         Ok(Response::new(response))
+    }
+
+    async fn time(&self, _: Request<()>) -> Result<Response<TimeResponse>, Status> {
+        let clock = dust_ntp::clock::state().map_err(|e| internal(format!("reading the clock's state: {e}")))?;
+        let status = ntp::status().map_err(|e| internal(format!("reading dust-ntp's status: {e}")))?;
+        Ok(Response::new(time_response(&self.0.time_servers, clock, status)))
     }
 
     async fn reboot(&self, _: Request<()>) -> Result<Response<()>, Status> {
@@ -544,6 +550,46 @@ fn storage_response(state: &storage::State) -> StorageResponse {
         size_bytes: 0,
         available_bytes: 0,
     }
+}
+
+/// The API's view of time synchronization: the kernel's, and dust-ntp's `status`, if it ran.
+fn time_response(
+    servers: &ntp::Servers,
+    clock: dust_ntp::clock::State,
+    status: Option<dust_ntp::Status>,
+) -> TimeResponse {
+    use v1::time_response::Origin;
+    let mut response = TimeResponse {
+        synchronized: clock.synchronized,
+        estimated_error_us: clock.estimated_error.as_micros().try_into().unwrap_or(u64::MAX),
+        max_error_us: clock.max_error.as_micros().try_into().unwrap_or(u64::MAX),
+        frequency_ppm: clock.frequency_ppm,
+        servers: servers.names.clone(),
+        origin: match servers.origin {
+            ntp::Origin::Settings => Origin::Settings,
+            ntp::Origin::Dhcp => Origin::Dhcp,
+            ntp::Origin::Default => Origin::Default,
+        }
+        .into(),
+        ..TimeResponse::default()
+    };
+    let Some(status) = status else {
+        return response;
+    };
+    response.poll_interval_seconds = status.poll_seconds;
+    response.error = status.error.unwrap_or_default();
+    if let Some(last) = status.last {
+        response.server = last.server;
+        response.address = last.address;
+        response.stratum = last.stratum.into();
+        response.reference = last.reference;
+        response.offset_ns = last.offset_ns;
+        response.delay_ns = last.delay_ns;
+        response.stepped = last.stepped;
+        let since_epoch = Duration::from_nanos(last.at_unix_ns.max(0).unsigned_abs());
+        response.corrected_at = Some((std::time::SystemTime::UNIX_EPOCH + since_epoch).into());
+    }
+    response
 }
 
 #[cfg(test)]

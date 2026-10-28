@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 
 use crate::attestation::Tpm;
 use crate::logging::LogRing;
+use crate::ntp;
 use crate::platform::Platform;
 use crate::settings::Settings;
 use crate::storage;
@@ -42,6 +43,8 @@ pub struct Machine {
     pub settings: Settings,
     /// What backs `/var`, fixed at boot.
     pub storage: storage::State,
+    /// The servers dust-ntp queries, fixed at boot.
+    pub time_servers: ntp::Servers,
     pub logs: LogRing,
     /// Set once containerd is connected. Until then (or if it never connects), the workload
     /// calls of the API are unavailable; the rest of the API works, to diagnose it remotely.

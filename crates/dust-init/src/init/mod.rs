@@ -21,6 +21,7 @@ use crate::api::Api;
 use crate::attestation::Tpm;
 use crate::logging::{self, LogRing};
 use crate::machine::{Machine, MachineInfo, PowerRequest};
+use crate::ntp::{Ntp, Servers};
 use crate::platform::{Metadata, Platform};
 use crate::process::Reaper;
 use crate::settings::{ApiSettings, DnsSettings, KubernetesSettings, Settings, UserData};
@@ -161,6 +162,12 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
     set_hostname(&hostname)?;
     info!(%hostname, instance_id = instance_id.as_deref().unwrap_or("none"), "identity configured");
 
+    // In the background: the clock is already close (the hypervisor's), dust-ntp corrects it.
+    let time_servers = Servers::choose(&settings.ntp, &network.ntp_servers);
+    let ntp = Ntp::start(reaper.clone(), &time_servers)
+        .inspect_err(|e| error!("cannot start time synchronization: {e:#}"))
+        .ok();
+
     let kubelet = match &settings.kubernetes {
         KubernetesSettings::Enabled(config) if kubelet::installed() => Some(config),
         KubernetesSettings::Enabled(_) => {
@@ -217,6 +224,7 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
         },
         settings: settings.clone(),
         storage,
+        time_servers,
         logs,
         workloads: OnceLock::new(),
         tpm,
@@ -264,6 +272,9 @@ async fn boot(logs: LogRing) -> anyhow::Result<PowerRequest> {
         }
     }
     containerd.stop(Duration::from_secs(10)).await;
+    if let Some(ntp) = ntp {
+        ntp.stop().await;
+    }
     drop(machine);
     Ok(request)
 }

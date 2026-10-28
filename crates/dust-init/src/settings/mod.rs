@@ -22,7 +22,7 @@ pub use registry::{RegistrySettings, cri_auth_configs, hosts_files};
 
 use crate::types::{
     Certificates, ContainerPath, DomainName, Hostname, ImageRef, InvalidValue, ModuleName, PrivateKey, SysctlKey,
-    VarPath, WorkloadName,
+    TimeServer, VarPath, WorkloadName,
 };
 
 /// Root of the user-data document.
@@ -44,6 +44,8 @@ pub struct Settings {
     pub network: NetworkSettings,
     #[serde(default)]
     pub dns: DnsSettings,
+    #[serde(default)]
+    pub ntp: NtpSettings,
     #[serde(default)]
     pub kubernetes: KubernetesSettings,
     #[serde(default)]
@@ -154,6 +156,16 @@ pub struct DnsSettings {
     pub name_servers: Vec<IpAddr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_list: Vec<DomainName>,
+}
+
+/// Time synchronization (Bottlerocket's `settings.ntp`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct NtpSettings {
+    /// The servers, in order of preference. When empty, those of DHCP (option 42), or else
+    /// `pool.ntp.org`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub time_servers: Vec<TimeServer>,
 }
 
 /// The remote API, served by `dust-api`.
@@ -458,6 +470,9 @@ hostname = "web-1"
 name-servers = ["192.0.2.53", "2001:db8::53"]
 search-list = ["corp.example.com"]
 
+[settings.ntp]
+time-servers = ["time.example.com", "192.0.2.123", "2001:db8::123"]
+
 [settings.kernel.modules.wireguard]
 autoload = true
 
@@ -491,6 +506,7 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
         assert!(!modules["dccp"].allowed && !modules["dccp"].autoload);
         assert_eq!(settings.dns.name_servers.len(), 2);
         assert_eq!(settings.dns.search_list[0].as_str(), "corp.example.com");
+        assert_eq!(settings.ntp.time_servers.len(), 3);
         let ApiSettings::Enabled(api) = &settings.hardened.api else {
             panic!("API should be enabled")
         };
@@ -577,6 +593,11 @@ mounts = [{{ source = "/var/lib/web", destination = "/data" }}]
                 "name server that is not an IP",
             ),
             ("[settings.dns]\nsearch-list = [\"a b\"]\n", "bad search domain"),
+            (
+                "[settings.ntp]\ntime-servers = [\"ntp://time.example\"]\n",
+                "time server that is a URL",
+            ),
+            ("[settings.ntp]\noptions = [\"iburst\"]\n", "chrony options"),
             (
                 "[settings.hardened.storage]\nencryption = \"luks\"\n",
                 "unknown encryption",

@@ -14,6 +14,7 @@ clap.workspace = true
 containerd-api.workspace = true
 cri-api.workspace = true
 dhcproto.workspace = true
+dust-ntp.workspace = true
 dust-proto.workspace = true
 flate2.workspace = true
 futures.workspace = true

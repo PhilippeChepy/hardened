@@ -133,6 +133,16 @@ validated_string!(
     check_domain_name
 );
 
+validated_string!(
+    /// An NTP server: a host name or an IP address.
+    TimeServer,
+    "time server",
+    |server| match server.parse::<std::net::IpAddr>() {
+        Ok(_) => Ok(()),
+        Err(_) => check_domain_name(server).map_err(|_| "must be a host name or an IP address"),
+    }
+);
+
 impl Hostname {
     /// Cleans up a hostname offered by a platform or DHCP server: first word, trailing dots
     /// stripped, lowercased; falls back to its first label when the whole name is invalid.

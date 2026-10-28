@@ -26,7 +26,7 @@ pub const CLIENT_PORT: u16 = 68;
 const INFINITE: u32 = u32::MAX;
 
 /// Options asked for in every request (option 55).
-const REQUESTED_OPTIONS: [OptionCode; 12] = [
+const REQUESTED_OPTIONS: [OptionCode; 13] = [
     OptionCode::SubnetMask,
     OptionCode::Router,
     OptionCode::DomainNameServer,
@@ -39,6 +39,7 @@ const REQUESTED_OPTIONS: [OptionCode; 12] = [
     OptionCode::Rebinding,
     OptionCode::DomainSearch,
     OptionCode::ClasslessStaticRoute,
+    OptionCode::NtpServers,
 ];
 
 /// Largest DHCP message we accept (option 57), an Ethernet frame minus the IP and UDP headers.
@@ -132,6 +133,8 @@ pub struct Lease {
     /// Classless static routes (option 121); when present the routers are ignored (RFC 3442).
     pub classless_routes: Vec<Route>,
     pub nameservers: Vec<Ipv4Addr>,
+    /// NTP servers (option 42), in order of preference.
+    pub ntp_servers: Vec<Ipv4Addr>,
     pub domain_name: Option<String>,
     /// Domain search list (option 119).
     pub search: Vec<String>,
@@ -158,7 +161,7 @@ impl Lease {
             _ => classful_prefix(address),
         };
         let addresses = |code| match opts.get(code) {
-            Some(DhcpOption::Router(list) | DhcpOption::DomainNameServer(list)) => list
+            Some(DhcpOption::Router(list) | DhcpOption::DomainNameServer(list) | DhcpOption::NtpServers(list)) => list
                 .iter()
                 .copied()
                 .filter(|a| !a.is_unspecified() && !a.is_broadcast())
@@ -208,6 +211,7 @@ impl Lease {
             routers: addresses(OptionCode::Router),
             classless_routes,
             nameservers: addresses(OptionCode::DomainNameServer),
+            ntp_servers: addresses(OptionCode::NtpServers),
             domain_name,
             search,
             hostname,
@@ -292,7 +296,7 @@ impl fmt::Display for Nak {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Offer(Offer),
-    Ack(Lease),
+    Ack(Box<Lease>),
     Nak(Nak),
 }
 
@@ -412,7 +416,7 @@ pub fn parse_reply(buf: &[u8], xid: u32, mac: &[u8; 6], source: Ipv4Addr, sent: 
                 server: server_identifier(&msg).unwrap_or(source),
             }))
         }
-        Some(MessageType::Ack) => Lease::from_ack(&msg, source, sent).map(Reply::Ack),
+        Some(MessageType::Ack) => Lease::from_ack(&msg, source, sent).map(|lease| Reply::Ack(Box::new(lease))),
         Some(MessageType::Nak) => Ok(Reply::Nak(Nak {
             server: server_identifier(&msg),
             message: match msg.opts().get(OptionCode::Message) {
@@ -522,7 +526,7 @@ pub fn bind_port(ifname: &str, port: u16) -> io::Result<UdpSocket> {
 /// How a bound lease ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    Renewed(Lease),
+    Renewed(Box<Lease>),
     Nak(Nak),
     Expired,
 }
@@ -596,7 +600,7 @@ impl<T: Transport> Client<T> {
             let from_selected =
                 |r: &Reply| matches!(r, Reply::Ack(_) | Reply::Nak(_)) && r.server().is_none_or(|s| s == offer.server);
             match self.transact(link, &msg, broadcast, wait, from_selected).await? {
-                Some(Reply::Ack(lease)) => return Ok(lease),
+                Some(Reply::Ack(lease)) => return Ok(*lease),
                 Some(Reply::Nak(nak)) => return Err(AcquireError::Nak(nak)),
                 _ => {}
             }
@@ -721,6 +725,7 @@ pub(super) mod tests {
             DhcpOption::SubnetMask(Ipv4Addr::new(255, 255, 255, 0)),
             DhcpOption::Router(vec![Ipv4Addr::new(10, 0, 0, 1)]),
             DhcpOption::DomainNameServer(vec![Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 0, 0, 3)]),
+            DhcpOption::NtpServers(vec![Ipv4Addr::new(10, 0, 0, 4)]),
             DhcpOption::DomainName("Example.internal.".into()),
             DhcpOption::Hostname("web-1\0".into()),
             DhcpOption::InterfaceMtu(1460),
@@ -739,7 +744,7 @@ pub(super) mod tests {
         );
         let buf = reply_to(&request, MessageType::Ack, Ipv4Addr::new(10, 0, 0, 5), options);
         match parse_reply(&buf, 7, &MAC, SERVER, Instant::now()).unwrap() {
-            Reply::Ack(lease) => lease,
+            Reply::Ack(lease) => *lease,
             other => panic!("expected an ACK, got {other:?}"),
         }
     }
@@ -770,6 +775,7 @@ pub(super) mod tests {
             OptionCode::ClasslessStaticRoute,
             OptionCode::InterfaceMtu,
             OptionCode::Router,
+            OptionCode::NtpServers,
         ] {
             assert!(prl.contains(&code), "{code:?} not requested");
         }
@@ -853,6 +859,7 @@ pub(super) mod tests {
             lease.nameservers,
             [Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 0, 0, 3)]
         );
+        assert_eq!(lease.ntp_servers, [Ipv4Addr::new(10, 0, 0, 4)]);
         assert_eq!(lease.domain_name.as_deref(), Some("example.internal"));
         assert_eq!(lease.hostname.as_ref().map(Hostname::as_str), Some("web-1"));
         assert_eq!(lease.mtu, Some(1460));

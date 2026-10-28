@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use rustix::process::{Gid, Uid};
+use rustix::thread::CapabilitySet;
 use tracing::info;
 
 use crate::process::Reaper;
@@ -73,12 +74,15 @@ impl Api {
                 Bind {
                     path: control_socket_dir(),
                     exec: false,
+                    writable: false,
                 },
                 Bind {
                     path: TLS_DIR,
                     exec: false,
+                    writable: false,
                 },
             ],
+            capabilities: CapabilitySet::empty(),
             limits: LIMITS,
             syscalls: SYSCALLS,
         };

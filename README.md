@@ -18,6 +18,7 @@ UEFI ─▶ UKI (systemd-stub + kernel + cmdline with the dm-verity root hash, s
               └─▶ dust-init (PID 1)
                    ├─ mounts, sysctls, signed kernel modules (from the verity root only)
                    ├─ DHCP, platform metadata, user-data
+                   ├─ dust-ntp (SNTP client, sandboxed, CAP_SYS_TIME only)
                    ├─ /var: state partition, grown to fill the disk (optionally LUKS2, key sealed to the vTPM)
                    ├─ containerd (CRI) ──▶ pods: workloads (user-data or API)
                    ├─ control API on a unix socket, vTPM attestation evidence

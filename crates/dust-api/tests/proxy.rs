@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dust_proto::Role;
 use dust_proto::v1::machine_client::MachineClient;
 use dust_proto::v1::machine_server::{Machine, MachineServer};
-use dust_proto::v1::{LogEntry, LogsRequest, SettingsResponse, StorageResponse, VersionResponse};
+use dust_proto::v1::{LogEntry, LogsRequest, SettingsResponse, StorageResponse, TimeResponse, VersionResponse};
 use rcgen::{BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair};
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::oneshot;
@@ -41,6 +41,10 @@ impl Machine for FakeDust {
             reason: "fake".into(),
             ..Default::default()
         }))
+    }
+
+    async fn time(&self, _: Request<()>) -> Result<Response<TimeResponse>, Status> {
+        Err(Status::unimplemented("fake"))
     }
 
     async fn reboot(&self, _: Request<()>) -> Result<Response<()>, Status> {

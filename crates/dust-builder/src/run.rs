@@ -52,6 +52,8 @@ struct Boot {
     tpm: Tpm,
     /// The console lines it waits for, in order.
     markers: &'static [&'static str],
+    /// The console lines it waits for, in any order (those of concurrent tasks).
+    unordered: &'static [&'static str],
 }
 
 /// The vTPM of a boot.
@@ -66,7 +68,8 @@ enum Tpm {
 }
 
 /// The boots of the smoke test (see `tests/smoke-user-data.toml`), each on the disk the previous
-/// one left. The first formats the encrypted state partition; the second unseals its key and
+/// one left. The first formats the encrypted state partition, and sees dust-ntp synchronize the
+/// clock (with pool.ntp.org: the test needs the Internet, as for its image); the second unseals its key and
 /// finds the state of the first (containerd's store, with the bundled images); the third boots
 /// another image (PCR 11 differs), which cannot unseal the key and formats the partition again;
 /// the fourth, that image with a cleared TPM, formats it again too. The fifth has no TPM: `/var`
@@ -83,6 +86,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "hello from a hardened workload",
             "workload hello exited with code 0",
         ],
+        unordered: &["INFO clock synchronized"],
     },
     Boot {
         name: "second boot, same disk and TPM",
@@ -96,6 +100,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "hello from a hardened workload",
             "workload hello exited with code 0",
         ],
+        unordered: &[],
     },
     Boot {
         name: "third boot, another image on the same disk and TPM",
@@ -108,6 +113,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "dust-init: imported bundled image",
             "dust-init: boot complete",
         ],
+        unordered: &[],
     },
     Boot {
         name: "fourth boot, that image with a cleared TPM",
@@ -120,6 +126,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "dust-init: imported bundled image",
             "dust-init: boot complete",
         ],
+        unordered: &[],
     },
     Boot {
         name: "fifth boot, without a TPM",
@@ -131,6 +138,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "dust-init: boot complete",
             "hello from a hardened workload",
         ],
+        unordered: &[],
     },
     Boot {
         name: "sixth boot, the TPM back",
@@ -142,6 +150,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "already imported",
             "dust-init: boot complete",
         ],
+        unordered: &[],
     },
 ];
 
@@ -218,17 +227,27 @@ fn boot_until(
 
     let deadline = Instant::now() + timeout;
     let mut pending = boot.markers.iter().peekable();
+    let mut unordered: Vec<&str> = boot.unordered.to_vec();
     let result = loop {
-        let Some(marker) = pending.peek() else { break Ok(()) };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(remaining) {
-            Ok(line) if line.contains(*marker) => {
-                pending.next();
-            }
-            Ok(line) if line.contains("Kernel panic") => break Err(anyhow::anyhow!("kernel panic")),
-            Ok(_) => {}
-            Err(_) => break Err(anyhow::anyhow!("timed out waiting for {marker:?}")),
+        let next = pending.peek();
+        if next.is_none() && unordered.is_empty() {
+            break Ok(());
         }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let line = match rx.recv_timeout(remaining) {
+            Ok(line) => line,
+            Err(_) => {
+                let waited: Vec<&str> = next.map(|marker| **marker).into_iter().chain(unordered).collect();
+                break Err(anyhow::anyhow!("timed out waiting for {waited:?}"));
+            }
+        };
+        if line.contains("Kernel panic") {
+            break Err(anyhow::anyhow!("kernel panic"));
+        }
+        if next.is_some_and(|marker| line.contains(*marker)) {
+            pending.next();
+        }
+        unordered.retain(|marker| !line.contains(marker));
     };
     // Stopped abruptly, as by a crash: what was flushed (the LUKS2 header, the filesystem's
     // journal) must be enough for the next boot.

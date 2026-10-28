@@ -4,7 +4,8 @@ use std::io::{self, Write};
 
 use dust_proto::v1::machine_client::MachineClient;
 use dust_proto::v1::storage_response::State;
-use dust_proto::v1::{LogsRequest, StorageResponse};
+use dust_proto::v1::time_response::Origin;
+use dust_proto::v1::{LogsRequest, StorageResponse, TimeResponse};
 use tonic::transport::Channel;
 
 use crate::client::{CallExt, CallFailed};
@@ -89,6 +90,58 @@ fn storage_lines(storage: &StorageResponse) -> Vec<String> {
     lines
 }
 
+pub async fn time(channel: Channel) -> anyhow::Result<()> {
+    let time = MachineClient::new(channel).time(()).await.into_result()?;
+    let mut out = io::stdout().lock();
+    for line in time_lines(&time) {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// `hctl time`'s output.
+fn time_lines(time: &TimeResponse) -> Vec<String> {
+    let ms = |nanos: i64| nanos as f64 / 1e6;
+    let origin = match time.origin() {
+        Origin::Settings => "settings.ntp.time-servers",
+        Origin::Dhcp => "DHCP",
+        Origin::Default => "default",
+        Origin::Unspecified => "unknown",
+    };
+    let mut lines = vec![
+        format!("Synchronized:  {}", if time.synchronized { "yes" } else { "no" }),
+        format!("Servers:       {} ({origin})", time.servers.join(", ")),
+    ];
+    if let Some(corrected_at) = &time.corrected_at {
+        let how = if time.stepped { "stepped" } else { "slewed" };
+        lines.extend([
+            format!("Corrected at:  {corrected_at}"),
+            format!(
+                "Server:        {} ({}), stratum {}, reference {}",
+                time.server, time.address, time.stratum, time.reference
+            ),
+            format!(
+                "Offset:        {:+.3} ms ({how}), round trip {:.3} ms",
+                ms(time.offset_ns),
+                ms(time.delay_ns)
+            ),
+        ]);
+    }
+    lines.push(format!(
+        "Error:         {:.3} ms estimated, {:.3} ms at most",
+        time.estimated_error_us as f64 / 1e3,
+        time.max_error_us as f64 / 1e3
+    ));
+    lines.push(format!("Frequency:     {:+.3} ppm", time.frequency_ppm));
+    if time.poll_interval_seconds > 0 {
+        lines.push(format!("Poll interval: {} s", time.poll_interval_seconds));
+    }
+    if !time.error.is_empty() {
+        lines.push(format!("Last error:    {}", time.error));
+    }
+    lines
+}
+
 pub async fn reboot(channel: Channel) -> anyhow::Result<()> {
     MachineClient::new(channel).reboot(()).await.into_result()?;
     eprintln!("rebooting");
@@ -133,6 +186,59 @@ mod tests {
         assert_eq!(
             storage_lines(&tmpfs),
             ["State:      tmpfs: nothing persists", "Reason:     no state partition"]
+        );
+    }
+
+    #[test]
+    fn shows_time() {
+        let time = TimeResponse {
+            synchronized: true,
+            estimated_error_us: 6_100,
+            max_error_us: 23_000,
+            frequency_ppm: -12.5,
+            servers: vec!["pool.ntp.org".into()],
+            origin: Origin::Default.into(),
+            server: "pool.ntp.org".into(),
+            address: "192.0.2.1:123".into(),
+            stratum: 2,
+            reference: "192.0.2.10".into(),
+            offset_ns: -1_465_000,
+            delay_ns: 12_300_000,
+            stepped: false,
+            corrected_at: Some(
+                (std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_767_225_600)).into(),
+            ),
+            poll_interval_seconds: 64,
+            error: String::new(),
+        };
+        assert_eq!(
+            time_lines(&time),
+            [
+                "Synchronized:  yes",
+                "Servers:       pool.ntp.org (default)",
+                "Corrected at:  2026-01-01T00:00:00Z",
+                "Server:        pool.ntp.org (192.0.2.1:123), stratum 2, reference 192.0.2.10",
+                "Offset:        -1.465 ms (slewed), round trip 12.300 ms",
+                "Error:         6.100 ms estimated, 23.000 ms at most",
+                "Frequency:     -12.500 ppm",
+                "Poll interval: 64 s",
+            ]
+        );
+        let never = TimeResponse {
+            servers: vec!["10.0.0.4".into()],
+            origin: Origin::Dhcp.into(),
+            error: "10.0.0.4 (10.0.0.4:123): no reply within 2s".into(),
+            ..TimeResponse::default()
+        };
+        assert_eq!(
+            time_lines(&never),
+            [
+                "Synchronized:  no",
+                "Servers:       10.0.0.4 (DHCP)",
+                "Error:         0.000 ms estimated, 0.000 ms at most",
+                "Frequency:     +0.000 ppm",
+                "Last error:    10.0.0.4 (10.0.0.4:123): no reply within 2s",
+            ]
         );
     }
 }

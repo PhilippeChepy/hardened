@@ -2,7 +2,7 @@
 
 User-data is a TOML document in the Bottlerocket style. Settings are grouped under
 `[settings.<group>]` and keys are kebab-case. The groups Bottlerocket has (`kernel`, `network`,
-`dns`, `kubernetes`, `container-registry`) take its keys and value formats; hardened's own
+`dns`, `ntp`, `kubernetes`, `container-registry`) take its keys and value formats; hardened's own
 settings are under `settings.hardened`. It may be plain, gzip-compressed, base64-encoded,
 or base64 of gzip; dust-init detects which.
 
@@ -59,6 +59,22 @@ search-list = ["corp.example.com"]
 | --- | --- | --- | --- |
 | `name-servers` | list of IPs | from DHCP | Replaces the DNS servers learned through DHCP. The resolver uses the first 3 |
 | `search-list` | list of domain names | from DHCP | Replaces the search domains learned through DHCP. `resolv.conf` keeps the first 6 (glibc's limit), within 254 characters (musl's) |
+
+## `settings.ntp`
+
+```toml
+[settings.ntp]
+time-servers = ["time.example.com", "192.0.2.123"]
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `time-servers` | list of host names or IPs | from DHCP, else `pool.ntp.org` | The NTP servers `dust-ntp` queries, in order of preference |
+
+Without it, the servers come from DHCP (option 42), or else are `pool.ntp.org`, whose
+[terms](https://www.ntppool.org/en/vendors.html) ask vendors for their own zone: set your
+provider's or your own servers in production. Bottlerocket's `options` (chrony options) is not
+supported. See [Time](architecture.md#time).
 
 ## `settings.hardened.api`
 

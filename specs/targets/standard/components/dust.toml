@@ -1,6 +1,6 @@
 version = "workspace"
 kind = "application"
-summary = "dust-init (PID 1) and dust-api (sandboxed mTLS API)"
+summary = "dust-init (PID 1), dust-api (sandboxed mTLS API) and dust-ntp (sandboxed SNTP client)"
 license = "Apache-2.0"
 homepage = "https://github.com/PhilippeChepy/hardened"
 purl = "pkg:github/PhilippeChepy/hardened@{version}#crates/dust-init"
@@ -10,4 +10,8 @@ local = ["Cargo.toml", "Cargo.lock", ".cargo", "crates"]
 depends-on = ["rust", "ca-certificates", "pkgconf"]
 
 [[build]]
-cargo-build.binaries = [["dust-init", "/usr/bin/dust-init"], ["dust-api", "/usr/bin/dust-api"]]
+cargo-build.binaries = [
+    ["dust-init", "/usr/bin/dust-init"],
+    ["dust-api", "/usr/bin/dust-api"],
+    ["dust-ntp", "/usr/bin/dust-ntp"],
+]

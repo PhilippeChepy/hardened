@@ -40,6 +40,8 @@ enum Command {
     Settings,
     /// Shows what backs /var: the state partition (plain or encrypted) or a tmpfs, and why.
     Storage,
+    /// Shows whether the clock is synchronized, and the NTP client's last correction.
+    Time,
     /// Reboots the machine.
     Reboot,
     /// Powers the machine off.
@@ -76,6 +78,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Logs { follow, tail } => machine::logs(client::connect(connection).await?, follow, tail).await,
         Command::Settings => machine::settings(client::connect(connection).await?).await,
         Command::Storage => machine::storage(client::connect(connection).await?).await,
+        Command::Time => machine::time(client::connect(connection).await?).await,
         Command::Reboot => machine::reboot(client::connect(connection).await?).await,
         Command::Shutdown => machine::shutdown(client::connect(connection).await?).await,
         Command::Workloads(command) => workloads::run(client::connect(connection).await?, command).await,
