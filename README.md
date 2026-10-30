@@ -64,6 +64,8 @@ cargo builder run     # boot it in qemu (OVMF + swtpm), serial console on stdio
 cargo builder test    # boot it headless (6 boots on one disk), wait for the smoke-test markers
 ```
 
+[docs/local-testing.md](docs/local-testing.md) explains these commands and their options.
+
 The first build compiles the whole toolchain from source (LLVM twice, musl, Rust, Go...), then the
 image's components, which takes a while. Later builds are incremental: each component is cached,
 keyed by a hash of all its inputs.
@@ -145,6 +147,8 @@ The Rust code is in three Cargo workspaces, each with its `Cargo.lock`: `service
   system, security model.
 - [Services](docs/services.md): the service file format, and each service of the images.
 - [User-data reference](docs/user-data.md).
+- [Testing an image locally](docs/local-testing.md): booting it in qemu, using its API, the smoke
+  test.
 - [Kubernetes target](docs/kubernetes-target.md): its contents, how a node runs, networking,
   versions.
 - [State partition encryption](docs/state-encryption.md).
