@@ -38,7 +38,7 @@ boot, storage-controller `/var/lib/serviced/services` when it sets `/var` up.
 | `exec-stop` | `[]` | Commands run once the service's process is gone, when it is stopped. At shutdown, every service's run after every other process is gone, in reverse start order. |
 | `restart` | `always` | `always`, `on-failure` or `never`, with backoff. |
 | `env` | `{}` | The environment, the only one the program gets. |
-| `runtime-directories` | `[]` | Absolute paths, created before the service starts (mode 0755, owned by the sandbox's user, root without one) and kept across restarts. |
+| `runtime-directories` | `[]` | Absolute paths, created before the service starts if missing (mode 0755, owned by the sandbox's user, root without one; an existing directory is left as it is) and kept across restarts. |
 | `console` | `false` | Copies the program's output to the console, besides its log. |
 | `meta` | `{}` | Ignored by serviced: whoever wrote the file keeps its own data there (workload-controller, a workload's spec). |
 

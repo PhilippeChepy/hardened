@@ -17,6 +17,7 @@ use libserviced::definition::Service;
 use libserviced::definition::ServiceName;
 use workload_console::ContainerId;
 use workload_controller::ImageWorkload;
+use workload_controller::Privileges;
 use workload_controller::RestartPolicy;
 
 /// The containerd namespace of workloads, apart from Kubernetes'.
@@ -91,8 +92,15 @@ fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Service {
     let mut run: Vec<String> = ["--namespace", NAMESPACE, "run", "--rm", "--net-host"]
         .map(String::from)
         .into();
-    if workload.privileged {
+    if let Privileges::Privileged { host_root } = &workload.privileged {
         run.push("--privileged".into());
+        // `rro`: read-only submounts too (`/var`, `/run`), which `ro` would leave writable.
+        if let Some(host_root) = host_root {
+            run.extend([
+                "--mount".into(),
+                format!("type=bind,src=/,dst={host_root},options=rbind:rro"),
+            ]);
+        }
     }
     for (name, value) in &workload.env {
         run.extend(["--env".into(), format!("{name}={value}")]);
@@ -187,7 +195,7 @@ pub(crate) mod tests {
 image = "busybox:1.37"
 command = ["sh", "-c", "echo hi"]
 env = { A = "1 2" }
-privileged = true
+privileged.host-root = "/host"
 restart = "on-failure"
 mounts = [{ source = "/var/lib/web", destination = "/data", read-only = true }]
 console = true
@@ -220,6 +228,8 @@ console = true
                 "--rm",
                 "--net-host",
                 "--privileged",
+                "--mount",
+                "type=bind,src=/,dst=/host,options=rbind:rro",
                 "--env",
                 "A=1 2",
                 "--mount",

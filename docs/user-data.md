@@ -289,9 +289,9 @@ read-only = true
 | `image` | string | required | Image reference |
 | `command` | list of strings, without NUL bytes | the image's entrypoint and command | The program and its arguments, replacing both (workloads run with `ctr run`, which cannot keep the entrypoint while replacing the command) |
 | `env` | table of strings, without NUL bytes | | Added to (and overriding) the image environment |
-| `privileged` | bool | `false` | See below |
+| `privileged` | bool, or a table | `false` | See below |
 | `restart` | `always`, `on-failure`, `never` | `always` | Restarts use exponential backoff, from 1 s up to 60 s |
-| `mounts` | list | | Bind mounts. `source` must be under `/var` (created if missing) and, like `destination`, without commas; `read-only` is optional |
+| `mounts` | list | | Bind mounts. `source` must be under `/var` (created if missing, an existing directory left as it is) and, like `destination`, without commas; `read-only` is optional |
 | `console` | bool | `false` | Also copy the workload's output to the serial console (user-data only: the API refuses it) |
 
 A workload is confined unless `privileged = true`: the runtime's default capabilities and seccomp
@@ -299,6 +299,11 @@ profile, `no_new_privs`, and masked or read-only kernel interfaces in `/proc` an
 privileged workload gets every capability, every host device, no seccomp filter, no
 `no_new_privs`, and an unmasked, writable `/proc` and `/sys`. It still has its own mount and PID
 namespaces, but it effectively controls the machine (host devices, sysctls, kernel modules).
+
+`privileged.host-root = "/host"` (a table in place of `true`) also mounts the host's `/` at
+`/host` in the container, recursively read-only (`/var` and `/run` included): to inspect the
+machine, with `hctl workloads exec` for instance. It is only possible for a privileged workload,
+which could mount the host's filesystems itself anyway.
 
 Each workload is a service, `workload-<name>` ([Workloads](architecture.md#workloads)), on the
 host network. Its logs are in `/var/log/serviced/workload-<name>.log`

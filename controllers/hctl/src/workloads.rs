@@ -10,8 +10,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use tonic::transport::Channel;
 use workload_controller::workloads::workloads_client::WorkloadsClient;
 use workload_controller::workloads::{
-    ApplyWorkloadRequest, Mount, RestartPolicy, Workload, WorkloadLogsRequest, WorkloadRef,
-    WorkloadSource, WorkloadSpec,
+    ApplyWorkloadRequest, Mount, Privileged, RestartPolicy, Workload, WorkloadLogsRequest,
+    WorkloadRef, WorkloadSource, WorkloadSpec,
 };
 
 use crate::args::EnvVar;
@@ -62,6 +62,9 @@ pub struct ApplyArgs {
     /// `/sys`.
     #[arg(long)]
     privileged: bool,
+    /// Mounts the host's / at PATH in the container, recursively read-only.
+    #[arg(long, value_name = "PATH", requires = "privileged")]
+    host_root: Option<String>,
     #[arg(long, value_enum, default_value_t = Restart::Always)]
     restart: Restart,
     /// Bind mount as SOURCE:DESTINATION[:ro] (repeatable); sources must live under /var.
@@ -99,7 +102,9 @@ impl ApplyArgs {
             image: self.image,
             command: self.command,
             env,
-            privileged: self.privileged,
+            privileged: self.privileged.then(|| Privileged {
+                host_root: self.host_root.unwrap_or_default(),
+            }),
             mounts: self.mount,
             ..Default::default()
         };
@@ -237,6 +242,8 @@ mod tests {
             "--mount",
             "/var/www:/www:ro",
             "--privileged",
+            "--host-root",
+            "/host",
             "--",
             "/bin/sh",
             "-c",
@@ -250,7 +257,7 @@ mod tests {
         assert_eq!(spec.env.len(), 2);
         assert_eq!(spec.env["B"], "x=y");
         assert_eq!(spec.restart(), RestartPolicy::OnFailure);
-        assert!(spec.privileged);
+        assert_eq!(spec.privileged.unwrap().host_root, "/host");
         assert_eq!(spec.mounts.len(), 1);
         assert!(spec.mounts[0].read_only);
     }

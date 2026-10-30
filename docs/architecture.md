@@ -312,7 +312,8 @@ reads back. No Rust code talks to containerd.
   which drives `restart`; SIGTERM, stopping the service, is forwarded to the container. Its
   command replaces the image's entrypoint and command (ctr cannot keep one while replacing the
   other, so `args` need a `command`). Bind mount sources are created as the service's runtime
-  directories.
+  directories. A privileged workload may also see the host's `/`, recursively read-only
+  (`privileged.host-root`, runc's `rro`).
 - **Confinement:** unprivileged containers run with runc's defaults: containerd's default seccomp
   profile, `no_new_privileges` and the default capability set.
 - **Exec:** `Workloads/Exec` (`hctl workloads exec`, admin only) runs a process in a running

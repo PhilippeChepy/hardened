@@ -38,12 +38,19 @@ message Mount {
   bool read_only = 3;
 }
 
+// Every capability and host device, no seccomp filter, unmasked /proc and /sys.
+message Privileged {
+  // Where the host's / is mounted, recursively read-only; empty: not mounted.
+  string host_root = 1;
+}
+
 message WorkloadSpec {
   string image = 1;
   // The program and its arguments, replacing the image's entrypoint and command when non-empty.
   repeated string command = 2;
   map<string, string> env = 3;
-  bool privileged = 4;
+  // Unset: unprivileged.
+  Privileged privileged = 4;
   RestartPolicy restart = 5;
   repeated Mount mounts = 6;
   // Also copies the workload's output to the serial console (debugging, smoke tests).

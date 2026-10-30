@@ -73,6 +73,8 @@ hctl workloads apply hello --image public.ecr.aws/docker/library/busybox:1.37 --
 hctl workloads list
 hctl workloads logs hello
 hctl workloads exec -it hello -- sh   # a shell in the container
+hctl workloads apply debug --image public.ecr.aws/docker/library/busybox:1.37 --privileged \
+    --host-root /host -- sleep 3600     # the host's / at /host, read-only
 hctl attest quote --nonce $(openssl rand -hex 32)
 hctl reboot                   # or shutdown: a clean stop, unlike Ctrl-A X
 ```

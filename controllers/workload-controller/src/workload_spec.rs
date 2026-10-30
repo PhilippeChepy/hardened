@@ -9,8 +9,8 @@ use controllers_helpers::invalid_message::{FieldResult, WithinResult};
 
 use crate::workloads;
 use crate::{
-    ContainerPath, EnvName, EnvValue, ImageRef, ImageWorkload, MountSettings, RestartPolicy,
-    VarPath,
+    ContainerPath, EnvName, EnvValue, ImageRef, ImageWorkload, MountSettings, Privileges,
+    RestartPolicy, VarPath,
 };
 
 impl From<RestartPolicy> for workloads::RestartPolicy {
@@ -55,7 +55,12 @@ impl From<ImageWorkload> for workloads::WorkloadSpec {
                 .into_iter()
                 .map(|(name, value)| (name.into(), value.into()))
                 .collect(),
-            privileged: workload.privileged,
+            privileged: match workload.privileged {
+                Privileges::Unprivileged => None,
+                Privileges::Privileged { host_root } => Some(workloads::Privileged {
+                    host_root: host_root.map(String::from).unwrap_or_default(),
+                }),
+            },
             restart: workloads::RestartPolicy::from(workload.restart).into(),
             mounts: workload
                 .mounts
@@ -102,7 +107,18 @@ impl TryFrom<workloads::WorkloadSpec> for ImageWorkload {
             image: ImageRef::try_from(message.image).field("image")?,
             command: invalid_message::convert_each(message.command, "command", Argument::try_from)?,
             env,
-            privileged: message.privileged,
+            privileged: match message.privileged {
+                None => Privileges::Unprivileged,
+                Some(privileged) => Privileges::Privileged {
+                    host_root: match privileged.host_root.as_str() {
+                        "" => None,
+                        _ => Some(
+                            ContainerPath::try_from(privileged.host_root)
+                                .field("privileged.host_root")?,
+                        ),
+                    },
+                },
+            },
             restart,
             mounts,
             console: message.console,
@@ -125,7 +141,9 @@ pub(crate) mod tests {
                 ("FOO".parse().unwrap(), "bar".parse().unwrap()),
                 ("EMPTY".parse().unwrap(), "".parse().unwrap()),
             ]),
-            privileged: true,
+            privileged: Privileges::Privileged {
+                host_root: Some("/host".parse().unwrap()),
+            },
             restart: RestartPolicy::OnFailure,
             mounts: vec![
                 MountSettings {

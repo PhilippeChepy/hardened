@@ -378,7 +378,9 @@ time-servers = ["time.example.com"]
                     image: "docker.io/library/nginx:1.29".into(),
                     command: vec!["nginx".into(), "-g".into(), "daemon off;".into()],
                     env: HashMap::from([("NGINX_PORT".into(), "8080".into())]),
-                    privileged: true,
+                    privileged: Some(workloads::Privileged {
+                        host_root: "/host".into(),
+                    }),
                     restart: RestartPolicy::OnFailure.into(),
                     mounts: vec![workloads::Mount {
                         source: "/var/lib/web".into(),
@@ -413,7 +415,6 @@ command = ["nginx", "-g", "daemon off;"]
 console = true
 enabled = true
 image = "docker.io/library/nginx:1.29"
-privileged = true
 restart = "on-failure"
 
 [settings.hardened.containers.web.env]
@@ -423,6 +424,9 @@ NGINX_PORT = "8080"
 destination = "/usr/share/nginx/html"
 read-only = true
 source = "/var/lib/web"
+
+[settings.hardened.containers.web.privileged]
+host-root = "/host"
 "#;
         let rendered = table(&settings).unwrap().to_string();
         assert_eq!(rendered, expected, "{rendered}");

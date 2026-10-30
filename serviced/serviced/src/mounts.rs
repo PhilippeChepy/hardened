@@ -146,13 +146,35 @@ pub fn create_root_dir(dir: &Path) -> io::Result<()> {
     DirBuilder::new().recursive(true).mode(0o755).create(dir)
 }
 
-/// Creates `dir` and its parents; `dir` gets `owner` (as uid and gid) and `mode`, even if it
-/// existed.
+/// Creates `dir` and its parents; `dir` gets `owner` (as uid and gid) and `mode`. An existing
+/// `dir` is left as it is: a workload's data directory keeps the owner its files need.
 pub fn create_dir(dir: &Path, owner: u32, mode: u32) -> anyhow::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     rustix::fs::chown(dir, Some(Uid::from_raw(owner)), Some(Gid::from_raw(owner)))
         .with_context(|| format!("chown {}", dir.display()))?;
     rustix::fs::chmod(dir, Mode::from_raw_mode(mode))
         .with_context(|| format!("chmod {}", dir.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    #[test]
+    fn leaves_existing_directories_as_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir(&data).unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+        create_dir(&data, 0, 0o755).unwrap();
+        let mode = fs::metadata(&data).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o700);
+    }
 }

@@ -6,7 +6,7 @@ use controllers_helpers::Argument;
 use controllers_helpers::validated_string;
 use serde::{Deserialize, Serialize};
 
-use crate::{ContainerPath, ImageRef, VarPath};
+use crate::{ContainerPath, ImageRef, Privileges, VarPath};
 
 /// What to run for an image-based workload, wherever it was declared (user-data or the API).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,10 +21,9 @@ pub struct ImageWorkload {
     /// Environment variables, added to the image's.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<EnvName, EnvValue>,
-    /// Runs with all capabilities and host devices, no seccomp filter and unmasked `/proc` and
-    /// `/sys`.
+    /// Unprivileged, or privileged, possibly with the host's root.
     #[serde(default)]
-    pub privileged: bool,
+    pub privileged: Privileges,
     /// When serviced restarts the workload.
     #[serde(default)]
     pub restart: RestartPolicy,
