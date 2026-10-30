@@ -28,7 +28,7 @@ sha256 = "731b5681e4bb18be313231579b8efd0296c5b015fa36dc533874b639ba838016"
 # One configure for both programs: the tools, and an x86-64 machine with KVM, a TPM (swtpm's) and
 # user-mode networking. Offline: configure installs its Meson and Python tooling from the bundled
 # wheels, next to setuptools and wheel. No firmware blobs: OVMF is built from source, and the run
-# gives the network card no option ROM.
+# gives the network card no option ROM and the APIC no TPR-patching one (vapic, for old Windows).
 [[build]]
 run.cmd = [
     "./configure",

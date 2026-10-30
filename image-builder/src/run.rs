@@ -312,6 +312,7 @@ fn qemu_container<'a>(
 {swtpm}accel=tcg; [ -w /dev/kvm ] && accel=kvm
 exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
     -machine q35,accel=$accel -cpu max -smp 2 -m {memory} \
+    -global apic-common.vapic=off \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=/state/vars.fd \
     -drive file=/state/disk.qcow2,if=none,id=disk,format=qcow2 \
