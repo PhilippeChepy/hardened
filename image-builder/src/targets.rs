@@ -14,6 +14,9 @@
 //! components = ["base-files", "kernel", "runc", "serviced"]
 //! kernel-cmdline = ["lockdown=integrity"]
 //!
+//! [kspp-exceptions]
+//! CONFIG_MODULES = "signed modules, loaded only from the verity root"
+//!
 //! [partition]
 //! esp-size-mib = 64
 //! state-size-mib = 64
@@ -29,7 +32,11 @@
 //! change without rebuilding what they ship.
 //!
 //! `extends = "<target>"` starts from another target: its components come first, `kernel-cmdline`
-//! adds to its own, the other fields replace it.
+//! and `kspp-exceptions` add to its own, the other fields replace it.
+//!
+//! `kspp-exceptions` are the recommendations of kernel-hardening-checker the image's kernel does
+//! not follow, by option name, each with its reason: any other recommendation failing on the
+//! kernel's configuration or command line fails the image ([`crate::kspp`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -57,6 +64,8 @@ pub struct Target {
     pub components: Vec<ComponentName>,
     /// Added to the kernel command line of its image.
     pub kernel_cmdline: Vec<String>,
+    /// The KSPP recommendations its kernel does not follow, and why.
+    pub kspp_exceptions: BTreeMap<String, String>,
     /// The partitions of its image.
     pub partition: Partition,
     /// How it is exported, if it is.
@@ -144,6 +153,8 @@ struct File {
     components: Vec<ComponentName>,
     #[serde(default)]
     kernel_cmdline: Vec<String>,
+    #[serde(default)]
+    kspp_exceptions: BTreeMap<String, String>,
     partition: Option<PartitionFile>,
     export: Option<ExportFile>,
 }
@@ -286,6 +297,16 @@ fn resolve(
         );
         kernel_cmdline.push(option.clone());
     }
+    let mut kspp_exceptions = parent
+        .map(|p| p.kspp_exceptions.clone())
+        .unwrap_or_default();
+    for (option, reason) in &file.kspp_exceptions {
+        ensure!(
+            !reason.trim().is_empty(),
+            "kspp-exceptions.{option} gives no reason"
+        );
+        kspp_exceptions.insert(option.clone(), reason.clone());
+    }
     let mib = |size: Option<u64>, what: &str| -> anyhow::Result<Option<u64>> {
         ensure!(size != Some(0), "partition.{what} is empty");
         Ok(size.map(|size| size * MIB))
@@ -311,8 +332,11 @@ fn resolve(
         }),
     };
     ensure!(
-        export.is_some() || (kernel_cmdline.is_empty() && file.partition.is_none()),
-        "kernel-cmdline and partition are for exported targets"
+        export.is_some()
+            || (kernel_cmdline.is_empty()
+                && kspp_exceptions.is_empty()
+                && file.partition.is_none()),
+        "kernel-cmdline, kspp-exceptions and partition are for exported targets"
     );
     Ok(Target {
         id: id.clone(),
@@ -320,6 +344,7 @@ fn resolve(
         extends,
         components,
         kernel_cmdline,
+        kspp_exceptions,
         partition,
         export,
     })

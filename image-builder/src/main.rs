@@ -17,6 +17,7 @@ mod exec;
 mod fetch;
 mod image;
 mod keys;
+mod kspp;
 mod oci;
 mod patch;
 mod pcr11;

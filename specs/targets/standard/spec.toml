@@ -23,7 +23,58 @@ kernel-cmdline = [
     "page_alloc.shuffle=1",
     "randomize_kstack_offset=on",
     "lockdown=integrity",
+    "pti=on",
+    "hash_pointers=always",
+    "hardened_usercopy=1",
+    "kfence.sample_interval=100",
+    "efi=disable_early_pci_dma",
+    "intel_iommu=on",
+    "iommu.strict=1",
+    "cfi=kcfi",
+    "proc_mem.force_override=never",
 ]
+
+# The recommendations of kernel-hardening-checker the kernel does not follow, and why: any other
+# failing on its configuration or command line fails the image.
+[kspp-exceptions]
+CONFIG_LSM_MMAP_MIN_ADDR = "SELinux's; CONFIG_DEFAULT_MMAP_MIN_ADDR is 65536"
+CONFIG_WERROR = "a build setting: a toolchain's new warnings would fail kernel updates"
+CONFIG_LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY = "integrity: confidentiality forbids BPF programs reading kernel memory (Cilium, tracing)"
+lockdown = "integrity: confidentiality forbids BPF programs reading kernel memory (Cilium, tracing)"
+CONFIG_GCC_PLUGIN_LATENT_ENTROPY = "a GCC plugin: the kernel is built with clang"
+CONFIG_RESET_ATTACK_MITIGATION = "no user space clears the MOR variable at shutdown: the firmware would wipe memory at every boot"
+CONFIG_CFI_CLANG = "CONFIG_CFI since Linux 6.18, which is set"
+CONFIG_CFI_PERMISSIVE = "off; the checker ties it to CONFIG_CFI_CLANG, CONFIG_CFI since Linux 6.18"
+CONFIG_SECURITY_SELINUX = "no SELinux policy: services run in serviced's sandboxes, containers in runc's"
+CONFIG_LSM = "no SELinux (see CONFIG_SECURITY_SELINUX)"
+CONFIG_MODULES = "signed modules only (MODULE_SIG_FORCE), loaded only from the verity root (LoadPin)"
+CONFIG_FB = "kernel output on cloud web consoles (EFI framebuffer)"
+CONFIG_VT = "kernel output on cloud web consoles (EFI framebuffer)"
+CONFIG_RSEQ = "used by glibc, in containers"
+CONFIG_IP_SCTP = "SCTP services of Kubernetes, and IPVS"
+CONFIG_KALLSYMS = "symbolized oops logs and BPF; addresses hidden from users by kptr_restrict"
+CONFIG_USER_NS = "containers"
+CONFIG_AIO = "used by workloads (databases); io_uring stays off"
+CONFIG_BPF_SYSCALL = "Cilium, Calico's eBPF dataplane and cgroup device filters; unprivileged BPF stays off"
+mitigations = "SMT kept (auto, not auto,nosmt): disabling it halves throughput on SMT vCPUs; SCHED_CORE isolates per workload"
+nosmt = "SMT kept (see mitigations)"
+iommu = "iommu=force does not apply to VMs without an IOMMU; intel_iommu=on and iommu.strict=1 apply where there is one"
+spectre_v2 = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+spectre_v2_user = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+spectre_bhi = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+spec_store_bypass_disable = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+l1tf = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+mds = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+tsx_async_abort = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+srbds = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+mmio_stale_data = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+retbleed = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+spec_rstack_overflow = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+gather_data_sampling = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+reg_file_data_sampling = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+tsa = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+indirect_target_selection = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
+vmscape = "not off: the kernel's mitigation applies; the checker wants it explicit unless mitigations=auto,nosmt (SMT kept)"
 
 [partition]
 esp-size-mib = 64

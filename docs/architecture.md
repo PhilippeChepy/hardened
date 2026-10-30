@@ -572,6 +572,7 @@ one per line, rather than inline tables (but `{}`, a step without options).
 | Threat | Mitigation |
 | --- | --- |
 | Persistent root compromise | Read-only, dm-verity root whose hash is in the signed UKI; corruption reboots |
+| Kernel memory corruption, CPU vulnerabilities | The KSPP's recommendations, as Talos applies them, checked at every image build by kernel-hardening-checker against the target's `kspp-exceptions` (each with its reason): every CPU mitigation, kCFI with FineIBT, user shadow stacks, randstruct (seed in `build/keys/`), UBSAN bounds, KFENCE, zeroed stacks and registers, list, page-table and slab hardening, and the KSPP's sysctls but those containers and BPF dataplanes need |
 | Malicious kernel code | Signed modules only (persistent key in `build/keys/`), and modules and firmware load only from the dm-verity root (LoadPin, pinned at boot), so a leaked key alone loads nothing; no module autoloading; lockdown=integrity; no kexec |
 | Escalation through setuid | No setuid binaries (enforced at build time) |
 | Bugs in the API | TLS and network handling in an unprivileged sandbox (machine-apiproxy) without the TPM; role checks before forwarding |
@@ -591,8 +592,9 @@ one per line, rather than inline tables (but `{}`, a step without options).
   Workloads' pulls get no identity token.
 - **Platforms:** Exoscale only (and qemu).
 - **Secure Boot and modules:** UKIs and kernel modules are signed with development keys unless
-  `build/keys/` holds release keys (`db.{key,crt}`, `modules.pem`). Enrolling keys in the cloud's
-  UEFI variable store is up to the deployment.
+  `build/keys/` holds release keys (`db.{key,crt}`, `modules.pem`) and the randstruct seed
+  (`randstruct.seed`). Enrolling keys in the cloud's UEFI variable store is up to the
+  deployment.
 - **Attestation:** SEV-SNP and TDX evidence (through configfs-tsm), and the remote-attestation
   management flow (key release).
 - **Kubernetes:** an end-to-end test of a node joining a cluster (it needs a control plane in the

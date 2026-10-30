@@ -15,6 +15,7 @@ components = [
     "py-pyelftools",
     "py-setuptools",
     "py-wheel",
+    "kernel-hardening-checker",
     "e2fsprogs",
     "erofs-utils",
     "cryptsetup",

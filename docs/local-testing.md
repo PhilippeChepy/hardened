@@ -128,4 +128,5 @@ pool.ntp.org.
 - **The API does not answer**: check that the user-data has `[settings.hardened.api]`, that the
   console shows machine-apiproxy started, and that `HCTL_ENDPOINT` names the forwarded port.
 - **Starting over**: delete `build/run/` or `build/test/`. `build/` is disposable, but
-  `build/keys/` holds the Secure Boot and module signing keys: removing it changes every image.
+  `build/keys/` holds the Secure Boot and module signing keys, and the randstruct seed: removing it
+  changes every image.

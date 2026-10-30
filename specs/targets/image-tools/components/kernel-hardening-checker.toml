@@ -1,0 +1,16 @@
+version = "0.6.17.1"
+kind = "application"
+summary = "kernel-hardening-checker, which checks a kernel's configuration and command line against the KSPP's recommendations"
+license = "GPL-3.0-only"
+homepage = "https://github.com/a13xp0p0v/kernel-hardening-checker"
+purl = "pkg:github/a13xp0p0v/kernel-hardening-checker@v{version}"
+
+depends-on = ["python"]
+
+[sources.src]
+url = "https://github.com/a13xp0p0v/kernel-hardening-checker/archive/refs/tags/v{version}.tar.gz"
+sha256 = "2383e851b44fe74c9a5db32919b897af05f022e676e8d1184cc53594bb9b344c"
+
+[[build]]
+copy.from = "{src}/kernel_hardening_checker"
+copy.into = "{dest}/{python.site-packages}"

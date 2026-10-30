@@ -59,6 +59,7 @@ const GPT_FLAG_READ_ONLY: u64 = 1 << 60;
 /// `export.environment`).
 const KERNEL_IMAGE: Output = Output::new(name!("kernel"), "bzImage");
 const KERNEL_RELEASE: Output = Output::new(name!("kernel"), "kernel.release");
+const KERNEL_CONFIG: Output = Output::new(name!("kernel"), "config");
 const UKI_STUB: Output = Output::new(name!("systemd-stub"), "linuxx64.efi.stub");
 const UKIFY: Output = Output::new(name!("systemd-stub"), "ukify");
 
@@ -110,6 +111,7 @@ pub fn build_image(
     };
     let kernel = find(&content, &KERNEL_IMAGE, &format!("target {}", target.id))?;
     find(&content, &KERNEL_RELEASE, &format!("target {}", target.id))?;
+    find(&content, &KERNEL_CONFIG, &format!("target {}", target.id))?;
     let tools_name = format!("the image of target {}", export.environment);
     let stub = find(&tools.trees, &UKI_STUB, &tools_name)?;
     find(&tools.trees, &UKIFY, &tools_name)?;
@@ -157,6 +159,12 @@ pub fn build_image(
         .to_owned();
     let cmdline = kernel_cmdline(&verity, &target.kernel_cmdline);
     fs::write(dir.join("cmdline"), &cmdline)?;
+    crate::kspp::check(
+        &assembly,
+        &crate::build::locate(&built, &kernel, &KERNEL_CONFIG)?,
+        &dir.join("cmdline"),
+        &target.kspp_exceptions,
+    )?;
     // The UKI of the command line `cmdline<suffix>`, and the ESP `esp<suffix>.img` holding it.
     let write_boot = |suffix: &str| -> anyhow::Result<(PathBuf, PathBuf)> {
         let uki = build_uki(

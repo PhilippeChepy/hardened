@@ -45,6 +45,16 @@ install.from = "{secret:modules.pem}"
 install.to = "{src}/certs/hardened-modules.pem"
 install.mode = 0o600
 
+# The persistent randstruct seed, which the kernel's script would draw at random.
+[[build]]
+install.from = "{secret:randstruct.seed}"
+install.to = "{src}/scripts/hardened-randstruct.seed"
+install.mode = 0o600
+
+[[build]]
+write.to = "{src}/scripts/gen-randstruct-seed.sh"
+write.file = "gen-randstruct-seed.sh"
+
 [[build]]
 make.args = ["{vars.make}", "-s", "bzImage", "modules"]
 make.env = ["{vars.reproducible}"]
