@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+// The machine's services, served by machine-controller from serviced's API.
+package hardened.services.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "hardened/serviced/v1/serviced.proto";
+
+service Services {
+  rpc List(google.protobuf.Empty) returns (ListServicesResponse);
+  rpc Get(ServiceRef) returns (Service);
+  // Starts a stopped, exited or failed service, once what it requires is ready.
+  rpc Start(ServiceRef) returns (google.protobuf.Empty);
+  // Stops a service until it is started again or the machine reboots.
+  rpc Stop(ServiceRef) returns (google.protobuf.Empty);
+  rpc Restart(ServiceRef) returns (google.protobuf.Empty);
+  // Re-reads the service files and reconciles.
+  rpc Reload(google.protobuf.Empty) returns (ReloadResponse);
+  rpc Logs(LogsRequest) returns (stream LogLine);
+}
+
+message ServiceRef {
+  string name = 1;
+}
+
+message Service {
+  string name = 1;
+  string description = 2;
+  bool enabled = 3;
+  // The layers it has a file in, in order.
+  repeated hardened.serviced.v1.Layer layers = 4;
+  repeated string requires = 5;
+  // Its sandbox's uid; unset: unconfined.
+  optional uint32 user = 6;
+  hardened.serviced.v1.State state = 7;
+  google.protobuf.Timestamp since = 8;
+  optional uint32 pid = 9;
+  uint32 restarts = 10;
+  oneof last_exit {
+    int32 exit_code = 11;
+    int32 signal = 12;
+  }
+  // Why it is waiting, inactive or failed.
+  string reason = 13;
+  // The last STATUS= it sent.
+  string status_text = 14;
+}
+
+message ListServicesResponse {
+  repeated Service services = 1;
+}
+
+message ReloadResponse {
+  // Why the services left out are.
+  repeated string invalid = 1;
+}
+
+message LogsRequest {
+  string name = 1;
+  bool follow = 2;
+  // Number of past lines to send first; 0: all retained.
+  uint32 tail = 3;
+}
+
+message LogLine {
+  google.protobuf.Timestamp time = 1;
+  string text = 2;
+}

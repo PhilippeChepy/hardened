@@ -368,32 +368,60 @@ impl Attestation for Fake {
     }
 }
 
+/// The one service the fake serviced has, ready, its last run killed by SIGKILL.
+fn containerd() -> api::Service {
+    let mut service = api::Service {
+        name: "containerd".to_owned(),
+        description: "the container runtime".to_owned(),
+        enabled: true,
+        definition: "description = \"the container runtime\"\n\
+                     exec = [\"/usr/bin/containerd\"]\n\
+                     requires = [\"storage-controller\"]\n"
+            .to_owned(),
+        pid: Some(42),
+        last_exit: Some(api::Exit {
+            how: Some(api::exit::How::Signal(9)),
+        }),
+        ..api::Service::default()
+    };
+    service.set_state(api::State::Ready);
+    service
+}
+
 #[tonic::async_trait]
 impl Serviced for Fake {
     async fn list_services(
         &self,
         _: Request<()>,
     ) -> Result<Response<api::ListServicesResponse>, Status> {
-        Err(Status::unimplemented("fake"))
+        Ok(Response::new(api::ListServicesResponse {
+            services: vec![containerd()],
+        }))
     }
 
     async fn get_service(
         &self,
-        _: Request<api::ServiceRef>,
+        request: Request<api::ServiceRef>,
     ) -> Result<Response<api::Service>, Status> {
-        Err(Status::unimplemented("fake"))
+        match request.into_inner().name.as_str() {
+            "containerd" => Ok(Response::new(containerd())),
+            name => Err(Status::not_found(format!("no service {name}"))),
+        }
     }
 
-    async fn start(&self, _: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented("fake"))
+    async fn start(&self, request: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
+        self.record(format!("serviced Start {}", request.into_inner().name));
+        Ok(Response::new(()))
     }
 
-    async fn stop(&self, _: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented("fake"))
+    async fn stop(&self, request: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
+        self.record(format!("serviced Stop {}", request.into_inner().name));
+        Ok(Response::new(()))
     }
 
-    async fn restart(&self, _: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
-        Err(Status::unimplemented("fake"))
+    async fn restart(&self, request: Request<api::ServiceRef>) -> Result<Response<()>, Status> {
+        self.record(format!("serviced Restart {}", request.into_inner().name));
+        Ok(Response::new(()))
     }
 
     async fn reload(&self, _: Request<()>) -> Result<Response<api::ReloadResponse>, Status> {

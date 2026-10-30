@@ -1,4 +1,4 @@
-//! The machine's API (`hardened.machine.v1`), which machine-controller serves on its socket and
+//! The machine's API (`hardened.machine.v1`, and `hardened.services.v1`), which machine-controller serves on its socket and
 //! machine-apiproxy over mutual TLS, and the settings machine-controller reads from user-data
 //! ([`UserData`], [`Settings`]).
 //!
@@ -19,6 +19,7 @@ mod generated {
 }
 
 pub use generated::hardened::machine::v1 as machine;
+pub use generated::hardened::services::v1 as services;
 pub use module_name::ModuleName;
 pub use settings::{
     Auth, Endpoint, Error, ModuleLoad, NtpSettings, Registry, RegistrySettings, Settings, UserData,

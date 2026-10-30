@@ -18,6 +18,7 @@ mod kmod;
 mod machine_api;
 mod machine_identity;
 mod metadata;
+mod services_api;
 mod setup;
 mod state;
 mod sysctl;

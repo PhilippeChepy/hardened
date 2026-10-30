@@ -53,6 +53,9 @@ impl Role {
             "/hardened.machine.v1.Machine/GetSettings",
             "/hardened.machine.v1.Machine/Storage",
             "/hardened.machine.v1.Machine/Time",
+            "/hardened.services.v1.Services/List",
+            "/hardened.services.v1.Services/Get",
+            "/hardened.services.v1.Services/Logs",
             "/hardened.workloads.v1.Workloads/List",
             "/hardened.workloads.v1.Workloads/Logs",
             "/hardened.attestation.v1.Attestation/Pcrs",
@@ -107,8 +110,16 @@ mod tests {
             "/hardened.attestation.v1.Attestation/EventLog",
             "/hardened.attestation.v1.Attestation/Quote",
             "/hardened.workloads.v1.Workloads/Logs",
+            "/hardened.services.v1.Services/Get",
         ] {
             assert_eq!(Role::required_for(method), Role::Reader, "{method}");
+        }
+        for method in [
+            "/hardened.services.v1.Services/Stop",
+            "/hardened.services.v1.Services/Reload",
+            "/hardened.workloads.v1.Workloads/Exec",
+        ] {
+            assert_eq!(Role::required_for(method), Role::Admin, "{method}");
         }
         assert!(Role::Admin > Role::Reader, "admins may do what readers may");
     }

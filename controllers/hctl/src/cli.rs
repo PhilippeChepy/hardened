@@ -9,6 +9,7 @@ use crate::attest;
 use crate::client;
 use crate::machine;
 use crate::pki;
+use crate::services;
 use crate::workloads;
 
 #[derive(Parser)]
@@ -43,6 +44,9 @@ enum Command {
     Reboot,
     /// Powers the machine off.
     Shutdown,
+    /// Manages serviced's services.
+    #[command(subcommand, alias = "services")]
+    Service(services::Command),
     /// Manages workloads (containers).
     #[command(subcommand)]
     Workloads(workloads::Command),
@@ -68,6 +72,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Time => machine::time(client::connect(connection).await?).await?,
         Command::Reboot => machine::reboot(client::connect(connection).await?).await?,
         Command::Shutdown => machine::shutdown(client::connect(connection).await?).await?,
+        Command::Service(command) => {
+            services::run(client::connect(connection).await?, command).await?;
+        }
         Command::Workloads(command) => {
             return workloads::run(client::connect(connection).await?, command).await;
         }

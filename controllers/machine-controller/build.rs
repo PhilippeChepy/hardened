@@ -1,10 +1,10 @@
 //! Compiles the machine's API with `protox`, so no `protoc` binary is required.
 //!
-//! Its messages carry the controllers' and machine-apiproxy's: their protos are read from their
-//! crates, and their generated types used from there rather than generated again.
+//! Its messages carry the controllers', machine-apiproxy's and serviced's: their protos are read
+//! from their crates, and their generated types used from there rather than generated again.
 
 /// The packages the machine's API imports, each with its proto directory and its Rust module.
-const IMPORTED: [(&str, &str, &str); 7] = [
+const IMPORTED: [(&str, &str, &str); 8] = [
     (
         ".hardened.apiproxy.v1",
         "../machine-apiproxy/proto",
@@ -19,6 +19,11 @@ const IMPORTED: [(&str, &str, &str); 7] = [
         ".hardened.network.v1",
         "../network-controller/proto",
         "::network_controller::network",
+    ),
+    (
+        ".hardened.serviced.v1",
+        "../../serviced/libserviced/proto",
+        "::libserviced::api",
     ),
     (
         ".hardened.storage.v1",
@@ -42,16 +47,19 @@ const IMPORTED: [(&str, &str, &str); 7] = [
     ),
 ];
 
-const PROTO: &str = "hardened/machine/v1/machine.proto";
+const PROTOS: [&str; 2] = [
+    "hardened/machine/v1/machine.proto",
+    "hardened/services/v1/services.proto",
+];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let includes = ["proto"]
         .into_iter()
         .chain(IMPORTED.map(|(_, directory, _)| directory));
-    let mut file_descriptors = protox::compile([PROTO], includes)?;
+    let mut file_descriptors = protox::compile(PROTOS, includes)?;
     // The imported files' messages are extern, but their services would still be generated.
     for file in &mut file_descriptors.file {
-        if file.name() != PROTO {
+        if !PROTOS.contains(&file.name()) {
             file.service.clear();
         }
     }

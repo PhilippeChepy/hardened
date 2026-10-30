@@ -1,7 +1,7 @@
 //! The machine's API, which machine-apiproxy serves over mutual TLS: `Machine` answered here,
-//! from what machine-controller knows, the controllers' APIs and serviced's; `Workloads` and
-//! `Attestation` forwarded. Its socket allows machine-apiproxy only, which checks its clients'
-//! roles.
+//! from what machine-controller knows, the controllers' APIs and serviced's, and `Services` from
+//! serviced's; `Workloads` and `Attestation` forwarded. Its socket allows machine-apiproxy only,
+//! which checks its clients' roles.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use libserviced::api::serviced_client::ServicedClient;
 use machine_controller::machine;
 use machine_controller::machine::machine_server::Machine;
 use machine_controller::machine::machine_server::MachineServer;
+use machine_controller::services::services_server::ServicesServer;
 use storage_controller::storage;
 use storage_controller::storage::storage_controller_client::StorageControllerClient;
 use time_controller::time;
@@ -29,6 +30,7 @@ use workload_controller::workloads::workloads_server::WorkloadsServer;
 
 use crate::controllers::Controllers;
 use crate::machine_identity::MachineIdentity;
+use crate::services_api::ServicesService;
 
 /// The API's services, for the machine of `identity` configured with `settings` (without
 /// secrets).
@@ -44,6 +46,9 @@ pub fn router(
             identity,
             settings,
         }))
+        .add_service(ServicesServer::new(ServicesService::new(
+            controllers.serviced.channel(),
+        )))
         .add_service(Forwarder::<WorkloadsServer<()>>::new(
             controllers.workload.socket(),
             "workload-controller does not run",
@@ -223,6 +228,73 @@ mod tests {
                 "serviced Logs service=\"\" tail=10 follow=true",
                 "serviced Reboot",
                 "serviced PowerOff",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn services_come_from_serviced_typed() {
+        use machine_controller::services;
+        use machine_controller::services::services_client::ServicesClient;
+
+        let harness = start().await;
+        let mut client = ServicesClient::new(harness.channel.clone());
+        let list = client.list(()).await.unwrap().into_inner().services;
+        assert_eq!(list.len(), 1);
+        let service_ref = |name: &str| services::ServiceRef {
+            name: name.to_owned(),
+        };
+        let containerd = client
+            .get(service_ref("containerd"))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(containerd, list[0]);
+        assert_eq!(containerd.requires, ["storage-controller"]);
+        assert_eq!(containerd.state(), api::State::Ready);
+        assert_eq!(containerd.pid, Some(42));
+        assert_eq!(
+            containerd.last_exit,
+            Some(services::service::LastExit::Signal(9))
+        );
+        let missing = client.get(service_ref("nope")).await.unwrap_err();
+        assert_eq!(missing.code(), Code::NotFound);
+        let invalid = client.stop(service_ref("../x")).await.unwrap_err();
+        assert_eq!(invalid.code(), Code::InvalidArgument);
+
+        client.start(service_ref("containerd")).await.unwrap();
+        client.stop(service_ref("containerd")).await.unwrap();
+        client.restart(service_ref("containerd")).await.unwrap();
+        client.reload(()).await.unwrap();
+        let request = services::LogsRequest {
+            name: "containerd".to_owned(),
+            follow: false,
+            tail: 5,
+        };
+        let lines: Vec<services::LogLine> = client
+            .logs(request)
+            .await
+            .unwrap()
+            .into_inner()
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        assert_eq!(lines[0].text, "boot complete");
+        let request = services::LogsRequest::default();
+        let unnamed = client.logs(request).await.unwrap_err();
+        assert_eq!(
+            unnamed.code(),
+            Code::InvalidArgument,
+            "serviced's own is Machine/Logs"
+        );
+        assert_eq!(
+            harness.fakes.calls(),
+            [
+                "serviced Start containerd",
+                "serviced Stop containerd",
+                "serviced Restart containerd",
+                "serviced Reload",
+                "serviced Logs service=\"containerd\" tail=5 follow=false",
             ]
         );
     }

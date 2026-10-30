@@ -9,7 +9,9 @@ mod client;
 mod exec;
 mod machine;
 mod pki;
+mod services;
 mod settings_toml;
+mod table;
 mod workloads;
 
 use std::io;

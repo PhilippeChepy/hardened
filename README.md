@@ -131,7 +131,7 @@ The Rust code is in three Cargo workspaces, each with its `Cargo.lock`: `service
 | [serviced/serviced/](serviced/serviced/) | PID 1: the service supervisor, its sandboxes and its API |
 | [serviced/libserviced/](serviced/libserviced/) | What a service needs from serviced: the service file format, its layers and the services' log paths; its API, notify, socket activation, caller authorization |
 | [controllers/network-controller/](controllers/network-controller/) | DHCP client and resolver configuration; its library: its API and `settings.dns` |
-| [controllers/machine-controller/](controllers/machine-controller/) | Instance setup from metadata and user-data, the controllers' configuration, the machine's API; its library: the machine's API (`hardened.machine.v1`), the settings model and user-data parsing |
+| [controllers/machine-controller/](controllers/machine-controller/) | Instance setup from metadata and user-data, the controllers' configuration, the machine's API; its library: the machine's API (`hardened.machine.v1`, `hardened.services.v1`), the settings model and user-data parsing |
 | [controllers/storage-controller/](controllers/storage-controller/) | The state partition on `/var`, optionally encrypted; its library: its API and `settings.hardened.storage` |
 | [controllers/time-controller/](controllers/time-controller/) | SNTP client; its library: its API and its time servers |
 | [controllers/trust-controller/](controllers/trust-controller/) | The TPM's only user, with its TPM 2.0 client: attestation evidence and sealing; its library: their APIs |

@@ -69,6 +69,8 @@ hctl logs --follow            # serviced's log
 hctl settings                 # the effective settings, secrets redacted
 hctl storage                  # what backs /var, and why
 hctl time                     # clock synchronization
+hctl service list             # serviced's services; status, logs, start, stop, restart, reload
+hctl service status containerd
 hctl workloads apply hello --image public.ecr.aws/docker/library/busybox:1.37 -- sleep 3600
 hctl workloads list
 hctl workloads logs hello

@@ -335,6 +335,7 @@ fn exit_code(status: ExitStatus) -> i32 {
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::OnceLock;
 
     use tokio_stream::wrappers::ReceiverStream;
     use workload_console::console;
@@ -356,16 +357,22 @@ exec "$@"
 "#;
 
     struct Test {
-        dir: tempfile::TempDir,
+        dir: &'static Path,
     }
 
     impl Test {
+        /// The fake is written once, before any test spawns: a child forked while it is open
+        /// for writing would make executing it fail (ETXTBSY).
         fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let ctr = dir.path().join("ctr");
-            fs::write(&ctr, FAKE_CTR).unwrap();
-            fs::set_permissions(&ctr, fs::Permissions::from_mode(0o755)).unwrap();
-            Self { dir }
+            static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+            let dir = DIR.get_or_init(|| {
+                let dir = tempfile::tempdir().unwrap();
+                let ctr = dir.path().join("ctr");
+                fs::write(&ctr, FAKE_CTR).unwrap();
+                fs::set_permissions(&ctr, fs::Permissions::from_mode(0o755)).unwrap();
+                dir
+            });
+            Self { dir: dir.path() }
         }
 
         fn start(
@@ -382,7 +389,7 @@ exec "$@"
                 terminal: terminal.map(console::TerminalSize::from),
             })
             .unwrap();
-            let ctr = self.dir.path().join("ctr");
+            let ctr = self.dir.join("ctr");
             let session = Session::start(&ctr, "workload-web".parse().unwrap(), process).unwrap();
             let (inputs, received) = mpsc::channel(4);
             let (responses, sent) = mpsc::channel(4);

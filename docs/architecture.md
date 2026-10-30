@@ -175,6 +175,7 @@ alone reads metadata and user-data, and gives each controller its part through i
 ```text
 hctl ──mTLS──▶ machine-apiproxy ──▶ machine-controller ─┬─ Machine ──▶ serviced,
                                                          │   storage-controller, time-controller
+                                                         ├─ Services ──▶ serviced
                                                          ├─ Workloads ──▶ workload-controller
                                                          │                  ├─▶ serviced
                                                          │                  └─▶ workload-console (Exec)
@@ -196,7 +197,9 @@ hctl ──mTLS──▶ machine-apiproxy ──▶ machine-controller ─┬─
   `Machine` (`hardened.machine.v1`, machine-controller's) from what it knows (version,
   `GetSettings`: a typed `Settings` without secrets) and from the other APIs (`Storage` is
   storage-controller's state, `Time` time-controller's status, `Logs` serviced's own log, `Reboot`
-  and `Shutdown` serviced's); `Workloads` (`hardened.workloads.v1`, workload-controller's)
+  and `Shutdown` serviced's); `Services` (`hardened.services.v1`, machine-controller's, `hctl
+  service`): serviced's services, their state and logs, start, stop, restart and reload, typed
+  (their definition's TOML left out, but what they require); `Workloads` (`hardened.workloads.v1`, workload-controller's)
   forwarded to workload-controller (`Exec` on to workload-console), `Attestation` (`hardened.attestation.v1`, trust-controller's)
   to trust-controller.
 

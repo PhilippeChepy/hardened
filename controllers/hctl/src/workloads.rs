@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::iter;
 use std::process::ExitCode;
 
 use anyhow::bail;
@@ -17,6 +16,7 @@ use workload_controller::workloads::{
 use crate::args::EnvVar;
 use crate::client::{CallExt, CallFailed};
 use crate::exec::{self, ExecArgs};
+use crate::table;
 
 /// The `hctl workloads` subcommands.
 #[derive(Subcommand)]
@@ -148,27 +148,10 @@ pub async fn run(channel: Channel, command: Command) -> anyhow::Result<ExitCode>
     Ok(ExitCode::SUCCESS)
 }
 
-/// Prints `workloads` as a table, one row each, columns aligned.
+/// Prints `workloads` as a table, one row each.
 fn print_table(out: &mut impl Write, workloads: &[Workload]) -> io::Result<()> {
-    let header = ["NAME", "SOURCE", "RESTARTS", "IMAGE", "STATE"].map(str::to_owned);
-    let rows: Vec<[String; 5]> = iter::once(header)
-        .chain(workloads.iter().map(row))
-        .collect();
-    let mut widths = [0; 5];
-    for row in &rows {
-        for (width, cell) in widths.iter_mut().zip(row) {
-            *width = (*width).max(cell.chars().count());
-        }
-    }
-    for row in &rows {
-        let line: String = row
-            .iter()
-            .zip(widths)
-            .map(|(cell, width)| format!("{cell:<width$}  "))
-            .collect();
-        writeln!(out, "{}", line.trim_end())?;
-    }
-    Ok(())
+    let header = ["NAME", "SOURCE", "RESTARTS", "IMAGE", "STATE"];
+    table::print(out, header, workloads.iter().map(row))
 }
 
 /// The table row of `workload`.

@@ -13,6 +13,7 @@ base64.workspace = true
 clap.workspace = true
 hex.workspace = true
 kubelet-controller.workspace = true
+libserviced.workspace = true
 machine-apiproxy.workspace = true
 machine-controller.workspace = true
 rustix = { workspace = true, features = ["termios"] }
