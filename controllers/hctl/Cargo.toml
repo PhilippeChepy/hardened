@@ -17,6 +17,7 @@ libserviced.workspace = true
 machine-apiproxy.workspace = true
 machine-controller.workspace = true
 rustix = { workspace = true, features = ["termios"] }
+ring.workspace = true
 rcgen = { workspace = true, features = ["x509-parser"] }
 rustls-pki-types.workspace = true
 serde.workspace = true

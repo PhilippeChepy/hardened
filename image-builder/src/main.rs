@@ -19,6 +19,7 @@ mod image;
 mod keys;
 mod oci;
 mod patch;
+mod pcr11;
 mod pipeline;
 mod podman;
 mod progress;

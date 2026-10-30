@@ -382,7 +382,25 @@ call. It runs as root without any capability, seeing only the TPM device and sec
 client is its own ([`controllers/trust-controller`](../controllers/trust-controller), `tpm.rs`).
 
 Since the UKI command line (and therefore the verity root hash) is measured, a verifier can
-check the exact OS image a machine booted.
+check the exact OS image a machine booted:
+
+- **Expected values:** the build writes the PCR 11 an image's systemd-stub measures,
+  `build/out/<image>.pcrs.json` ([`pcr11.rs`](../image-builder/src/pcr11.rs): the UKI's
+  sections, in systemd's order, without the boot phases systemd would add). It equals
+  `systemd-measure calculate --phase=` on the UKI's sections.
+- **Verification:** `hctl attest verify --expected <image>.pcrs.json` requests a quote over a
+  random nonce, then checks it
+  ([`trust_controller::quote_verification`](../controllers/trust-controller/src/quote_verification.rs)):
+  - its ECDSA P-256 signature, by a restricted signing key bound to the TPM, which only signs
+    the TPM's own attestations;
+  - the signer's qualified name (a primary key of the endorsement hierarchy);
+  - the nonce;
+  - that the PCR values returned are those quoted.
+
+  It then compares them with the expected ones, and the attestation key with `--ak <fingerprint>`.
+- **The attestation key's origin is not proven:** the API serves no endorsement-key
+  certificate, nor credential activation. Pin the key's fingerprint, which stays the same
+  across reboots, when the machine is provisioned.
 
 ## Build system
 

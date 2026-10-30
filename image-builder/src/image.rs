@@ -232,6 +232,13 @@ pub fn build_image(
     fs::write(&sbom, serde_json::to_vec_pretty(&document)?)?;
     fs::write(out.join(format!("{base}.manifest.json")), &manifest_json)?;
     fs::copy(&uki, out.join(format!("{base}.efi")))?;
+    // The values a verifier expects (`hctl attest verify --expected`).
+    let pcr11 = crate::pcr11::expected(&fs::read(&uki)?).context("computing PCR 11")?;
+    let expected = serde_json::json!({ "sha256": { "11": pcr11.to_string() } });
+    fs::write(
+        out.join(format!("{base}.pcrs.json")),
+        serde_json::to_vec_pretty(&expected)?,
+    )?;
     fs::write(
         out.join(format!("{base}.roothash")),
         format!("{}\n", verity.roothash),

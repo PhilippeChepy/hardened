@@ -532,6 +532,25 @@ mod swtpm {
         let quote = tpm.quote(b"verifier nonce", HashAlg::Sha256, &all).unwrap();
         assert_eq!(quote.pcrs.len(), 24);
         verify(&mut tpm, &quote.attest, &quote.signature).unwrap();
+        // What a remote verifier checks, without the TPM.
+        let response = trust_controller::attestation::QuoteResponse {
+            attest: quote.attest.clone(),
+            signature: quote.signature.clone(),
+            ak_public: quote.ak_public.clone(),
+            values: quote
+                .pcrs
+                .iter()
+                .map(|(index, digest)| trust_controller::attestation::PcrValue {
+                    index: *index,
+                    digest: digest.clone(),
+                })
+                .collect(),
+        };
+        let sha256 = trust_controller::attestation::HashAlgorithm::Sha256;
+        let verified =
+            trust_controller::quote_verification::verify(&response, b"verifier nonce", sha256)
+                .unwrap();
+        assert_eq!(verified.pcrs.len(), 24);
         let mut forged = quote.attest.clone();
         *forged.last_mut().unwrap() ^= 1;
         assert!(matches!(

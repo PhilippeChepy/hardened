@@ -18,6 +18,11 @@ pub struct Sha256([u8; 32]);
 pub struct InvalidSha256(String);
 
 impl Sha256 {
+    /// A digest computed elsewhere, such as a PCR value.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn digest(data: impl AsRef<[u8]>) -> Self {
         Self::finalize(sha2::Sha256::new_with_prefix(data))
     }

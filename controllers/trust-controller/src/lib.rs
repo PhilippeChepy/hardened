@@ -1,9 +1,10 @@
 //! trust-controller's APIs, on [`SOCKET`]: sealing secrets to the booted image
 //! (`hardened.trust.v1`), and the attestation evidence of the machine's API
-//! (`hardened.attestation.v1`).
+//! (`hardened.attestation.v1`); and [`quote_verification`], for its verifiers.
 
 #![warn(missing_docs)]
 
+pub mod quote_verification;
 mod socket;
 
 /// The code prost and tonic generate from `proto/`, whose comments document what it covers.
