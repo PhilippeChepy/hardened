@@ -76,7 +76,10 @@ activate = true
   upper-cased, `-` as `_`): its `allow` list, comma-separated.
 - A service starts at boot, unless one of its sockets has `activate = true`: it then starts on
   the first connection to such a socket, or when a service requiring it starts. Connections made
-  before it runs wait in the backlog.
+  before it runs wait in the backlog. Once its run is over and not restarted (`restart =
+  "on-failure"` and a clean exit), the next connection starts it again: a service may exit when
+  idle, as workload-console and trust-controller do after 60 s without a call in progress
+  ([`controllers_helpers::idle`](../controllers/controllers-helpers/src/idle.rs)).
 - Authorization is the service's: it identifies each caller's service with serviced's
   `IdentifyProcess` and drops connections from services not in `allow`
   ([`libserviced::authorization`](../serviced/libserviced/src/authorization)).
@@ -200,7 +203,8 @@ configured without a correction.
 
 The TPM's only user: attestation evidence (`hardened.attestation.v1.Attestation`) for
 machine-controller, and sealing (`hardened.trust.v1.Sealing`) for storage-controller's key.
-Started on its first call; without a TPM it never runs and its socket does not exist.
+Started on its first call, it exits after 60 s without one (`restart = "on-failure"`); without a
+TPM it never runs and its socket does not exist.
 
 - **Sandbox**: root without capabilities: enough for the root-owned TPM device and event log,
   and nothing else is visible. It never parses TLS: machine-apiproxy's calls reach it through
@@ -230,7 +234,8 @@ persistent layer is on `/var`.
 
 Runs processes in running workloads' containers for workload-controller, which forwards the API's
 `Workloads/Exec` (`hctl workloads exec`): `ctr tasks exec` on a pseudo-terminal or pipes, killed
-when the call ends first. Socket-activated, once containerd is ready; at most 16 processes at once.
+when the call ends first. Socket-activated, once containerd is ready, it exits after 60 s without a
+session (`restart = "on-failure"`); at most 16 processes at once.
 
 - **Unconfined**: `ctr` reaches containerd's socket. It parses nothing from the network:
   workload-controller, confined, checks the requests first.

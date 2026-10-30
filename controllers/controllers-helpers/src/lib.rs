@@ -7,7 +7,7 @@
 //!
 //! [`atomic_file`] is how the services replace the files they write. [`channel()`] and
 //! [`lazy_channel`] connect to a service's gRPC API on its unix socket, and [`Forwarder`] relays
-//! calls to it.
+//! calls to it. [`idle`] tells when a socket-activated service may exit.
 //!
 //! A controller converts the message it receives back into its domain types with `TryFrom`,
 //! which validates it as user-data parsing does, failing with an [`InvalidMessage`].
@@ -22,6 +22,7 @@ mod channel;
 mod domain_name;
 mod forwarder;
 mod hostname;
+pub mod idle;
 pub mod invalid_message;
 mod invalid_value;
 mod non_empty;

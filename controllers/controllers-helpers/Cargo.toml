@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 http.workspace = true
+http-body-util.workspace = true
 hyper-util.workspace = true
 rcgen = { workspace = true, optional = true }
 rustls-pki-types.workspace = true
@@ -28,4 +29,5 @@ libserviced = { workspace = true, features = ["testing"] }
 rcgen.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-stream.workspace = true

@@ -1,6 +1,7 @@
 description = "trust-controller: the TPM's only user, for attestation evidence and sealed secrets"
 exec = ["/usr/bin/trust-controller"]
 condition.path-exists = "/dev/tpmrm0"
+restart = "on-failure"
 console = true
 
 [[sockets]]

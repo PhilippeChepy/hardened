@@ -1,6 +1,7 @@
 description = "workload-console: runs processes in workloads' containers, for the API's Workloads/Exec"
 exec = ["/usr/bin/workload-console"]
 requires = ["containerd"]
+restart = "on-failure"
 console = true
 runtime-directories = ["/run/workload-console"]
 
