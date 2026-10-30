@@ -19,7 +19,7 @@
 | runc | OCI runtime | static PIE (cgo: musl, libseccomp; C with LTO) |
 | CA certificates | registry TLS | — |
 | serviced | PID 1: runs the services, confines them, keeps their logs, handles power | static PIE (musl, libunwind; Rust LTO) |
-| network-controller, machine-controller, storage-controller, time-controller, trust-controller, workload-controller, machine-apiproxy | the services of the image: DHCP, instance setup and the machine's API, `/var`, time, the TPM, workloads, the API over mTLS ([Services](#services)) | static PIE (musl, libunwind; Rust LTO) |
+| network-controller, machine-controller, storage-controller, time-controller, trust-controller, workload-controller, workload-console, machine-apiproxy | the services of the image: DHCP, instance setup and the machine's API, `/var`, time, the TPM, workloads, processes run in them, the API over mTLS ([Services](#services)) | static PIE (musl, libunwind; Rust LTO) |
 | cryptsetup | formats and opens the encrypted state partition (LUKS2), run by storage-controller | static (musl, OpenSSL's libcrypto, json-c, libdevmapper, popt, libuuid; LTO) |
 | mke2fs | creates the filesystem of the encrypted state partition, run by storage-controller | static (musl, e2fsprogs' libraries; LTO) |
 
@@ -112,11 +112,11 @@ rather than one never answered when the service cannot run.
 
 **Sockets and readiness.** Every service's API is gRPC on a unix socket that serviced creates and
 passes to it as systemd does; serviced never accepts on them, so a socket-activated service
-(storage-controller, trust-controller, workload-controller, machine-apiproxy) starts on its first
-connection. Each service authorizes its own callers: serviced's `IdentifyProcess` tells which
-service the peer's pid (`SO_PEERCRED`) belongs to, by its cgroup, and the connection is dropped
-unless the socket's `allow` names that service. A `notify` service is ready once it sent
-`READY=1` (systemd's protocol), others once started
+(storage-controller, trust-controller, workload-controller, workload-console, machine-apiproxy)
+starts on its first connection. Each service authorizes its own callers: serviced's
+`IdentifyProcess` tells which service the peer's pid (`SO_PEERCRED`) belongs to, by its cgroup,
+and the connection is dropped unless the socket's `allow` names that service. A `notify` service
+is ready once it sent `READY=1` (systemd's protocol), others once started
 ([details](services.md#sockets-and-activation)).
 
 **Sandboxes.** The services parsing untrusted input run confined, as their file says: their own
@@ -132,6 +132,7 @@ and `exec` ([details](services.md#sandbox)).
 | time-controller | [time](#time) | yes |
 | trust-controller | the TPM: [attestation](#attestation) and sealing; socket-activated, with a TPM only | yes |
 | workload-controller | the `workload-<name>` services ([workloads](#workloads)); socket-activated | yes |
+| workload-console | processes run in workloads' containers (`Workloads/Exec`); socket-activated | no: `ctr` needs containerd's socket |
 | kubelet-controller | kubelet's configuration ([Kubernetes](#kubernetes)) | no: it writes kubelet's files |
 | machine-apiproxy | the machine's API over mTLS ([APIs](#apis)); socket-activated, when enabled | yes |
 | containerd | the container runtime | no |
@@ -175,7 +176,8 @@ alone reads metadata and user-data, and gives each controller its part through i
 hctl ──mTLS──▶ machine-apiproxy ──▶ machine-controller ─┬─ Machine ──▶ serviced,
                                                          │   storage-controller, time-controller
                                                          ├─ Workloads ──▶ workload-controller
-                                                         │                  └─▶ serviced
+                                                         │                  ├─▶ serviced
+                                                         │                  └─▶ workload-console (Exec)
                                                          └─ Attestation ──▶ trust-controller
                                                                               └─▶ /dev/tpmrm0
 ```
@@ -195,7 +197,7 @@ hctl ──mTLS──▶ machine-apiproxy ──▶ machine-controller ─┬─
   `GetSettings`: a typed `Settings` without secrets) and from the other APIs (`Storage` is
   storage-controller's state, `Time` time-controller's status, `Logs` serviced's own log, `Reboot`
   and `Shutdown` serviced's); `Workloads` (`hardened.workloads.v1`, workload-controller's)
-  forwarded to workload-controller, `Attestation` (`hardened.attestation.v1`, trust-controller's)
+  forwarded to workload-controller (`Exec` on to workload-console), `Attestation` (`hardened.attestation.v1`, trust-controller's)
   to trust-controller.
 
 machine-apiproxy terminates TLS, requires a client certificate from the configured CA, reads the
@@ -313,6 +315,10 @@ reads back. No Rust code talks to containerd.
   directories.
 - **Confinement:** unprivileged containers run with runc's defaults: containerd's default seccomp
   profile, `no_new_privileges` and the default capability set.
+- **Exec:** `Workloads/Exec` (`hctl workloads exec`, admin only) runs a process in a running
+  workload's container, as `kubectl exec` does: workload-controller checks the request and relays
+  the call to workload-console, which runs `ctr tasks exec` on a pseudo-terminal (`-t`) or pipes,
+  and kills the process if the call ends first.
 - **Networking:** containers share the host network namespace (kubelet's pods use CNI, see below).
 - **System images** are "from scratch" images holding a single static binary, today only `pause`
   ([Adding a component](#adding-a-component)). image-builder archives each as a reproducible OCI

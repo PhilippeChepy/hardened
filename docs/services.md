@@ -215,7 +215,8 @@ machine-controller's first call, which configures it. It requires storage-contro
 persistent layer is on `/var`.
 
 - **Sandbox**: root without capabilities. A workload's service runs any image with any privilege,
-  so a compromise has that power anyway; it only talks to serviced. The services it writes run
+  so a compromise has that power anyway; it only talks to serviced and workload-console. The
+  services it writes run
   unconfined, as root: `ctr` reaches containerd's socket, and containerd reads the registries'
   `hosts.toml` files (mode 0600).
 - **System calls**: `rename` (its state and the service files it writes); `unlink` (removing a
@@ -223,6 +224,15 @@ persistent layer is on `/var`.
 - **Binds**: its runtime directory; the runtime and persistent layers' directories, writable. It
   does not see the image's layer, so it checks the files it writes against the others only
   (workload services have no file in the image).
+
+### workload-console
+
+Runs processes in running workloads' containers for workload-controller, which forwards the API's
+`Workloads/Exec` (`hctl workloads exec`): `ctr tasks exec` on a pseudo-terminal or pipes, killed
+when the call ends first. Socket-activated, once containerd is ready; at most 16 processes at once.
+
+- **Unconfined**: `ctr` reaches containerd's socket. It parses nothing from the network:
+  workload-controller, confined, checks the requests first.
 
 ### machine-apiproxy
 

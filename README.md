@@ -26,6 +26,7 @@ UEFI ─▶ UKI (systemd-stub + kernel + cmdline with the dm-verity root hash, s
                    │     ├─ time-controller (SNTP client, sandboxed, CAP_SYS_TIME only)
                    │     ├─ trust-controller (the vTPM: attestation, sealing; sandboxed)
                    │     ├─ workload-controller: the workload-<name> services (sandboxed)
+                   │     │  └─ workload-console: hctl workloads exec, through ctr tasks exec
                    │     └─ machine-apiproxy (the machine's API over mTLS, sandboxed)
                    └─ containerd, once /var is mounted
                       └─ workload-<name>: ctr pull, ctr run (user-data or API)
@@ -135,6 +136,7 @@ The Rust code is in three Cargo workspaces, each with its `Cargo.lock`: `service
 | [controllers/time-controller/](controllers/time-controller/) | SNTP client; its library: its API and its time servers |
 | [controllers/trust-controller/](controllers/trust-controller/) | The TPM's only user, with its TPM 2.0 client: attestation evidence and sealing; its library: their APIs |
 | [controllers/workload-controller/](controllers/workload-controller/) | Workloads as `workload-<name>` services; its library: its APIs (`hardened.workload.v1`, `hardened.workloads.v1`) and the workloads' model |
+| [controllers/workload-console/](controllers/workload-console/) | Processes run in workloads' containers (`hctl workloads exec`); its library: its API (`hardened.console.v1`) |
 | [controllers/kubelet-controller/](controllers/kubelet-controller/) | kubelet's configuration (Kubernetes targets); its library: its API and `settings.kubernetes` |
 | [controllers/machine-apiproxy/](controllers/machine-apiproxy/) | The machine's API over mTLS; its library: its API, `settings.hardened.api` and the clients' roles |
 | [controllers/controllers-helpers/](controllers/controllers-helpers/) | The validated values several services share, the helpers of their settings and protobuf conversions, and gRPC channels to unix sockets with a forwarder |

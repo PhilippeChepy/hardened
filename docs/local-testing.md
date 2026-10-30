@@ -72,6 +72,7 @@ hctl time                     # clock synchronization
 hctl workloads apply hello --image public.ecr.aws/docker/library/busybox:1.37 -- sleep 3600
 hctl workloads list
 hctl workloads logs hello
+hctl workloads exec -it hello -- sh   # a shell in the container
 hctl attest quote --nonce $(openssl rand -hex 32)
 hctl reboot                   # or shutdown: a clean stop, unlike Ctrl-A X
 ```

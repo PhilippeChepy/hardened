@@ -15,6 +15,7 @@ use libserviced::definition::Condition;
 use libserviced::definition::Restart;
 use libserviced::definition::Service;
 use libserviced::definition::ServiceName;
+use workload_console::ContainerId;
 use workload_controller::ImageWorkload;
 use workload_controller::RestartPolicy;
 
@@ -33,6 +34,13 @@ pub fn service_name(name: &WorkloadName) -> ServiceName {
     format!("{PREFIX}{name}")
         .parse()
         .expect("a workload name is a valid service name")
+}
+
+/// The container running the workload `name`, named as its service; `None` when containerd
+/// would refuse that name (`--`, or a trailing `-`).
+#[must_use]
+pub fn container_id(name: &WorkloadName) -> Option<ContainerId> {
+    service_name(name).as_str().parse().ok()
 }
 
 /// The workload a service runs, by the service's name; `None` for other services.
@@ -192,9 +200,11 @@ console = true
     fn names() {
         let name: WorkloadName = "web".parse().unwrap();
         assert_eq!(service_name(&name).as_str(), "workload-web");
-        assert_eq!(workload_name("workload-web"), Some(name));
+        assert_eq!(workload_name("workload-web"), Some(name.clone()));
         assert_eq!(workload_name("containerd"), None);
         assert_eq!(workload_name("workload-"), None);
+        assert_eq!(container_id(&name).unwrap().as_str(), "workload-web");
+        assert_eq!(container_id(&"a--b".parse().unwrap()), None);
     }
 
     #[test]

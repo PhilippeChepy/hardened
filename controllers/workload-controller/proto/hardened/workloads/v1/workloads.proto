@@ -5,6 +5,7 @@ syntax = "proto3";
 package hardened.workloads.v1;
 
 import "google/protobuf/empty.proto";
+import "hardened/console/v1/console.proto";
 
 // Containers run through containerd, one serviced service each (workload-controller).
 service Workloads {
@@ -14,6 +15,8 @@ service Workloads {
   rpc Remove(WorkloadRef) returns (google.protobuf.Empty);
   rpc Restart(WorkloadRef) returns (google.protobuf.Empty);
   rpc Logs(WorkloadLogsRequest) returns (stream LogChunk);
+  // Runs a process in a running workload's container, as hardened.console.v1.Console/Exec.
+  rpc Exec(stream ExecRequest) returns (stream hardened.console.v1.ExecResponse);
 }
 
 enum RestartPolicy {
@@ -112,4 +115,16 @@ message WorkloadLogsRequest {
 
 message LogChunk {
   bytes data = 1;
+}
+
+message ExecRequest {
+  oneof request {
+    ExecStart start = 1;
+    hardened.console.v1.ExecInput input = 2;
+  }
+}
+
+message ExecStart {
+  string name = 1;
+  hardened.console.v1.Process process = 2;
 }

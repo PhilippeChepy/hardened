@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use crate::api::ProcessRef;
 use crate::api::ReloadResponse;
 use crate::api::Service;
 use crate::api::ServiceRef;
+use crate::api::State;
 use crate::api::serviced_client::ServicedClient;
 use crate::api::serviced_server::Serviced;
 use crate::api::serviced_server::ServicedServer;
@@ -41,12 +43,13 @@ pub enum Call {
 
 /// A serviced reading the service files of the layers below a root, as the machine's does below
 /// `/`, and recording what it is asked to do. A service exists while it has a file; its
-/// definition is its last layer's file, not merged. What the fake does not implement fails with
-/// `unimplemented`.
+/// definition is its last layer's file, not merged, and its state the one a test set, unspecified
+/// otherwise. What the fake does not implement fails with `unimplemented`.
 #[derive(Clone)]
 pub struct FakeServiced {
     root: PathBuf,
     calls: Arc<Mutex<Vec<Call>>>,
+    states: Arc<Mutex<BTreeMap<String, State>>>,
 }
 
 impl FakeServiced {
@@ -65,6 +68,7 @@ impl FakeServiced {
         let fake = Self {
             root: root.to_owned(),
             calls: Arc::default(),
+            states: Arc::default(),
         };
         let path = dir.join("serviced.sock");
         let listener = tokio::net::UnixListener::bind(&path).expect("the fake's socket");
@@ -117,6 +121,18 @@ impl FakeServiced {
         names
     }
 
+    /// Sets the state of the service `name`, while it has a file.
+    ///
+    /// # Panics
+    ///
+    /// When a test panicked setting a state.
+    pub fn set_state(&self, name: &str, state: State) {
+        self.states
+            .lock()
+            .expect("no test panicked setting a state")
+            .insert(name.to_owned(), state);
+    }
+
     /// The calls made since the last time, in order; tests drop them to start afresh.
     pub fn take_calls(&self) -> Vec<Call> {
         std::mem::take(&mut self.calls())
@@ -150,6 +166,15 @@ impl FakeServiced {
             service.layers.push(crate::api::Layer::from(layer).into());
             service.definition = contents;
         }
+        let states = self
+            .states
+            .lock()
+            .expect("no test panicked setting a state");
+        for service in &mut services {
+            if let Some(&state) = states.get(&service.name) {
+                service.set_state(state);
+            }
+        }
         services
     }
 
@@ -180,8 +205,13 @@ impl Serviced for FakeServiced {
         Ok(Response::new(ListServicesResponse { services }))
     }
 
-    async fn get_service(&self, _: Request<ServiceRef>) -> Result<Response<Service>, Status> {
-        Err(Status::unimplemented("get_service"))
+    async fn get_service(&self, request: Request<ServiceRef>) -> Result<Response<Service>, Status> {
+        let name = request.into_inner().name;
+        self.services()
+            .into_iter()
+            .find(|service| service.name == name)
+            .map(Response::new)
+            .ok_or_else(|| Status::not_found(name))
     }
 
     async fn start(&self, request: Request<ServiceRef>) -> Result<Response<()>, Status> {

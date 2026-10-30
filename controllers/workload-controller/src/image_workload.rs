@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use controllers_helpers::Argument;
 use controllers_helpers::validated_string;
 use serde::{Deserialize, Serialize};
 
@@ -34,13 +35,6 @@ pub struct ImageWorkload {
     #[serde(default)]
     pub console: bool,
 }
-
-validated_string!(
-    /// An element of a workload's command line, which `execve` takes: without NUL bytes.
-    Argument,
-    "argument",
-    check_no_nul
-);
 
 validated_string!(
     /// An environment variable's value, which `execve` takes: without NUL bytes.

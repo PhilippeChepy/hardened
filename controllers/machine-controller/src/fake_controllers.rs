@@ -297,6 +297,15 @@ impl Workloads for Fake {
         });
         Ok(Response::new(Box::pin(tokio_stream::iter(chunks))))
     }
+
+    type ExecStream = Answers<workload_console::console::ExecResponse>;
+
+    async fn exec(
+        &self,
+        _: Request<tonic::Streaming<workloads::ExecRequest>>,
+    ) -> Result<Response<Self::ExecStream>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
 }
 
 #[tonic::async_trait]

@@ -6,6 +6,7 @@ mod args;
 mod attest;
 mod cli;
 mod client;
+mod exec;
 mod machine;
 mod pki;
 mod settings_toml;
@@ -21,7 +22,7 @@ use crate::cli::Cli;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     match cli::run(Cli::parse()).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         // `hctl logs | head` closing the pipe is not a failure.
         Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,
         Err(error) => {

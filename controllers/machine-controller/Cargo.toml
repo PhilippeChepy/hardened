@@ -36,6 +36,7 @@ tonic-prost.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 trust-controller.workspace = true
+workload-console.workspace = true
 workload-controller.workspace = true
 
 [dev-dependencies]

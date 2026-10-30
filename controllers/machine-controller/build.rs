@@ -4,7 +4,7 @@
 //! crates, and their generated types used from there rather than generated again.
 
 /// The packages the machine's API imports, each with its proto directory and its Rust module.
-const IMPORTED: [(&str, &str, &str); 6] = [
+const IMPORTED: [(&str, &str, &str); 7] = [
     (
         ".hardened.apiproxy.v1",
         "../machine-apiproxy/proto",
@@ -29,6 +29,11 @@ const IMPORTED: [(&str, &str, &str); 6] = [
         ".hardened.time.v1",
         "../time-controller/proto",
         "::time_controller::time",
+    ),
+    (
+        ".hardened.console.v1",
+        "../workload-console/proto",
+        "::workload_console::console",
     ),
     (
         ".hardened.workloads.v1",

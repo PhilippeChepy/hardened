@@ -23,18 +23,24 @@ use rcgen::KeyPair;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UnixListener;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::Code;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use tonic::Streaming;
 use tonic::transport::Certificate;
 use tonic::transport::Channel;
 use tonic::transport::ClientTlsConfig;
 use tonic::transport::Identity;
+use workload_console::console;
+use workload_console::console::exec_input;
+use workload_console::console::exec_response;
 use workload_controller::workloads;
 use workload_controller::workloads::workloads_client::WorkloadsClient;
 use workload_controller::workloads::workloads_server::Workloads;
@@ -110,6 +116,29 @@ impl Workloads for FakeMachineController {
             })
         });
         Ok(Response::new(Box::pin(tokio_stream::iter(chunks))))
+    }
+
+    type ExecStream = Answers<console::ExecResponse>;
+
+    /// Echoes each input as it comes, until stdin is closed.
+    async fn exec(
+        &self,
+        request: Request<Streaming<workloads::ExecRequest>>,
+    ) -> Result<Response<Self::ExecStream>, Status> {
+        self.record("Exec");
+        let echoes = request.into_inner().skip(1).map_while(|request| {
+            let workloads::exec_request::Request::Input(input) = request.ok()?.request? else {
+                return None;
+            };
+            let response = match input.input? {
+                exec_input::Input::Stdin(data) => exec_response::Response::Stdout(data),
+                _ => exec_response::Response::ExitCode(0),
+            };
+            Some(Ok(console::ExecResponse {
+                response: Some(response),
+            }))
+        });
+        Ok(Response::new(Box::pin(echoes)))
     }
 }
 
@@ -286,6 +315,13 @@ async fn reader_reads_the_machine_but_cannot_change_it() {
         .unwrap_err();
     assert_eq!(denied.code(), Code::PermissionDenied, "{denied:?}");
     assert_eq!(denied.message(), "method requires the admin role");
+    let denied = workloads
+        .exec(tokio_stream::iter([exec_input(exec_input::Input::Stdin(
+            Vec::new(),
+        ))]))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code(), Code::PermissionDenied, "{denied:?}");
     assert!(
         harness.calls().is_empty(),
         "nothing reached machine-controller"
@@ -320,6 +356,45 @@ async fn admin_changes_the_machine() {
         .await
         .unwrap();
     assert_eq!(harness.calls(), ["Apply", "Restart"]);
+}
+
+fn exec_input(input: exec_input::Input) -> workloads::ExecRequest {
+    workloads::ExecRequest {
+        request: Some(workloads::exec_request::Request::Input(
+            console::ExecInput { input: Some(input) },
+        )),
+    }
+}
+
+#[tokio::test]
+async fn exec_streams_both_ways() {
+    let harness = Harness::start().await;
+    let mut workloads =
+        WorkloadsClient::new(harness.channel(Some(Role::Admin.organization())).await);
+    let (requests, received) = mpsc::channel(4);
+    let start = workloads::ExecRequest {
+        request: Some(workloads::exec_request::Request::Start(
+            workloads::ExecStart::default(),
+        )),
+    };
+    requests.send(start).await.unwrap();
+    let mut responses = workloads
+        .exec(ReceiverStream::new(received))
+        .await
+        .unwrap()
+        .into_inner();
+    // Each answer comes before the next request is sent: nothing waits for the end of a stream.
+    for data in [b"ls\n".to_vec(), b"exit\n".to_vec()] {
+        let stdin = exec_input(exec_input::Input::Stdin(data.clone()));
+        requests.send(stdin).await.unwrap();
+        let response = responses.message().await.unwrap().unwrap().response;
+        assert_eq!(response, Some(exec_response::Response::Stdout(data)));
+    }
+    let close = exec_input(exec_input::Input::CloseStdin(()));
+    requests.send(close).await.unwrap();
+    let response = responses.message().await.unwrap().unwrap().response;
+    assert_eq!(response, Some(exec_response::Response::ExitCode(0)));
+    assert_eq!(harness.calls(), ["Exec"]);
 }
 
 #[tokio::test]

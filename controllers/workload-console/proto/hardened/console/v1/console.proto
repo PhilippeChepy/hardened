@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+// Served by workload-console (/run/workload-console/api.sock) to workload-controller.
+package hardened.console.v1;
+
+import "google/protobuf/empty.proto";
+
+// `ctr tasks exec` in containerd's `system` namespace.
+service Console {
+  // The first request starts the process; the process is killed if the requests end before it
+  // exits. The last response is its exit code.
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+}
+
+message ExecRequest {
+  oneof request {
+    ExecStart start = 1;
+    ExecInput input = 2;
+  }
+}
+
+message ExecStart {
+  string container = 1;
+  Process process = 2;
+}
+
+// Runs with the environment, user and directory of the container's main process.
+message Process {
+  repeated string command = 1;
+  // A terminal of this size, all output on stdout; unset, pipes.
+  TerminalSize terminal = 2;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 columns = 2;
+}
+
+message ExecInput {
+  oneof input {
+    bytes stdin = 1;
+    // Ignored on a terminal.
+    google.protobuf.Empty close_stdin = 2;
+    TerminalSize resize = 3;
+  }
+}
+
+message ExecResponse {
+  oneof response {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    // 128 + the signal when killed by one.
+    int32 exit_code = 3;
+  }
+}

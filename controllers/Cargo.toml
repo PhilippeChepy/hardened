@@ -10,6 +10,7 @@ members = [
     "storage-controller",
     "time-controller",
     "trust-controller",
+    "workload-console",
     "workload-controller",
 ]
 
@@ -32,6 +33,7 @@ network-controller = { path = "network-controller" }
 storage-controller = { path = "storage-controller" }
 time-controller = { path = "time-controller" }
 trust-controller = { path = "trust-controller" }
+workload-console = { path = "workload-console" }
 workload-controller = { path = "workload-controller" }
 
 anyhow = "1.0.104"

@@ -587,6 +587,7 @@ dependencies = [
  "machine-controller",
  "network-controller",
  "rcgen",
+ "rustix",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -596,9 +597,11 @@ dependencies = [
  "time",
  "time-controller",
  "tokio",
+ "tokio-stream",
  "toml",
  "tonic",
  "trust-controller",
+ "workload-console",
  "workload-controller",
  "x509-parser",
 ]
@@ -895,6 +898,7 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "tracing-subscriber",
+ "workload-console",
  "workload-controller",
  "x509-parser",
 ]
@@ -934,6 +938,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trust-controller",
+ "workload-console",
  "workload-controller",
 ]
 
@@ -2189,12 +2194,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 
 [[package]]
+name = "workload-console"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "controllers-helpers",
+ "libserviced",
+ "prost",
+ "protox",
+ "rustix",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "workload-controller"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "controllers-helpers",
  "futures-util",
+ "http",
  "libserviced",
  "prost",
  "protox",
@@ -2202,12 +2230,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "toml",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "workload-console",
 ]
 
 [[package]]

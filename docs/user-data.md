@@ -302,7 +302,7 @@ namespaces, but it effectively controls the machine (host devices, sysctls, kern
 
 Each workload is a service, `workload-<name>` ([Workloads](architecture.md#workloads)), on the
 host network. Its logs are in `/var/log/serviced/workload-<name>.log`
-(`hctl workloads logs <name>`).
+(`hctl workloads logs <name>`); `hctl workloads exec -it <name> -- sh` runs a shell in it.
 
 Workloads applied through the API (`hctl workloads apply <name> --image <image> -- <command>...`)
 take the same settings, and persist across reboots. User-data wins: the API cannot change or

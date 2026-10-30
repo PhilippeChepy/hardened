@@ -24,8 +24,6 @@ pub use container_settings::ContainerSettings;
 pub use generated::hardened::workload::v1 as workload;
 pub use generated::hardened::workloads::v1 as workloads;
 pub use image_ref::ImageRef;
-pub use image_workload::{
-    Argument, EnvName, EnvValue, ImageWorkload, MountSettings, RestartPolicy,
-};
+pub use image_workload::{EnvName, EnvValue, ImageWorkload, MountSettings, RestartPolicy};
 pub use socket::SOCKET;
 pub use var_path::VarPath;

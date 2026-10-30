@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::iter;
+use std::process::ExitCode;
 
 use anyhow::bail;
 use clap::{Args, Subcommand, ValueEnum};
@@ -15,6 +16,7 @@ use workload_controller::workloads::{
 
 use crate::args::EnvVar;
 use crate::client::{CallExt, CallFailed};
+use crate::exec::{self, ExecArgs};
 
 /// The `hctl workloads` subcommands.
 #[derive(Subcommand)]
@@ -39,6 +41,8 @@ pub enum Command {
         #[arg(long, default_value_t = 0)]
         tail: u32,
     },
+    /// Runs a command in a running workload's container, exiting with its exit code.
+    Exec(ExecArgs),
 }
 
 /// `hctl workloads apply`'s arguments.
@@ -107,10 +111,11 @@ impl ApplyArgs {
     }
 }
 
-/// Runs an `hctl workloads` subcommand on `channel`.
-pub async fn run(channel: Channel, command: Command) -> anyhow::Result<()> {
-    let mut client = WorkloadsClient::new(channel);
+/// Runs an `hctl workloads` subcommand on `channel`, and the code to exit with.
+pub async fn run(channel: Channel, command: Command) -> anyhow::Result<ExitCode> {
+    let mut client = WorkloadsClient::new(channel.clone());
     match command {
+        Command::Exec(args) => return exec::run(channel, args).await,
         Command::List => {
             let list = client.list(()).await.into_result()?;
             print_table(&mut io::stdout().lock(), &list.workloads)?;
@@ -135,7 +140,7 @@ pub async fn run(channel: Channel, command: Command) -> anyhow::Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Prints `workloads` as a table, one row each, columns aligned.

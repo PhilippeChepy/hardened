@@ -2,14 +2,15 @@
 
 use std::collections::BTreeMap;
 
+use controllers_helpers::Argument;
 use controllers_helpers::InvalidMessage;
 use controllers_helpers::invalid_message;
 use controllers_helpers::invalid_message::{FieldResult, WithinResult};
 
 use crate::workloads;
 use crate::{
-    Argument, ContainerPath, EnvName, EnvValue, ImageRef, ImageWorkload, MountSettings,
-    RestartPolicy, VarPath,
+    ContainerPath, EnvName, EnvValue, ImageRef, ImageWorkload, MountSettings, RestartPolicy,
+    VarPath,
 };
 
 impl From<RestartPolicy> for workloads::RestartPolicy {

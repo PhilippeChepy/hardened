@@ -1,11 +1,15 @@
 //! The API's `Workloads`: workloads are services of serviced (`workload-<name>`). User-data's are
 //! in the runtime layer ([`crate::controller`]); the API's in the persistent layer, written here,
-//! which serviced (re)starts once reloaded and keeps across reboots.
+//! which serviced (re)starts once reloaded and keeps across reboots. `Exec` is relayed to
+//! workload-console, which runs `ctr`: workload-controller only checks the request.
 
 use std::path::PathBuf;
 
 use controllers_helpers::WorkloadName;
+use controllers_helpers::invalid_message;
+use controllers_helpers::invalid_message::WithinResult as _;
 use futures_util::StreamExt;
+use futures_util::stream;
 use futures_util::stream::BoxStream;
 use libserviced::api;
 use libserviced::api::exit::How;
@@ -19,7 +23,11 @@ use tonic::Code;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use tonic::Streaming;
 use tonic::transport::Channel;
+use workload_console::ExecProcess;
+use workload_console::console;
+use workload_console::console::console_client::ConsoleClient;
 use workload_controller::ImageWorkload;
 use workload_controller::workloads;
 use workload_controller::workloads::ApplyWorkloadRequest;
@@ -40,6 +48,7 @@ use crate::service_file;
 /// Serves `Workloads` through serviced.
 pub struct WorkloadsService {
     serviced: ServicedClient<Channel>,
+    console: Channel,
     /// Below which serviced's layers are: `/` but in tests.
     root: PathBuf,
     configuration: SharedConfiguration,
@@ -47,15 +56,17 @@ pub struct WorkloadsService {
 
 impl WorkloadsService {
     /// Serves the workloads `serviced` runs, writing the API's in its persistent layer below
-    /// `root`, refusing changes `configuration` forbids.
+    /// `root`, refusing changes `configuration` forbids, running processes through `console`.
     #[must_use]
     pub fn new(
         serviced: ServicedClient<Channel>,
+        console: Channel,
         root: PathBuf,
         configuration: SharedConfiguration,
     ) -> Self {
         Self {
             serviced,
+            console,
             root,
             configuration,
         }
@@ -66,6 +77,24 @@ impl WorkloadsService {
     async fn configured(&self) -> Result<MappedMutexGuard<'_, Configuration>, Status> {
         MutexGuard::try_map(self.configuration.lock().await, Option::as_mut)
             .map_err(|_| Status::unavailable("workload-controller is not configured yet"))
+    }
+
+    /// Fails unless the workload `name` runs.
+    async fn require_running(&self, name: &WorkloadName) -> Result<(), Status> {
+        let request = api::ServiceRef {
+            name: service_file::service_name(name).to_string(),
+        };
+        let service = match self.serviced.clone().get_service(request).await {
+            Ok(response) => response.into_inner(),
+            Err(status) if status.code() == Code::NotFound => return Err(not_found(name)),
+            Err(status) => return Err(client::call_error("GetService", status)),
+        };
+        match service.state() {
+            api::State::Running | api::State::Ready => Ok(()),
+            _ => Err(Status::failed_precondition(format!(
+                "workload {name} is not running"
+            ))),
+        }
     }
 }
 
@@ -186,6 +215,53 @@ impl Workloads for WorkloadsService {
         });
         Ok(Response::new(chunks.boxed()))
     }
+
+    type ExecStream = BoxStream<'static, Result<console::ExecResponse, Status>>;
+
+    async fn exec(
+        &self,
+        request: Request<Streaming<workloads::ExecRequest>>,
+    ) -> Result<Response<Self::ExecStream>, Status> {
+        use workloads::exec_request::Request as Wire;
+
+        let mut requests = request.into_inner();
+        let Some(workloads::ExecRequest {
+            request: Some(Wire::Start(start)),
+        }) = requests.message().await?
+        else {
+            return Err(Status::invalid_argument(
+                "the first request must be the start",
+            ));
+        };
+        let name = parse_name(start.name)?;
+        let process = invalid_message::required(start.process, "process")
+            .and_then(|process| ExecProcess::try_from(process).within("process"))
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        self.require_running(&name).await?;
+        let container = service_file::container_id(&name).ok_or_else(|| not_found(&name))?;
+        tracing::info!(workload = %name, "running a process in the workload");
+
+        let start = console::ExecRequest {
+            request: Some(console::exec_request::Request::Start(console::ExecStart {
+                container: container.into(),
+                process: Some(process.into()),
+            })),
+        };
+        // Anything but an input ends the requests, which kills the process.
+        let inputs = tokio_stream::StreamExt::map_while(requests, |request| match request {
+            Ok(workloads::ExecRequest {
+                request: Some(Wire::Input(input)),
+            }) => Some(console::ExecRequest {
+                request: Some(console::exec_request::Request::Input(input)),
+            }),
+            _ => None,
+        });
+        let responses = ConsoleClient::new(self.console.clone())
+            .exec(stream::iter([start]).chain(inputs))
+            .await?
+            .into_inner();
+        Ok(Response::new(responses.boxed()))
+    }
 }
 
 #[must_use]
@@ -265,7 +341,18 @@ mod tests {
 
     use libserviced::testing::Call;
     use libserviced::testing::FakeServiced;
+    use tokio::net::UnixListener;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::wrappers::UnixListenerStream;
+    use tonic::transport::Server;
+    use workload_console::console::console_server::Console;
+    use workload_console::console::console_server::ConsoleServer;
+    use workload_console::console::exec_input;
+    use workload_console::console::exec_response;
     use workload_controller::workload;
+    use workload_controller::workloads::workloads_client::WorkloadsClient;
+    use workload_controller::workloads::workloads_server::WorkloadsServer;
     use workloads::workload::Exited;
     use workloads::workload::Failed;
     use workloads::workload::Pending;
@@ -336,27 +423,106 @@ mod tests {
     }
 
     struct Test {
-        _dir: tempfile::TempDir,
+        dir: tempfile::TempDir,
         fake: FakeServiced,
         service: WorkloadsService,
     }
 
     impl Test {
-        /// With `configuration`, as machine-controller gave it.
+        /// With `configuration`, as machine-controller gave it, and a [`FakeConsole`].
         async fn new(configuration: Option<workload::Configuration>) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let (fake, client) = FakeServiced::start(dir.path(), dir.path()).await;
+            let console = serve(
+                &dir.path().join("console.sock"),
+                ConsoleServer::new(FakeConsole),
+            );
             let configuration = configuration.map(|message| message.try_into().unwrap());
             let service = WorkloadsService::new(
                 client,
+                console,
                 dir.path().to_owned(),
                 Arc::new(configuration.into()),
             );
-            Self {
-                _dir: dir,
-                fake,
-                service,
-            }
+            Self { dir, fake, service }
+        }
+
+        /// Serves the service, for the streaming calls, and connects to it.
+        fn client(self) -> (tempfile::TempDir, FakeServiced, WorkloadsClient<Channel>) {
+            let socket = self.dir.path().join("workloads.sock");
+            let channel = serve(&socket, WorkloadsServer::new(self.service));
+            (self.dir, self.fake, WorkloadsClient::new(channel))
+        }
+    }
+
+    /// Serves `service` on `socket`, and a channel to it.
+    fn serve<S>(socket: &std::path::Path, service: S) -> Channel
+    where
+        S: tower::Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<tonic::body::Body>,
+                Error = std::convert::Infallible,
+            > + tonic::server::NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        S::Future: Send + 'static,
+    {
+        let listener = UnixListener::bind(socket).unwrap();
+        let server = Server::builder().add_service(service);
+        tokio::spawn(server.serve_with_incoming(UnixListenerStream::new(listener)));
+        controllers_helpers::lazy_channel(socket)
+    }
+
+    /// A workload-console printing the container and command it is asked to run, then echoing
+    /// stdin until it is closed, then exiting with 7.
+    struct FakeConsole;
+
+    fn output(response: exec_response::Response) -> Result<console::ExecResponse, Status> {
+        Ok(console::ExecResponse {
+            response: Some(response),
+        })
+    }
+
+    #[tonic::async_trait]
+    impl Console for FakeConsole {
+        type ExecStream = ReceiverStream<Result<console::ExecResponse, Status>>;
+
+        async fn exec(
+            &self,
+            request: Request<Streaming<console::ExecRequest>>,
+        ) -> Result<Response<Self::ExecStream>, Status> {
+            use console::exec_request::Request as Wire;
+
+            let mut requests = request.into_inner();
+            let Some(Wire::Start(start)) = requests.message().await?.unwrap().request else {
+                panic!("the first request is the start");
+            };
+            let started = format!("{} {:?}\n", start.container, start.process.unwrap().command);
+            let (responses, stream) = mpsc::channel(4);
+            tokio::spawn(async move {
+                let stdout = exec_response::Response::Stdout;
+                responses
+                    .send(output(stdout(started.into())))
+                    .await
+                    .unwrap();
+                while let Some(request) = requests.message().await.unwrap() {
+                    let Some(Wire::Input(input)) = request.request else {
+                        panic!("the next requests are inputs");
+                    };
+                    match input.input.unwrap() {
+                        exec_input::Input::Stdin(data) => {
+                            responses.send(output(stdout(data))).await.unwrap();
+                        }
+                        exec_input::Input::CloseStdin(()) => break,
+                        exec_input::Input::Resize(_) => {}
+                    }
+                }
+                let exit = exec_response::Response::ExitCode(7);
+                responses.send(output(exit)).await.unwrap();
+            });
+            Ok(Response::new(ReceiverStream::new(stream)))
         }
     }
 
@@ -411,6 +577,89 @@ mod tests {
         assert_eq!(status.code(), Code::NotFound);
         let status = test.service.restart(workload_ref("db")).await.unwrap_err();
         assert_eq!(status.code(), Code::NotFound);
+    }
+
+    fn exec_start(name: &str, command: &[&str]) -> workloads::ExecRequest {
+        let process = console::Process {
+            command: command.iter().map(|&argument| argument.into()).collect(),
+            terminal: None,
+        };
+        workloads::ExecRequest {
+            request: Some(workloads::exec_request::Request::Start(
+                workloads::ExecStart {
+                    name: name.into(),
+                    process: Some(process),
+                },
+            )),
+        }
+    }
+
+    fn exec_input(input: exec_input::Input) -> workloads::ExecRequest {
+        workloads::ExecRequest {
+            request: Some(workloads::exec_request::Request::Input(
+                console::ExecInput { input: Some(input) },
+            )),
+        }
+    }
+
+    #[tokio::test]
+    async fn relays_exec_to_the_console_of_running_workloads() {
+        let test = Test::new(user_data(&[])).await;
+        test.service.apply(apply("db")).await.unwrap();
+        test.fake.set_state("workload-db", api::State::Running);
+        let (_dir, _fake, mut client) = test.client();
+
+        let requests = [
+            exec_start("db", &["cat"]),
+            exec_input(exec_input::Input::Stdin(b"hello".to_vec())),
+            exec_input(exec_input::Input::CloseStdin(())),
+        ];
+        let mut responses = client
+            .exec(stream::iter(requests))
+            .await
+            .unwrap()
+            .into_inner();
+        let mut received = Vec::new();
+        while let Some(response) = responses.message().await.unwrap() {
+            received.push(response.response.unwrap());
+        }
+        assert_eq!(
+            received,
+            [
+                exec_response::Response::Stdout(b"workload-db [\"cat\"]\n".to_vec()),
+                exec_response::Response::Stdout(b"hello".to_vec()),
+                exec_response::Response::ExitCode(7),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_exec_in_what_does_not_run() {
+        let test = Test::new(user_data(&[])).await;
+        test.service.apply(apply("db")).await.unwrap();
+        test.fake.set_state("workload-db", api::State::Backoff);
+        let (_dir, _fake, mut client) = test.client();
+
+        let exec = async |request| {
+            client
+                .clone()
+                .exec(stream::iter([request]))
+                .await
+                .unwrap_err()
+                .code()
+        };
+        assert_eq!(
+            exec(exec_start("db", &["sh"])).await,
+            Code::FailedPrecondition
+        );
+        assert_eq!(exec(exec_start("web", &["sh"])).await, Code::NotFound);
+        assert_eq!(exec(exec_start("db", &[])).await, Code::InvalidArgument);
+        let input = exec_input(exec_input::Input::CloseStdin(()));
+        assert_eq!(exec(input).await, Code::InvalidArgument);
+        assert_eq!(
+            client.list(()).await.unwrap().into_inner().workloads.len(),
+            1
+        );
     }
 
     #[tokio::test]

@@ -1,5 +1,7 @@
 //! The command line, and the dispatch of its commands.
 
+use std::process::ExitCode;
+
 use clap::Parser;
 use clap::Subcommand;
 
@@ -52,25 +54,28 @@ enum Command {
     Pki(pki::Command),
 }
 
-/// Runs the command `cli` gives.
-pub async fn run(cli: Cli) -> anyhow::Result<()> {
+/// Runs the command `cli` gives, and the code to exit with.
+pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let connection = &cli.connection;
     match cli.command {
-        Command::Pki(command) => pki::run(command),
-        Command::Version => machine::version(client::connect(connection).await?).await,
+        Command::Pki(command) => pki::run(command)?,
+        Command::Version => machine::version(client::connect(connection).await?).await?,
         Command::Logs { follow, tail } => {
-            machine::logs(client::connect(connection).await?, follow, tail).await
+            machine::logs(client::connect(connection).await?, follow, tail).await?;
         }
-        Command::Settings => machine::settings(client::connect(connection).await?).await,
-        Command::Storage => machine::storage(client::connect(connection).await?).await,
-        Command::Time => machine::time(client::connect(connection).await?).await,
-        Command::Reboot => machine::reboot(client::connect(connection).await?).await,
-        Command::Shutdown => machine::shutdown(client::connect(connection).await?).await,
+        Command::Settings => machine::settings(client::connect(connection).await?).await?,
+        Command::Storage => machine::storage(client::connect(connection).await?).await?,
+        Command::Time => machine::time(client::connect(connection).await?).await?,
+        Command::Reboot => machine::reboot(client::connect(connection).await?).await?,
+        Command::Shutdown => machine::shutdown(client::connect(connection).await?).await?,
         Command::Workloads(command) => {
-            workloads::run(client::connect(connection).await?, command).await
+            return workloads::run(client::connect(connection).await?, command).await;
         }
-        Command::Attest(command) => attest::run(client::connect(connection).await?, command).await,
+        Command::Attest(command) => {
+            attest::run(client::connect(connection).await?, command).await?;
+        }
     }
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@
 
 #![warn(missing_docs)]
 
+mod argument;
 pub mod atomic_file;
 pub mod base64_text;
 mod certificates;
@@ -30,6 +31,7 @@ pub mod testing;
 mod validated_string;
 mod workload_name;
 
+pub use argument::Argument;
 pub use certificates::Certificates;
 pub use channel::channel;
 pub use channel::lazy_channel;

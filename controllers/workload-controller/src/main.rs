@@ -10,6 +10,7 @@ mod workloads_service;
 
 use std::env;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -68,7 +69,8 @@ async fn run() -> anyhow::Result<()> {
         PathBuf::from(configuration::STATE),
     );
     controller.restore().await;
-    let workloads = WorkloadsService::new(serviced.clone(), root, configuration);
+    let console = controllers_helpers::lazy_channel(Path::new(workload_console::SOCKET));
+    let workloads = WorkloadsService::new(serviced.clone(), console, root, configuration);
     let router = Server::builder()
         .add_service(WorkloadControllerServer::new(controller))
         .add_service(WorkloadsServer::new(workloads));
