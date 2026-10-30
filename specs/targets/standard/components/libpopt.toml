@@ -14,8 +14,6 @@ from = "popt"
 [[build]]
 configure.dest = "{out:dev}"
 configure.args = [
-    "--libdir=/usr/lib",
-    "--enable-static",
     "--disable-shared",
     "--disable-nls",
     "CFLAGS=-O2 -flto=thin",

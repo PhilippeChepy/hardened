@@ -18,12 +18,10 @@ libuuid = "{dep:standard/libuuid/dev}/usr"
 [sources.src]
 from = "cryptsetup"
 
-# dust-init runs `cryptsetup` to format and open the encrypted state partition. Only the LUKS2
-# tool, as `cryptsetup.static` (libcryptsetup and its libraries linked in, with ThinLTO); its
-# crypto is OpenSSL's, in user space (no kernel crypto API), and the volume key is in the
-# dm-crypt table (no kernel keyring). No blkid: dust-init knows what the partition holds. The
-# libraries are given directly rather than through pkg-config, whose sysroot could only name one
-# output; popt and libuuid are found through the compiler and linker flags.
+# Only the LUKS2 tool, `cryptsetup.static`, its libraries linked in. OpenSSL's crypto in user space
+# (no kernel crypto API), the volume key in the dm-crypt table (no kernel keyring), no blkid
+# (storage-controller knows what the partition holds). The libraries are given directly: pkg-config's
+# sysroot could only name one output. popt and libuuid come through CPPFLAGS and LDFLAGS.
 [[build]]
 mkdir = "{work:build}"
 
@@ -33,13 +31,10 @@ run.cmd = [
     "--prefix=/usr",
     "--enable-static-cryptsetup",
     "--disable-shared",
-    "--with-crypto_backend=openssl",
     "--disable-kernel_crypto",
     "--disable-asciidoc",
     "--disable-ssh-token",
     "--disable-external-tokens",
-    "--disable-veritysetup",
-    "--disable-integritysetup",
     "--disable-luks2-reencryption",
     "--disable-blkid",
     "--disable-hw-opal",
@@ -48,8 +43,8 @@ run.cmd = [
     "--disable-udev",
     "--disable-nls",
     "CFLAGS=-O2 -flto=thin",
-    "CPPFLAGS=-I{vars.libpopt}/include -I{vars.libuuid}/include",
-    "LDFLAGS=-L{vars.libpopt}/lib -L{vars.libuuid}/lib",
+    "CPPFLAGS=-I{vars.libpopt}/include -I{vars.libuuid}/include -I{vars.libdevmapper}/include -I{vars.libjson-c}/include -I{vars.libcrypto}/include",
+    "LDFLAGS=-L{vars.libpopt}/lib -L{vars.libuuid}/lib -L{vars.libdevmapper}/lib -L{vars.libjson-c}/lib -L{vars.libcrypto}/lib",
     "LIBCRYPTO_CFLAGS=-I{vars.libcrypto}/include",
     "LIBCRYPTO_LIBS=-L{vars.libcrypto}/lib -lcrypto",
     "LIBCRYPTO_STATIC_CFLAGS=-I{vars.libcrypto}/include",

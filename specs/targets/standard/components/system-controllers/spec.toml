@@ -1,0 +1,50 @@
+version = "workspace"
+kind = "application"
+summary = "The system controllers: network-controller, machine-controller, storage-controller, time-controller, trust-controller, workload-controller and machine-apiproxy"
+license = "Apache-2.0"
+homepage = "https://github.com/PhilippeChepy/hardened"
+purl = "pkg:github/PhilippeChepy/hardened@{version}#controllers"
+
+local = ["controllers", "serviced"]
+
+depends-on = ["rust", "ca-certificates"]
+
+[[build]]
+cargo-build.workspace = "controllers"
+cargo-build.binaries = [
+    ["network-controller", "/usr/bin/network-controller"],
+    ["machine-controller", "/usr/bin/machine-controller"],
+    ["storage-controller", "/usr/bin/storage-controller"],
+    ["time-controller", "/usr/bin/time-controller"],
+    ["trust-controller", "/usr/bin/trust-controller"],
+    ["workload-controller", "/usr/bin/workload-controller"],
+    ["machine-apiproxy", "/usr/bin/machine-apiproxy"],
+]
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/network-controller.toml"
+write.file = "services/network-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/machine-controller.toml"
+write.file = "services/machine-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/storage-controller.toml"
+write.file = "services/storage-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/time-controller.toml"
+write.file = "services/time-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/trust-controller.toml"
+write.file = "services/trust-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/workload-controller.toml"
+write.file = "services/workload-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/machine-apiproxy.toml"
+write.file = "services/machine-apiproxy.toml"

@@ -1,0 +1,35 @@
+version = "1.9.4"
+kind = "application"
+summary = "erofs-utils, whose mkfs.erofs builds the root filesystem"
+license = "GPL-2.0-or-later"
+homepage = "https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git"
+cpe = "erofs-utils_project:erofs-utils"
+
+depends-on = [
+    "llvm",
+    "autoconf",
+    "automake",
+    "libtool",
+    "pkgconf",
+    "lz4",
+    "util-linux",
+    "openssl",
+]
+
+[sources.src]
+url = "https://git.kernel.org/pub/scm/linux/kernel/git/xiang/erofs-utils.git/snapshot/erofs-utils-{version}.tar.gz"
+sha256 = "7d135aa2550326a5acf20f53c518aea5a8900015ce50700044e40f818c31dd80"
+
+# A git snapshot: no generated configure script.
+[[build]]
+run.cmd = ["./autogen.sh"]
+
+[[build]]
+configure.args = [
+    "--enable-lz4",
+    "--disable-lzma",
+    "--without-zlib",
+    "--without-libzstd",
+    "--without-xxhash",
+]
+configure.in-tree = true

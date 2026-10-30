@@ -25,7 +25,6 @@ mkdir = "{work:build}"
 run.cmd = [
     "{src}/configure",
     "--prefix=/usr",
-    "--libdir=/usr/lib",
     "--enable-static",
     "--disable-shared",
     "CFLAGS=-O2 -flto=thin",
@@ -36,8 +35,8 @@ run.dir = "{work:build}"
 
 [[build]]
 make.dir = "{work:build}"
-make.install = true
-make.dest = "{out:dev}"
+make.install.targets = ["install"]
+make.install.dest = "{out:dev}"
 
 # Without its libtool archive, which names its dependencies at their install path, not in
 # their outputs: users link with the flags they are given.

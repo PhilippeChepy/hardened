@@ -1,7 +1,5 @@
-# The bootstrap LLVM: clang, lld and the LLVM tools, built by StageX's GCC, statically, at
-# `/cross/llvm`, with compiler-rt's builtins and start files in its resource directory. Static, it
-# runs on an empty root: in `tools`, it builds musl, the LLVM runtimes, the userland and LLVM
-# itself natively, against our musl at /usr.
+# Static, at /cross/llvm, with compiler-rt in its resource directory: it runs on an empty root,
+# where it builds musl, the LLVM runtimes, the userland and LLVM itself.
 
 summary = "LLVM, clang and lld, static"
 # Built on the seed alone.

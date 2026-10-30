@@ -17,20 +17,8 @@ run.cmd = [
     "--prefix=/usr",
     "--enable-static_link",
     "--disable-shared",
-    "--disable-readline",
     "--disable-selinux",
-    "--disable-udev_sync",
-    "--disable-udev-systemd-background-jobs",
     "--disable-blkid_wiping",
-    "--disable-dmeventd",
-    "--disable-cmirrord",
-    "--disable-lvmpolld",
-    "--disable-nls",
-    "--with-thin=none",
-    "--with-cache=none",
-    "--with-vdo=none",
-    "--with-writecache=none",
-    "--with-integrity=none",
     "CFLAGS=-O2 -flto=thin",
 ]
 
@@ -41,8 +29,8 @@ make.args = ["device-mapper"]
 # tree.
 [[build]]
 make.dir = "{src}/libdm"
-make.install = true
-make.dest = "{out:dev}"
+make.install.targets = ["install"]
+make.install.dest = "{out:dev}"
 
 [[build]]
 remove = "{out:dev}/usr/sbin/*"

@@ -16,9 +16,4 @@ sha256 = "501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be"
 # goes to the tree.
 [[build]]
 configure.dest = "{out:dev}"
-configure.args = [
-    "--libdir=/usr/lib",
-    "--disable-shared",
-    # Linked into runc, with ThinLTO.
-    "CFLAGS=-O2 -flto=thin",
-]
+configure.args = ["--disable-shared", "CFLAGS=-O2 -flto=thin"]

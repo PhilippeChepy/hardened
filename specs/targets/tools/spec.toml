@@ -1,14 +1,5 @@
-# Built natively, on an empty root, by the bootstrap toolset: first the target libraries
-# (compiler-rt, musl with mimalloc, LLVM's libunwind, libc++abi and libc++), then the userland
-# every later build runs (bash is their `/bin/sh`), then LLVM, the compiler of everything after
-# it; interpreters, build systems, libraries and Rust; then what assembles images (mkfs.erofs,
-# veritysetup, mke2fs, qemu-img, systemd-stub's stub, ukify and systemd-sbsign) and what boots
-# them in tests (qemu, OVMF and swtpm).
-
 environment = "bootstrap"
-
 components = [
-    # The toolchain: target libraries (clang links everything with libunwind), userland, LLVM.
     "compiler-rt",
     "musl",
     "llvm-runtimes",
@@ -25,19 +16,11 @@ components = [
     "xz",
     "bzip2",
     "llvm",
-    # Interpreters, build systems and libraries.
     "perl",
     "m4",
     "zlib",
     "libffi",
     "python",
-    "py-markupsafe",
-    "py-jinja2",
-    "py-packaging",
-    "py-pefile",
-    "py-pyelftools",
-    "py-setuptools",
-    "py-wheel",
     "libtool",
     "autoconf",
     "automake",
@@ -50,12 +33,7 @@ components = [
     "ninja",
     "meson",
     "zstd",
-    "lz4",
-    "pcre2",
-    "popt",
-    "util-linux",
     "openssl",
-    "json-c",
     "kmod",
     "rust",
     "argp-standalone",
@@ -63,23 +41,4 @@ components = [
     "musl-obstack",
     "elfutils",
     "pahole",
-    "libucontext",
-    "glib",
-    # What assembles images.
-    "e2fsprogs",
-    "erofs-utils",
-    "lvm2",
-    "cryptsetup",
-    "qemu",
-    "systemd-stub",
-    # What boots them in tests.
-    "nasm",
-    "acpica",
-    "libtpms",
-    "libtasn1",
-    "libslirp",
-    "json-glib",
-    "qemu-system",
-    "swtpm",
-    "ovmf",
 ]

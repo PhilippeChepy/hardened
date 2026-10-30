@@ -1,0 +1,68 @@
+version = "262.1"
+kind = "firmware"
+summary = "UEFI stub of the unified kernel image (systemd-stub), the ukify assembler and systemd-sbsign"
+license = "LGPL-2.1-or-later"
+homepage = "https://systemd.io"
+purl = "pkg:github/systemd/systemd@v{version}"
+cpe = "systemd_project:systemd"
+
+depends-on = [
+    "llvm",
+    "gperf",
+    "meson",
+    "ninja",
+    "openssl",
+    "pkgconf",
+    "py-jinja2",
+    "py-pefile",
+    "py-pyelftools",
+    "libucontext",
+    "util-linux",
+]
+
+[sources.src]
+url = "https://github.com/systemd/systemd/archive/refs/tags/v{version}.tar.gz"
+sha256 = "100fc873b848b9b0297d8a705e8e2ed326256c8483d9960ee1ffe264c8a5c3e3"
+
+[[build]]
+run.cmd = [
+    "meson",
+    "setup",
+    "{work:build}",
+    "-Dmode=release",
+    "-Dlibc=musl",
+    "-Dauto_features=disabled",
+    "-Dbootloader=enabled",
+    "-Dtests=false",
+    # systemd-sbsign, which signs the UKI.
+    "-Dopenssl=enabled",
+    # The stub's SBAT distribution entry, as in the image's os-release (otherwise read from the
+    # build environment's, which has none).
+    "-Dsbat-distro=hardened",
+    "-Dsbat-distro-summary=hardened",
+    "-Dsbat-distro-url=https://github.com/PhilippeChepy/hardened",
+]
+
+[[build]]
+run.cmd = ["ninja", "-C", "{work:build}", "src/boot/linuxx64.efi.stub", "systemd-sbsign"]
+
+# The UKI's stub, and its assembler.
+[[build]]
+install.from = "{work:build}/src/boot/linuxx64.efi.stub"
+install.to = "{out:linuxx64.efi.stub}"
+
+[[build]]
+install.from = "{src}/src/ukify/ukify.py"
+install.to = "{out:ukify}"
+install.mode = 0o755
+
+# For image assembly: systemd-sbsign where ukify looks for it, with the library it links in
+# the default library path (its RUNPATH is the build tree's).
+[[build]]
+install.from = "{work:build}/systemd-sbsign"
+install.to = "{dest}/usr/lib/systemd/systemd-sbsign"
+install.mode = 0o755
+
+[[build]]
+copy.from = "{work:build}/src/shared/libsystemd-shared-*.so"
+copy.into = "{dest}/usr/lib"

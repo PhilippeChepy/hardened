@@ -1,9 +1,5 @@
-# A Kubernetes 1.37 node: the standard image with kubelet, the CNI plugins, and the mount,
-# iptables and nft programs they run. dust-init runs kubelet when user-data enables
-# `settings.kubernetes`.
-
 extends = "standard"
-components = ["util-linux-mount", "libmnl", "libnftnl", "iptables", "nftables", "cni-plugins", "kubelet"]
+components = ["pause", "util-linux-mount", "libmnl", "libnftnl", "iptables", "nftables", "cni-plugins", "kubelet", "kubelet-controller"]
 
 [export]
 name = "hardened-kubernetes-1-37"

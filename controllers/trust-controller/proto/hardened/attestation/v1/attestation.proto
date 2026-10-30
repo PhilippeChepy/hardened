@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+// Attestation evidence, served by trust-controller (/run/trust-controller/api.sock) and forwarded
+// by machine-controller.
+package hardened.attestation.v1;
+
+import "google/protobuf/empty.proto";
+
+// Remote attestation evidence from the (v)TPM.
+service Attestation {
+  rpc Pcrs(PcrsRequest) returns (PcrsResponse);
+  // Raw TCG event log (firmware + systemd-stub measurements).
+  rpc EventLog(google.protobuf.Empty) returns (EventLogResponse);
+  // TPM2_Quote over the selected PCRs, signed by trust-controller's attestation key.
+  rpc Quote(QuoteRequest) returns (QuoteResponse);
+}
+
+enum HashAlgorithm {
+  HASH_ALGORITHM_UNSPECIFIED = 0;  // defaults to SHA256
+  HASH_ALGORITHM_SHA1 = 1;
+  HASH_ALGORITHM_SHA256 = 2;
+  HASH_ALGORITHM_SHA384 = 3;
+}
+
+message PcrsRequest {
+  HashAlgorithm bank = 1;
+  // PCR indexes; empty means 0-23.
+  repeated uint32 pcrs = 2;
+}
+
+message PcrValue {
+  uint32 index = 1;
+  bytes digest = 2;
+}
+
+message PcrsResponse {
+  HashAlgorithm bank = 1;
+  repeated PcrValue values = 2;
+}
+
+message EventLogResponse {
+  bytes event_log = 1;
+}
+
+message QuoteRequest {
+  // Verifier-chosen freshness nonce (TPM2 qualifying data), at most 64 bytes.
+  bytes nonce = 1;
+  HashAlgorithm bank = 2;
+  repeated uint32 pcrs = 3;
+}
+
+message QuoteResponse {
+  // TPMS_ATTEST structure, marshalled (TPM2B contents).
+  bytes attest = 1;
+  // TPMT_SIGNATURE, marshalled.
+  bytes signature = 2;
+  // TPMT_PUBLIC of the attestation key, marshalled.
+  bytes ak_public = 3;
+  repeated PcrValue values = 4;
+}

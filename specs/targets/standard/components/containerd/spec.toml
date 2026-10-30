@@ -1,0 +1,34 @@
+version = "2.4.2"
+kind = "application"
+summary = "Container runtime daemon, its runc shim, and ctr, its client"
+license = "Apache-2.0"
+homepage = "https://containerd.io"
+purl = "pkg:golang/{vars.package}@v{version}"
+cpe = "linuxfoundation:containerd"
+
+depends-on = ["go"]
+
+[vars]
+package = "github.com/containerd/containerd/v2"
+
+[sources.src]
+url = "https://github.com/containerd/containerd/archive/refs/tags/v{version}.tar.gz"
+sha256 = "02cbbecd0ef78a521d124afa791b843ba5458ef206e1f7f017999ff45c80c0b4"
+
+# Pure Go, no libc; the snapshotters needing C libraries are left out.
+[[build]]
+go-build.commands = [
+    ["./cmd/containerd", "/usr/bin/containerd"],
+    ["./cmd/containerd-shim-runc-v2", "/usr/bin/containerd-shim-runc-v2"],
+    ["./cmd/ctr", "/usr/bin/ctr"],
+]
+go-build.tags = ["no_btrfs", "no_devmapper", "no_zfs"]
+go-build.vars = [
+    ["{vars.package}/version.Version", "v{version}"],
+    ["{vars.package}/version.Revision", "v{version}"],
+    ["{vars.package}/version.Package", "{vars.package}"],
+]
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/containerd.toml"
+write.file = "services/containerd.toml"

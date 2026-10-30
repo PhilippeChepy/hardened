@@ -1,10 +1,6 @@
-# LLVM's runtime libraries: libunwind, libc++abi and libc++ (what libgcc_s and libstdc++ are
-# with GCC). Built by the bootstrap clang against musl and compiler-rt, with ThinLTO; C++ programs
-# and Rust's panics use them. The image's programs link libunwind statically.
-
 version = "{llvm.version}"
 kind = "library"
-summary = "LLVM libunwind, libc++abi and libc++ (libunwind linked into the image's programs)"
+summary = "LLVM libunwind, libc++abi and libc++"
 license = "Apache-2.0 WITH LLVM-exception"
 homepage = "https://libcxx.llvm.org"
 purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
@@ -72,4 +68,4 @@ run.cmd = [
 
 [[build]]
 make.dir = "{work:build}"
-make.install = true
+make.install.targets = ["install"]

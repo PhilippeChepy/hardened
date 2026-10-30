@@ -1,0 +1,58 @@
+version = "11.1.2"
+kind = "application"
+summary = "QEMU's disk image tool (qemu-img) and x86-64 machine emulator (qemu-system-x86_64)"
+license = "GPL-2.0-only"
+homepage = "https://www.qemu.org"
+cpe = "qemu:qemu"
+
+depends-on = [
+    "llvm",
+    "python",
+    "py-setuptools",
+    "py-wheel",
+    "meson",
+    "ninja",
+    "pkgconf",
+    "glib",
+    "libslirp",
+    "zlib",
+    "perl",
+    "bison",
+    "flex",
+]
+
+[sources.src]
+url = "https://download.qemu.org/qemu-{version}.tar.xz"
+sha256 = "731b5681e4bb18be313231579b8efd0296c5b015fa36dc533874b639ba838016"
+
+# One configure for both programs: the tools, and an x86-64 machine with KVM, a TPM (swtpm's) and
+# user-mode networking. Offline: configure installs its Meson and Python tooling from the bundled
+# wheels, next to setuptools and wheel. No firmware blobs: OVMF is built from source, and the run
+# gives the network card no option ROM.
+[[build]]
+run.cmd = [
+    "./configure",
+    "--prefix=/usr",
+    "--target-list=x86_64-softmmu",
+    "--without-default-features",
+    "--enable-tools",
+    "--enable-kvm",
+    "--enable-tpm",
+    "--enable-slirp",
+    "--disable-docs",
+    "--disable-download",
+    "--disable-install-blobs",
+]
+
+[[build]]
+run.cmd = ["ninja", "-C", "build", "qemu-img", "qemu-system-x86_64"]
+
+[[build]]
+install.from = "{src}/build/qemu-img"
+install.to = "{dest}/usr/bin/qemu-img"
+install.mode = 0o755
+
+[[build]]
+install.from = "{src}/build/qemu-system-x86_64"
+install.to = "{dest}/usr/bin/qemu-system-x86_64"
+install.mode = 0o755

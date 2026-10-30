@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+// machine-controller's API (/run/machine-controller/api.sock), the machine's: machine-apiproxy
+// serves it over mutual TLS, with `hardened.workloads.v1` and `hardened.attestation.v1`.
+package hardened.machine.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "hardened/apiproxy/v1/apiproxy.proto";
+import "hardened/kubelet/v1/kubelet.proto";
+import "hardened/network/v1/network.proto";
+import "hardened/storage/v1/storage.proto";
+import "hardened/time/v1/time.proto";
+import "hardened/workloads/v1/workloads.proto";
+
+// Machine inventory, logs and power management.
+service Machine {
+  rpc Version(google.protobuf.Empty) returns (VersionResponse);
+  // Streams serviced's own log, optionally following new entries.
+  rpc Logs(LogsRequest) returns (stream LogEntry);
+  // The effective settings, secrets left empty.
+  rpc GetSettings(google.protobuf.Empty) returns (Settings);
+  // What backs /var on this boot: the state partition (plain or encrypted), or a tmpfs.
+  rpc Storage(google.protobuf.Empty) returns (hardened.storage.v1.State);
+  // Time synchronization: the clock's state, and the NTP client's last correction.
+  rpc Time(google.protobuf.Empty) returns (hardened.time.v1.Status);
+  rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+message VersionResponse {
+  string os_name = 1;
+  string os_version = 2;
+  string kernel = 3;
+  string platform = 4;
+  string instance_id = 5;
+  string hostname = 6;
+  string boot_id = 7;
+  google.protobuf.Timestamp booted_at = 8;
+}
+
+message LogsRequest {
+  bool follow = 1;
+  // Number of past entries to return first; 0 means all retained entries.
+  uint32 tail = 2;
+}
+
+message LogEntry {
+  google.protobuf.Timestamp time = 1;
+  string level = 2;
+  string target = 3;
+  string message = 4;
+}
+
+// The effective settings, secrets left empty.
+message Settings {
+  // settings.kernel.
+  map<string, string> sysctl = 1;
+  repeated KernelModule kernel_modules = 2;
+  // settings.network.hostname, when it overrides the platform's.
+  optional string hostname = 3;
+  // settings.dns.
+  hardened.network.v1.Configuration dns = 4;
+  // settings.ntp.time-servers.
+  repeated string time_servers = 5;
+  // settings.kubernetes, when set: kubelet runs.
+  optional hardened.kubelet.v1.Kubelet kubernetes = 6;
+  // settings.hardened.containers.
+  hardened.workloads.v1.DeclaredWorkloads containers = 7;
+  // settings.container-registry.
+  repeated RegistryMirror registry_mirrors = 8;
+  repeated RegistryCredential registry_credentials = 9;
+  // settings.hardened.api, when set.
+  optional hardened.apiproxy.v1.Configuration api = 10;
+  // settings.hardened.storage.
+  hardened.storage.v1.Configuration storage = 11;
+}
+
+// settings.kernel.modules.<name>: the kernel never loads modules by itself.
+message KernelModule {
+  string name = 1;
+  ModuleLoad load = 2;
+}
+
+// When machine-controller loads a kernel module.
+enum ModuleLoad {
+  MODULE_LOAD_UNSPECIFIED = 0;
+  // Never, not even as a dependency.
+  MODULE_LOAD_NEVER = 1;
+  // When a module loaded at boot needs it.
+  MODULE_LOAD_AS_DEPENDENCY = 2;
+  // At boot, with its dependencies.
+  MODULE_LOAD_AT_BOOT = 3;
+}
+
+// Endpoints tried, in order, before a registry itself.
+message RegistryMirror {
+  // The mirrored registry, or * for every registry.
+  string registry = 1;
+  repeated string endpoints = 2;
+}
+
+// What containerd sends a registry; the secrets are empty in GetSettings.
+message RegistryCredential {
+  string registry = 1;
+  oneof auth {
+    Basic basic = 2;
+    // The base64 of <username>:<password> (user-data's auth).
+    string encoded = 3;
+    // An OAuth refresh token.
+    string identity_token = 4;
+  }
+
+  message Basic {
+    string username = 1;
+    string password = 2;
+  }
+}

@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = [
+    "controllers-helpers",
+    "hctl",
+    "kubelet-controller",
+    "machine-apiproxy",
+    "machine-controller",
+    "network-controller",
+    "storage-controller",
+    "time-controller",
+    "trust-controller",
+    "workload-controller",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/PhilippeChepy/hardened"
+publish = false
+
+[workspace.dependencies]
+# In-tree crates
+controllers-helpers = { path = "controllers-helpers" }
+kubelet-controller = { path = "kubelet-controller" }
+libserviced = { path = "../serviced/libserviced" }
+machine-apiproxy = { path = "machine-apiproxy" }
+machine-controller = { path = "machine-controller" }
+network-controller = { path = "network-controller" }
+storage-controller = { path = "storage-controller" }
+time-controller = { path = "time-controller" }
+trust-controller = { path = "trust-controller" }
+workload-controller = { path = "workload-controller" }
+
+anyhow = "1.0.104"
+base64 = "0.22.1"
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+flate2 = "1.1.10"
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+hex = "0.4"
+libc = "0.2"
+prost = "0.14.4"
+prost-types = "0.14.4"
+protox = "0.10.0"
+rustix = { version = "1.1.5", features = ["fs", "mount", "process", "system", "net", "thread", "time", "rand"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+time = { version = "0.3.47", default-features = false, features = ["std"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "fs", "io-util", "time", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+toml = "1.1.8"
+tonic = { version = "0.14.6", default-features = false, features = ["codegen", "router", "server", "channel"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = { version = "0.14.6", default-features = false, features = ["transport"] }
+tower = "0.5"
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "server", "http1", "http2"] }
+gpt = "4.1.0"
+netlink-packet-core = "0.9.0"
+netlink-packet-route = "0.33.0"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tempfile = "3.27.0"
+x509-parser = "0.18.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry"] }
+uuid = "1.29.0"
+zeroize = "1.9.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

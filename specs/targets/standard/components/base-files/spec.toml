@@ -53,8 +53,6 @@ write.file = "files/etc/passwd"
 write.to = "{dest}/etc/group"
 write.file = "files/etc/group"
 
-# With the bundled sandbox image.
 [[build]]
 write.to = "{dest}/usr/share/hardened/containerd/config.toml"
 write.file = "files/usr/share/hardened/containerd/config.toml"
-write.template = true

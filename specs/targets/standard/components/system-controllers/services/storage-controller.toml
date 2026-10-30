@@ -1,0 +1,12 @@
+description = "storage-controller: the state partition, mounted on /var"
+exec = ["/usr/bin/storage-controller"]
+exec-stop = [["/usr/bin/storage-controller", "stop"]]
+notify = true
+console = true
+runtime-directories = ["/run/storage-controller"]
+
+[[sockets]]
+name = "api"
+path = "/run/storage-controller/api.sock"
+allow = ["machine-controller"]
+activate = true

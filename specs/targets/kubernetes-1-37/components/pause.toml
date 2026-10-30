@@ -1,0 +1,57 @@
+version = "3.10.2"
+kind = "application"
+summary = "Kubernetes pause process, PID 1 of pod sandboxes (statically linked)"
+license = "Apache-2.0"
+homepage = "https://github.com/kubernetes/kubernetes/tree/master/build/pause"
+purl = "pkg:generic/kubernetes-pause@{version}"
+
+# The Kubernetes release, pinned here only: kubelet builds from the same one (`{pause.kubernetes}`).
+[exports]
+kubernetes-major = "1"
+kubernetes-minor = "37"
+kubernetes = "{pause.kubernetes-major}.{pause.kubernetes-minor}.1"
+
+[sources.src]
+url = "https://raw.githubusercontent.com/kubernetes/kubernetes/v{pause.kubernetes}/build/pause/linux/pause.c"
+sha256 = "14a3fe21ab5f8e62937a2b453e76f3b94b0d3c7c04c3d09bc37195f54c1695ea"
+
+# The pod sandbox image, `localhost/hardened/pause:{version}`: this binary alone.
+[images.pause]
+entrypoint = "/pause"
+user = [65535, 65535]
+
+# Static, as upstream builds it: the image holds nothing else.
+[[build]]
+run.cmd = [
+    "cc",
+    "-Os",
+    "-flto=thin",
+    "-Wall",
+    "-Werror",
+    "-static",
+    "-s",
+    "-DVERSION=v{version}",
+    "-o",
+    "{work:pause}",
+    # C: the source cache names files by checksum, without extension.
+    "-x",
+    "c",
+    "{src}",
+]
+
+[[build]]
+install.from = "{work:pause}"
+install.to = "{image:pause}/pause"
+install.mode = 0o755
+
+# A containerd drop-in pinning the sandbox image: kubelet's service imports it at every start, so it
+# is never pulled, and pinned images are never garbage-collected.
+[[build]]
+write.to = "{dest}/usr/share/hardened/containerd/conf.d/pause.toml"
+write.template = true
+write.contents = """
+version = 3
+
+[plugins.'io.containerd.cri.v1.images'.pinned_images]
+  sandbox = "localhost/hardened/pause:{version}"
+"""

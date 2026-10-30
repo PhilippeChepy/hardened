@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+// trust-controller's API (/run/trust-controller/api.sock): the TPM's only user. The same socket
+// also serves `hardened.attestation.v1.Attestation` (evidence for verifiers, forwarded by
+// machine-controller).
+package hardened.trust.v1;
+
+service Sealing {
+  // Seals `secret` to the TPM under the current PCR 11 (the booted image).
+  rpc Seal(Secret) returns (SealedSecret);
+  // Unseals a secret sealed on this TPM under the same PCR 11. FAILED_PRECONDITION when it can
+  // never be (another image, another or a cleared TPM), with the reason.
+  rpc Unseal(SealedSecret) returns (Secret);
+}
+
+message Secret {
+  bytes secret = 1;
+}
+
+message SealedSecret {
+  // The sealed object and the PCR 11 policy it was sealed under, as trust-controller encodes them.
+  bytes sealed = 1;
+}

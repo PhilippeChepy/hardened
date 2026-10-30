@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+// storage-controller's API (/run/storage-controller/api.sock): the state partition, on /var.
+package hardened.storage.v1;
+
+import "google/protobuf/empty.proto";
+
+service StorageController {
+  // storage-controller sets /var up once configured (or with the configuration it kept), then
+  // reports ready. The encryption of a /var already set up changes at the next boot.
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+  rpc GetState(google.protobuf.Empty) returns (State);
+}
+
+// settings.hardened.storage.
+message Configuration {
+  Encryption encryption = 1;
+}
+
+enum Encryption {
+  ENCRYPTION_UNSPECIFIED = 0;
+  // A plain ext4 filesystem.
+  ENCRYPTION_NONE = 1;
+  // LUKS2, with a random key sealed to the TPM's PCR 11: only this machine, booting this image,
+  // opens it.
+  ENCRYPTION_TPM = 2;
+}
+
+// What backs /var on this boot, and its usage.
+message State {
+  oneof backing {
+    Plain plain = 1;
+    Unlocked unlocked = 2;
+    Formatted formatted = 3;
+    Tmpfs tmpfs = 4;
+  }
+  // Size of the filesystem on /var, and what is available to unprivileged users.
+  uint64 size_bytes = 5;
+  uint64 available_bytes = 6;
+
+  // The state partition, unencrypted, mounted on /var.
+  message Plain {
+    string partition = 1;
+  }
+  // The encrypted state partition, opened with the key the TPM unsealed; its decrypted device,
+  // /dev/mapper/state, is mounted on /var.
+  message Unlocked {
+    string partition = 1;
+  }
+  // The encrypted state partition, formatted on this boot: what it held is gone.
+  message Formatted {
+    string partition = 1;
+    string reason = 2;
+  }
+  // A tmpfs: nothing persists.
+  message Tmpfs {
+    // Why the state partition is not used.
+    string reason = 1;
+  }
+}

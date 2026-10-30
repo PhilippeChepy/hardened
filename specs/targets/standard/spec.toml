@@ -1,5 +1,3 @@
-# The standard image. `cargo builder image --target standard` (the default) builds it.
-
 environment = "tools"
 components = [
     "base-files",
@@ -8,7 +6,6 @@ components = [
     "libseccomp",
     "runc",
     "containerd",
-    "pause",
     "libcrypto",
     "libjson-c",
     "libpopt",
@@ -16,10 +13,10 @@ components = [
     "libuuid",
     "cryptsetup-luks",
     "e2fsprogs-mke2fs",
-    "dust",
+    "serviced",
+    "system-controllers",
 ]
 
-# Added to the kernel command line: hardening options.
 kernel-cmdline = [
     "slab_nomerge",
     "init_on_free=1",
@@ -30,10 +27,9 @@ kernel-cmdline = [
 
 [partition]
 esp-size-mib = 64
-# Initial size of the state partition; dust-init grows it to the end of the disk.
 state-size-mib = 64
 
 [export]
+environment = "image-tools"
 format = "qcow2"
-# Its artifacts: build/out/<name>-<version>-x86_64.{qcow2,cdx.json,efi,...}
 name = "hardened"

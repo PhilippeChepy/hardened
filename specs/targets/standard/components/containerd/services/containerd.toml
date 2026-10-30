@@ -1,0 +1,5 @@
+description = "containerd: the container runtime"
+exec = ["/usr/bin/containerd", "--config", "/run/containerd/config.toml"]
+requires = ["machine-controller", "storage-controller"]
+notify = true
+env.PATH = "/usr/bin"

@@ -1,0 +1,24 @@
+version = "2.03.43"
+kind = "library"
+summary = "Device-mapper library from LVM2"
+license = "GPL-2.0-only AND LGPL-2.1-only"
+homepage = "https://sourceware.org/lvm2/"
+cpe = "lvm2_project:lvm2"
+
+depends-on = ["llvm", "pkgconf"]
+
+[sources.src]
+url = "https://sourceware.org/pub/lvm2/releases/LVM2.{version}.tgz"
+sha256 = "d87ec0dac9061f1fa58ebced5c6b1360c87d4c5cd7b455dc0ebe1d3f036920d7"
+
+[[build]]
+run.cmd = [
+    "./configure",
+    "--prefix=/usr",
+    "--disable-selinux",
+    "--disable-blkid_wiping",
+]
+
+[[build]]
+make.args = ["device-mapper"]
+make.install.targets = ["install_device-mapper"]

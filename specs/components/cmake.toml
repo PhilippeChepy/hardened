@@ -1,5 +1,3 @@
-# CMake, for the projects built with it (json-c, LLVM in Rust's build).
-
 version = "4.4.4"
 kind = "application"
 summary = "CMake build system"
@@ -9,7 +7,7 @@ cpe = "kitware:cmake"
 
 depends-on = ["llvm"]
 
-# What a target building its own CMake changes: its options (after `--`) and environment.
+# What a target building its own CMake changes: options (after `--`) and environment.
 [vars]
 prefix = "/usr"
 options = []
@@ -34,4 +32,4 @@ run.cmd = [
 run.env = ["{vars.env}"]
 
 [[build]]
-make.install = true
+make.install.targets = ["install"]

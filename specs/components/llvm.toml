@@ -1,9 +1,6 @@
-# LLVM: clang, lld and the LLVM tools and libraries, the compiler of every environment after the
-# bootstrap. Built by the bootstrap clang, on musl, against libc++.
-
 version = "23.1.4"
 kind = "application"
-summary = "LLVM, clang and lld: the compiler of every environment after the bootstrap"
+summary = "LLVM, clang and lld"
 license = "Apache-2.0 WITH LLVM-exception"
 homepage = "https://llvm.org"
 purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
@@ -91,7 +88,7 @@ run.cmd = [
 
 [[build]]
 make.dir = "{work:build}"
-make.install = ["install/strip"]
+make.install.targets = ["install/strip"]
 
 # Named `cpp`, clang runs as the C preprocessor.
 [[build]]

@@ -1,10 +1,6 @@
-# The Rust toolchain (rustc and cargo), built from source for musl against our LLVM (as
-# `llvm-config` finds it), bootstrapped from the previous release (stage0), as upstream does. Its
-# standard library is compiled into dust-init and dust-api.
-
 version = "1.99.1"
 kind = "application"
-summary = "Rust toolchain, building dust-init and dust-api"
+summary = "Rust toolchain"
 license = "MIT OR Apache-2.0"
 homepage = "https://www.rust-lang.org"
 cpe = "rust-lang:rust"

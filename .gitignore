@@ -1,4 +1,4 @@
-/target/
+target/
 /build/
 
 # Local test PKI and user-data (contain private keys)

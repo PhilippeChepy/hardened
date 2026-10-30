@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+// workload-controller's API (/run/workload-controller/api.sock): workloads, run as serviced
+// services. The same socket also serves `hardened.workloads.v1.Workloads` (the API's workloads,
+// forwarded by machine-controller).
+package hardened.workload.v1;
+
+import "google/protobuf/empty.proto";
+import "hardened/workloads/v1/workloads.proto";
+
+service WorkloadController {
+  // The workloads of user-data, run next to the API's.
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+}
+
+message Configuration {
+  // settings.hardened.containers, disabled ones included; the API's run next to them.
+  repeated hardened.workloads.v1.DeclaredWorkload workloads = 1;
+}

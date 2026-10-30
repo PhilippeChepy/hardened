@@ -1,10 +1,9 @@
-# compiler-rt's builtins (what libgcc provides with GCC) and C start files (`crtbegin.o`,
-# `crtend.o`), in clang's resource directory. Built by the bootstrap clang against musl's headers
-# alone: it comes before any C library. Linked into every program, the image's included.
+# What libgcc provides with GCC. Built by the bootstrap clang against musl's headers alone: it
+# comes before any C library.
 
 version = "{llvm.version}"
 kind = "library"
-summary = "compiler-rt builtins and C start files (linked into every program)"
+summary = "compiler-rt builtins and C start files"
 license = "Apache-2.0 WITH LLVM-exception"
 homepage = "https://compiler-rt.llvm.org"
 purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
@@ -77,4 +76,4 @@ run.cmd = [
 
 [[build]]
 make.dir = "{work:build}"
-make.install = true
+make.install.targets = ["install"]

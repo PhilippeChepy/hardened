@@ -1,0 +1,38 @@
+description = "time-controller: SNTP client keeping the clock in sync"
+exec = ["/usr/bin/time-controller"]
+notify = true
+console = true
+runtime-directories = ["/run/time-controller"]
+
+[[sockets]]
+name = "api"
+path = "/run/time-controller/api.sock"
+allow = ["machine-controller"]
+
+[sandbox]
+user = 65533
+capabilities = ["SYS_TIME"]
+socket-families = ["inet", "inet6"]
+syscalls = [
+    "adjtimex",
+    "bind",
+    "getsockname",
+    "recvmsg",
+    "rename",
+    "sendmsg",
+    "setsockopt",
+    "socketpair",
+]
+limits.memory-mib = 32
+limits.tasks = 8
+limits.cpu-millicores = 100
+
+[[sandbox.binds]]
+path = "/etc"
+
+[[sandbox.binds]]
+path = "/run/hardened"
+
+[[sandbox.binds]]
+path = "/run/time-controller"
+writable = true

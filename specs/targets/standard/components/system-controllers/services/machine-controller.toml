@@ -1,0 +1,12 @@
+description = "machine-controller: sets the instance up from the platform's metadata and user-data, and serves the machine's API"
+exec = ["/usr/bin/machine-controller"]
+requires = ["network-controller"]
+notify = true
+console = true
+runtime-directories = ["/run/hardened", "/run/machine-controller"]
+api = ["read", "control"]
+
+[[sockets]]
+name = "api"
+path = "/run/machine-controller/api.sock"
+allow = ["machine-apiproxy"]

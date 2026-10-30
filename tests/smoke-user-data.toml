@@ -1,6 +1,8 @@
 # User-data of `cargo builder test`: an encrypted state partition (the test boots the same disk
-# twice), and one short-lived workload whose output dust-init forwards to the console, where the
-# test looks for it.
+# several times), and one short-lived workload whose output goes to the console, where the test
+# looks for it. The workload says when an earlier boot left a mark on the state partition, then
+# marks it and syncs before saying hello: the test stops the VM as soon as it sees that line,
+# abruptly, so the mark must be on disk by then.
 
 [settings.network]
 hostname = "smoke"
@@ -9,7 +11,15 @@ hostname = "smoke"
 encryption = "tpm"
 
 [settings.hardened.containers.hello]
-image = "docker.io/library/busybox:1.37"
-command = ["sh", "-c", "echo hello from a hardened workload; cat /proc/self/cgroup"]
+image = "public.ecr.aws/docker/library/busybox:1.37"
+command = [
+    "sh",
+    "-c",
+    "[ -e /data/mark ] && echo state kept from an earlier boot; touch /data/mark && sync && echo hello from a hardened workload",
+]
 restart = "never"
 console = true
+
+[[settings.hardened.containers.hello.mounts]]
+source = "/var/lib/smoke"
+destination = "/data"

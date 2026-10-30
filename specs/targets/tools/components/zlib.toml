@@ -21,4 +21,4 @@ run.env = [
 ]
 
 [[build]]
-make.install = true
+make.install.targets = ["install"]

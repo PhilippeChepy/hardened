@@ -1,0 +1,31 @@
+description = "workload-controller: runs workloads (containers) as services"
+exec = ["/usr/bin/workload-controller"]
+requires = ["storage-controller"]
+console = true
+runtime-directories = ["/run/workload-controller"]
+api = ["read", "control"]
+
+[[sockets]]
+name = "api"
+path = "/run/workload-controller/api.sock"
+allow = ["machine-controller"]
+activate = true
+
+[sandbox]
+user = 0
+syscalls = ["rename", "socketpair", "unlink"]
+limits.memory-mib = 64
+limits.tasks = 32
+limits.cpu-millicores = 250
+
+[[sandbox.binds]]
+path = "/run/workload-controller"
+writable = true
+
+[[sandbox.binds]]
+path = "/run/serviced/services"
+writable = true
+
+[[sandbox.binds]]
+path = "/var/lib/serviced/services"
+writable = true

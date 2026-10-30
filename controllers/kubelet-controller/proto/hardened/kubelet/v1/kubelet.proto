@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+// kubelet-controller's API (/run/kubelet-controller/api.sock): kubelet's configuration. kubelet's
+// own state is the kubelet service's, in serviced.
+package hardened.kubelet.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+
+service KubeletController {
+  // kubelet-controller writes kubelet's files and enables the kubelet service, or disables it
+  // without `kubelet`. A configuration it cannot apply is refused (INVALID_ARGUMENT, with the
+  // reason).
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+}
+
+message Configuration {
+  // settings.kubernetes; absent when kubelet does not run.
+  Kubelet kubelet = 1;
+  // The name kubelet registers the node with: the hostname.
+  string node_name = 2;
+}
+
+// What an enabled kubelet needs to join a cluster, and its node's settings.
+message Kubelet {
+  // The cluster's API server (an https URL).
+  string api_server = 1;
+  // The cluster CA (PEM): the API server's certificate chains to it, and so do the client
+  // certificates kubelet's own API accepts.
+  string cluster_certificate = 2;
+  // TLS bootstrapping: kubelet requests its client certificate with it, then rotates it. Empty in
+  // hardened.machine.v1.Machine.GetSettings.
+  string bootstrap_token = 3;
+  // The cluster's DNS domain (cluster.local by default).
+  string cluster_domain = 4;
+  // The cluster DNS service's IP addresses, which pods resolve with.
+  repeated string cluster_dns_ip = 5;
+  map<string, string> node_labels = 6;
+  repeated Taint node_taints = 7;
+  // The most pods the node runs; kubelet's default when absent.
+  optional uint32 max_pods = 8;
+  CloudProvider cloud_provider = 9;
+  // Pods kubelet runs from files, without the API server.
+  repeated StaticPod static_pods = 10;
+  // Resources reserved for Kubernetes daemons, and for the system.
+  repeated Reservation kube_reserved = 11;
+  repeated Reservation system_reserved = 12;
+  // Replaces kubelet's defaults as a whole: a signal left out is not checked.
+  repeated HardEviction eviction_hard = 13;
+  repeated SoftEviction eviction_soft = 14;
+  // How long a pod evicted on a soft threshold gets to stop, at most.
+  google.protobuf.Duration eviction_max_pod_grace_period = 15;
+  ImageGc image_gc = 16;
+}
+
+enum CloudProvider {
+  // kubelet initializes the node.
+  CLOUD_PROVIDER_UNSPECIFIED = 0;
+  // A cloud controller manager initializes the node (--cloud-provider=external).
+  CLOUD_PROVIDER_EXTERNAL = 1;
+}
+
+message Taint {
+  string key = 1;
+  string value = 2;
+  TaintEffect effect = 3;
+}
+
+enum TaintEffect {
+  TAINT_EFFECT_UNSPECIFIED = 0;
+  TAINT_EFFECT_NO_SCHEDULE = 1;
+  TAINT_EFFECT_PREFER_NO_SCHEDULE = 2;
+  TAINT_EFFECT_NO_EXECUTE = 3;
+}
+
+message StaticPod {
+  // Its file name.
+  string name = 1;
+  // When false, declared but not run.
+  bool enabled = 2;
+  // The pod's manifest (YAML or JSON).
+  string manifest = 3;
+}
+
+enum Resource {
+  RESOURCE_UNSPECIFIED = 0;
+  RESOURCE_CPU = 1;
+  RESOURCE_MEMORY = 2;
+  RESOURCE_EPHEMERAL_STORAGE = 3;
+  RESOURCE_PID = 4;
+}
+
+message Reservation {
+  Resource resource = 1;
+  // A Kubernetes quantity (100m, 1.5Gi).
+  string quantity = 2;
+}
+
+enum EvictionSignal {
+  EVICTION_SIGNAL_UNSPECIFIED = 0;
+  EVICTION_SIGNAL_MEMORY_AVAILABLE = 1;
+  EVICTION_SIGNAL_NODEFS_AVAILABLE = 2;
+  EVICTION_SIGNAL_NODEFS_INODES_FREE = 3;
+  EVICTION_SIGNAL_IMAGEFS_AVAILABLE = 4;
+  EVICTION_SIGNAL_IMAGEFS_INODES_FREE = 5;
+  EVICTION_SIGNAL_PID_AVAILABLE = 6;
+}
+
+// Below what a signal triggers eviction.
+message Threshold {
+  oneof threshold {
+    // A Kubernetes quantity.
+    string quantity = 1;
+    // From 0 (included) to 100 (excluded).
+    double percent = 2;
+  }
+}
+
+message HardEviction {
+  EvictionSignal signal = 1;
+  Threshold threshold = 2;
+}
+
+// A threshold below which kubelet evicts pods once it lasted its grace period.
+message SoftEviction {
+  EvictionSignal signal = 1;
+  Threshold threshold = 2;
+  google.protobuf.Duration grace_period = 3;
+}
+
+// Image garbage collection; kubelet's defaults for what is absent.
+message ImageGc {
+  ThresholdPercents threshold_percent = 1;
+  ImageAges age = 2;
+}
+
+// Above high percent of disk usage, kubelet collects images until usage is back to low, below
+// high.
+message ThresholdPercents {
+  uint32 low = 1;
+  uint32 high = 2;
+}
+
+// How long an unused image is kept at least, and at most (above the minimum).
+message ImageAges {
+  google.protobuf.Duration minimum = 1;
+  google.protobuf.Duration maximum = 2;
+}

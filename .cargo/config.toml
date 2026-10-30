@@ -1,2 +1,2 @@
 [alias]
-builder = "run --quiet --package dust-builder --"
+builder = "run --quiet --manifest-path image-builder/Cargo.toml --"

@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+// serviced's API, on a unix socket (/run/serviced/serviced.sock), for the services of the
+// machine.
+//
+// serviced identifies the calling service by the cgroup of the connected process and allows what
+// the service's file grants in `api`: `read` (services and logs) and `control` (start, stop,
+// restart, reload, power). IdentifyProcess is open to every service (they
+// authorize their own callers with it). Other callers are refused.
+package hardened.serviced.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service Serviced {
+  // Services: the definitions merged from their layers, and their state.
+  rpc ListServices(google.protobuf.Empty) returns (ListServicesResponse);
+  rpc GetService(ServiceRef) returns (Service);
+  // Start a stopped, exited or failed service (once its requirements are ready).
+  rpc Start(ServiceRef) returns (google.protobuf.Empty);
+  // Stop a service (exec-post, then exec-stop); it stays stopped until started or restarted.
+  rpc Stop(ServiceRef) returns (google.protobuf.Empty);
+  rpc Restart(ServiceRef) returns (google.protobuf.Empty);
+  // Re-read the service files of every layer and reconcile, after a service wrote or removed
+  // some: once answered, the sockets of the enabled services exist and those of the others are
+  // gone.
+  rpc Reload(google.protobuf.Empty) returns (ReloadResponse);
+
+  // A service's output, or serviced's own log (empty service): the last lines, then new ones as
+  // they come when following.
+  rpc Logs(LogsRequest) returns (stream LogLine);
+
+  rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc PowerOff(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // The service a process belongs to (by its cgroup), for services authorizing the callers of
+  // their own sockets (SO_PEERCRED gives them the pid). NOT_FOUND if it belongs to none.
+  rpc IdentifyProcess(ProcessRef) returns (ServiceRef);
+}
+
+message ServiceRef {
+  string name = 1;
+}
+
+enum Layer {
+  LAYER_UNSPECIFIED = 0;
+  // /usr/lib/serviced/services: the image's, read-only.
+  LAYER_IMAGE = 1;
+  // /run/serviced/services: this boot's.
+  LAYER_RUNTIME = 2;
+  // /var/lib/serviced/services: kept across boots.
+  LAYER_PERSISTENT = 3;
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  // Disabled, or its condition is false.
+  STATE_INACTIVE = 1;
+  // For the services it requires.
+  STATE_WAITING = 2;
+  // Running exec-pre.
+  STATE_STARTING = 3;
+  // exec runs; not ready yet (a notify service that has not sent READY=1).
+  STATE_RUNNING = 4;
+  // exec runs and is ready.
+  STATE_READY = 5;
+  // exec exited and is not restarted.
+  STATE_EXITED = 6;
+  STATE_FAILED = 7;
+  // Waiting to start exec again.
+  STATE_BACKOFF = 8;
+  STATE_STOPPING = 9;
+  STATE_STOPPED = 10;
+}
+
+message Exit {
+  oneof how {
+    int32 code = 1;
+    int32 signal = 2;
+  }
+}
+
+message Service {
+  string name = 1;
+  string description = 2;
+  bool enabled = 3;
+  // The layers it has a file in, in order.
+  repeated Layer layers = 4;
+  // The merged definition, as TOML.
+  string definition = 5;
+  // The sandbox's uid, if it has one.
+  optional uint32 user = 6;
+  State state = 7;
+  // When it entered this state.
+  google.protobuf.Timestamp since = 8;
+  // The main process, while it runs.
+  optional uint32 pid = 9;
+  // How many times exec was started again after exiting.
+  uint32 restarts = 10;
+  Exit last_exit = 11;
+  // Why it is waiting, inactive or failed.
+  string reason = 12;
+  // The last STATUS= the process sent over its notify socket.
+  string status_text = 13;
+}
+
+message ListServicesResponse {
+  repeated Service services = 1;
+}
+
+message ReloadResponse {
+  // Why the services left out are: an unreadable or invalid file, an invalid service.
+  repeated string invalid = 1;
+}
+
+message LogsRequest {
+  // Empty: serviced's own log.
+  string service = 1;
+  // Number of past lines to send first; 0 means all retained.
+  uint32 tail = 2;
+  bool follow = 3;
+}
+
+message LogLine {
+  google.protobuf.Timestamp time = 1;
+  // For serviced's own log: ERROR, WARN, INFO, DEBUG or TRACE, and the event's target; empty for
+  // services' output.
+  string level = 2;
+  string target = 3;
+  string text = 4;
+}
+
+message ProcessRef {
+  uint32 pid = 1;
+}

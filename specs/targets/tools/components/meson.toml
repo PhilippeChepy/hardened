@@ -1,5 +1,3 @@
-# Meson build system, installed as a single-file Python application.
-
 version = "1.12.1"
 kind = "application"
 summary = "Meson build system"

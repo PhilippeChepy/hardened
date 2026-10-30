@@ -1,6 +1,3 @@
-# CMake, static, under /cross: the bootstrap toolset's CMake, built on StageX with its bundled
-# libraries, for compiler-rt, libc++ and LLVM.
-
 summary = "CMake, static"
 # Built on the seed alone.
 depends-on = []

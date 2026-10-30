@@ -1,0 +1,36 @@
+[package]
+name = "network-controller"
+description = "DHCPv4 client and resolver configuration of hardened, a sandboxed service of serviced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+controllers-helpers.workspace = true
+libserviced.workspace = true
+netlink-packet-core.workspace = true
+netlink-packet-route.workspace = true
+prost.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[lib]
+# Generated code: proto comments are not Rust doctests.
+doctest = false

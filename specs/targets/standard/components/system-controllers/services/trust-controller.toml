@@ -1,0 +1,25 @@
+description = "trust-controller: the TPM's only user, for attestation evidence and sealed secrets"
+exec = ["/usr/bin/trust-controller"]
+condition.path-exists = "/dev/tpmrm0"
+console = true
+
+[[sockets]]
+name = "api"
+path = "/run/trust-controller/api.sock"
+allow = ["machine-controller", "storage-controller"]
+activate = true
+
+[sandbox]
+user = 0
+syscalls = ["socketpair"]
+limits.memory-mib = 32
+limits.tasks = 16
+limits.cpu-millicores = 250
+
+[[sandbox.binds]]
+path = "/dev/tpmrm0"
+writable = true
+device = true
+
+[[sandbox.binds]]
+path = "/sys/kernel/security"

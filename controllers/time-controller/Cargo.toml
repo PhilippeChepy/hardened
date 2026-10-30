@@ -1,0 +1,36 @@
+[package]
+name = "time-controller"
+description = "SNTP client keeping the clock in sync, a sandboxed service of serviced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+controllers-helpers.workspace = true
+libc.workspace = true
+libserviced.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[lib]
+# Generated code: proto comments are not Rust doctests.
+doctest = false

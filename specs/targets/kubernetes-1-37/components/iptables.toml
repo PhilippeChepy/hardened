@@ -28,7 +28,6 @@ mkdir = "{work:build}"
 run.cmd = [
     "{src}/configure",
     "--prefix=/usr",
-    "--sbindir=/usr/sbin",
     "--enable-static",
     "--disable-shared",
     "--disable-libnfnetlink",
@@ -46,8 +45,8 @@ run.dir = "{work:build}"
 [[build]]
 make.dir = "{work:build}"
 make.args = ["LDFLAGS=-all-static"]
-make.install = true
-make.dest = "{work:install}"
+make.install.targets = ["install"]
+make.install.dest = "{work:install}"
 
 [[build]]
 install.from = "{work:install}/usr/sbin/xtables-nft-multi"

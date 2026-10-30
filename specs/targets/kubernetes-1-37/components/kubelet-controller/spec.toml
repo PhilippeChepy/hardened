@@ -1,0 +1,20 @@
+version = "workspace"
+kind = "application"
+summary = "kubelet-controller: writes kubelet's configuration and enables it"
+license = "Apache-2.0"
+homepage = "https://github.com/PhilippeChepy/hardened"
+purl = "pkg:github/PhilippeChepy/hardened@{version}#controllers/kubelet-controller"
+
+local = ["controllers", "serviced"]
+
+depends-on = ["rust", "ca-certificates"]
+
+[[build]]
+cargo-build.workspace = "controllers"
+cargo-build.binaries = [
+    ["kubelet-controller", "/usr/bin/kubelet-controller"],
+]
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/kubelet-controller.toml"
+write.file = "services/kubelet-controller.toml"

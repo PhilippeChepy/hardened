@@ -1,0 +1,30 @@
+description = "network-controller: DHCPv4 on every physical Ethernet interface, and the resolver configuration"
+exec = ["/usr/bin/network-controller"]
+notify = true
+console = true
+runtime-directories = ["/run/hardened", "/run/network-controller"]
+
+[[sockets]]
+name = "api"
+path = "/run/network-controller/api.sock"
+allow = ["machine-controller"]
+
+[sandbox]
+user = 0
+capabilities = ["NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE"]
+socket-families = ["inet", "netlink", "packet"]
+syscalls = ["bind", "rename", "setsockopt", "socketpair"]
+limits.memory-mib = 64
+limits.tasks = 16
+limits.cpu-millicores = 250
+
+[[sandbox.binds]]
+path = "/sys"
+
+[[sandbox.binds]]
+path = "/run/hardened"
+writable = true
+
+[[sandbox.binds]]
+path = "/run/network-controller"
+writable = true

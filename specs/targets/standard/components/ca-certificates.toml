@@ -9,7 +9,7 @@ purl = "pkg:generic/mozilla-ca-certificates@{version}"
 url = "https://curl.se/ca/cacert-{version}.pem"
 sha256 = "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe"
 
-# In the image, and where cargo fetches dust's crates (dust builds after it, in the same target).
+# Also where cargo finds them when it fetches the workspace's crates.
 [[build]]
 install.from = "{bundle}"
 install.to = "{dest}/etc/ssl/certs/ca-certificates.crt"

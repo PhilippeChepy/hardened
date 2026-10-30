@@ -1,0 +1,16 @@
+version = "workspace"
+kind = "application"
+summary = "serviced: PID 1, the service supervisor"
+license = "Apache-2.0"
+homepage = "https://github.com/PhilippeChepy/hardened"
+purl = "pkg:github/PhilippeChepy/hardened@{version}#serviced/serviced"
+
+local = ["serviced"]
+
+depends-on = ["rust", "ca-certificates"]
+
+[[build]]
+cargo-build.workspace = "serviced"
+cargo-build.binaries = [
+    ["serviced", "/usr/bin/serviced"],
+]

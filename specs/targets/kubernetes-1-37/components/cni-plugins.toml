@@ -11,8 +11,7 @@ depends-on = ["go"]
 url = "https://github.com/containernetworking/plugins/archive/refs/tags/v{version}.tar.gz"
 sha256 = "34bd82d47e981940751619c9cc44c095bb90bfcaf8d71865cbb822c37690a764"
 
-# Pure Go, static. In containerd's first CNI binary directory (base-files' containerd
-# configuration), on the read-only root.
+# Pure Go, static. /usr/libexec/cni is containerd's first CNI binary directory.
 [[build]]
 go-build.commands = [
     ["./plugins/main/loopback", "/usr/libexec/cni/loopback"],
@@ -22,10 +21,9 @@ go-build.commands = [
 ]
 go-build.vars = [["github.com/containernetworking/plugins/pkg/utils/buildversion.BuildVersion", "v{version}"]]
 
-# Where cluster network add-ons (Calico, Cilium, flannel...) install their plugins and write
-# their configuration, through hostPath volumes: writable places, created by dust-init.
-# containerd's second binary directory is /opt/cni/bin, and it reads its configuration from
-# /run/cni/net.d.
+# Where cluster network add-ons (Calico, Cilium, flannel...) install their plugins and write their
+# configuration, through hostPath volumes: links to writable places, kubelet's runtime directories.
+# containerd searches /opt/cni/bin second and reads its configuration from /run/cni/net.d.
 [[build]]
 symlink.target = "../../var/lib/cni/bin"
 symlink.link = "{dest}/opt/cni/bin"

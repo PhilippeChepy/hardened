@@ -1,0 +1,8 @@
+description = "kubelet: the Kubernetes node agent"
+enabled = false
+exec = ["/usr/bin/kubelet"]
+exec-pre = [["/usr/bin/ctr", "--namespace", "k8s.io", "images", "import", "/usr/share/hardened/images/pause.tar"]]
+requires = ["containerd"]
+notify = true
+runtime-directories = ["/var/lib/kubelet", "/var/lib/cni/bin", "/run/cni/net.d"]
+env.PATH = "/usr/bin"

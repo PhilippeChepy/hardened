@@ -1,0 +1,40 @@
+[package]
+name = "storage-controller"
+description = "The state partition of hardened: grown, unlocked with a key trust-controller unseals when encrypted, mounted on /var"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+clap.workspace = true
+controllers-helpers.workspace = true
+gpt.workspace = true
+libserviced.workspace = true
+prost.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+trust-controller.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[lib]
+# Generated code: proto comments are not Rust doctests.
+doctest = false

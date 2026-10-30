@@ -1,6 +1,4 @@
-# Python, static, under /cross: the bootstrap toolset's Python, built on StageX, for the CMake
-# builds of compiler-rt, libc++ and LLVM. Its extension modules are built in (those whose
-# libraries StageX lacks are left out).
+# Its extension modules are built in; those whose libraries StageX lacks are left out.
 
 summary = "Python interpreter, static"
 # Built on the seed alone.

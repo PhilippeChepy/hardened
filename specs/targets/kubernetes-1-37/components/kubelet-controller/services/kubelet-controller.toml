@@ -1,0 +1,11 @@
+description = "kubelet-controller: kubelet's configuration"
+exec = ["/usr/bin/kubelet-controller"]
+notify = true
+console = true
+runtime-directories = ["/run/kubelet-controller", "/run/kubelet"]
+api = ["read", "control"]
+
+[[sockets]]
+name = "api"
+path = "/run/kubelet-controller/api.sock"
+allow = ["machine-controller"]

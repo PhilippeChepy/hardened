@@ -1,0 +1,22 @@
+description = "machine-apiproxy: the machine's API, over mutual TLS"
+enabled = false
+exec = ["/usr/bin/machine-apiproxy"]
+runtime-directories = ["/run/machine-apiproxy"]
+
+[[sockets]]
+name = "api"
+path = "/run/machine-apiproxy/api.sock"
+allow = ["machine-controller"]
+activate = true
+
+[sandbox]
+user = 65534
+socket-families = ["inet", "inet6"]
+syscalls = ["bind", "listen", "rename", "setsockopt", "socketpair"]
+limits.memory-mib = 128
+limits.tasks = 128
+limits.cpu-millicores = 500
+
+[[sandbox.binds]]
+path = "/run/machine-apiproxy"
+writable = true

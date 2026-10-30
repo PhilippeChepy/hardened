@@ -17,15 +17,8 @@ configure.args = [
     "--disable-all-programs",
     "--libdir=/usr/lib",
     "--enable-libuuid",
-    "--enable-static",
     "--disable-shared",
     "--disable-nls",
-    "--without-python",
-    "--without-systemd",
-    "--without-udev",
-    "--disable-makeinstall-chown",
-    "--disable-makeinstall-setuid",
-    "--disable-liblastlog2",
     "CFLAGS=-O2 -flto=thin",
 ]
 

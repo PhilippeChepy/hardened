@@ -25,4 +25,4 @@ run.cmd = [
 run.env = [["CC", "cc"], ["CFLAGS", "-std=gnu17"]]
 
 [[build]]
-make.install = true
+make.install.targets = ["install"]

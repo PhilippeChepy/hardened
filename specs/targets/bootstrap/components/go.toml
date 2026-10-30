@@ -1,10 +1,8 @@
-# The Go toolchain, built from source with StageX's Go (`GOROOT_BOOTSTRAP`). It is a static, pure
-# Go program, so it runs in any environment, where it builds containerd and runc. Its standard
-# library is compiled into them.
+# A static, pure Go program: it runs in any environment.
 
 version = "1.27.3"
 kind = "application"
-summary = "Go toolchain, building containerd and runc"
+summary = "Go toolchain"
 license = "BSD-3-Clause"
 homepage = "https://go.dev"
 purl = "pkg:golang/stdlib@v{version}"

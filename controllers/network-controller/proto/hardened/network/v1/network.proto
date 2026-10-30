@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+// network-controller's API (/run/network-controller/api.sock): the resolver, and what DHCP
+// offered.
+package hardened.network.v1;
+
+import "google/protobuf/empty.proto";
+
+service NetworkController {
+  // The resolver override of settings.dns.
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+  rpc GetState(google.protobuf.Empty) returns (State);
+}
+
+// settings.dns: each list, when not empty, replaces what DHCP gives.
+message Configuration {
+  // IP addresses, in order of preference.
+  repeated string name_servers = 1;
+  // Domain names.
+  repeated string search_list = 2;
+}
+
+// What DHCP offered.
+message State {
+  // The hostname DHCP offered on the primary interface (option 12), if any.
+  optional string dhcp_hostname = 1;
+  // The NTP servers DHCP offered (option 42; IPv4 addresses), the primary interface's first.
+  repeated string ntp_servers = 2;
+}

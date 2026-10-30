@@ -22,15 +22,13 @@ static-libstdcpp = false
 
 [rust]
 channel = "stable"
-debuginfo-level = 0
-# lld's section compression needs zlib, which our LLVM is built without (and there is no debug
-# information to compress).
+# The source tarball's `dist` profile compresses debug information with zlib, which our lld is
+# built without (and there is no debug information to compress).
 compress-debuginfo = "off"
 llvm-libunwind = "system"
 
 [install]
 prefix = "/usr"
-sysconfdir = "/etc"
 
 [target.x86_64-unknown-linux-musl]
 llvm-config = "/usr/bin/llvm-config"

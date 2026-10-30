@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = [
+    "libserviced",
+    "serviced",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/PhilippeChepy/hardened"
+publish = false
+
+[workspace.dependencies]
+# In-tree crates
+libserviced = { path = "libserviced" }
+
+anyhow = "1.0.104"
+libc = "0.2"
+prost = "0.14.4"
+prost-types = "0.14.4"
+protox = "0.10.0"
+seccompiler = "0.5.0"
+rustix = { version = "1.1.5", features = ["fs", "mount", "process", "system", "net", "thread", "time", "rand"] }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "fs", "io-util", "time", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+toml = "1.1.8"
+tonic = { version = "0.14.6", default-features = false, features = ["codegen", "router", "server", "channel"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = { version = "0.14.6", default-features = false, features = ["transport"] }
+tower = "0.5"
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http = "1.5.0"
+tempfile = "3.27.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

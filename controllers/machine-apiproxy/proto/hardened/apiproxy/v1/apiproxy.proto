@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+// machine-apiproxy's API (/run/machine-apiproxy/api.sock): it serves machine-controller's API
+// over mTLS.
+package hardened.apiproxy.v1;
+
+import "google/protobuf/empty.proto";
+
+service MachineApiProxy {
+  // settings.hardened.api. machine-apiproxy keeps the private key in its runtime directory,
+  // readable by it only.
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+}
+
+message Configuration {
+  // The address to serve on, e.g. 0.0.0.0:7443.
+  string listen = 1;
+  TlsIdentity tls = 2;
+}
+
+// The server's identity, and the CA its clients must chain to: PEM.
+message TlsIdentity {
+  string client_ca = 1;
+  string certificate = 2;
+  // Empty in hardened.machine.v1.Machine.GetSettings.
+  string private_key = 3;
+}

@@ -16,16 +16,12 @@ from = "openssl"
 run.cmd = [
     "./Configure",
     "--prefix=/usr",
-    "--openssldir=/etc/ssl",
     "--libdir=lib",
     "no-shared",
     "no-module",
     "no-dso",
     "no-engine",
     "no-legacy",
-    "no-apps",
-    "no-docs",
-    "no-tests",
     "no-autoload-config",
     "CC=cc", # default is gcc
     "-flto=thin",
@@ -33,5 +29,5 @@ run.cmd = [
 
 [[build]]
 make.args = ["build_libs"]
-make.install = ["install_dev"]
-make.dest = "{out:dev}"
+make.install.targets = ["install_dev"]
+make.install.dest = "{out:dev}"

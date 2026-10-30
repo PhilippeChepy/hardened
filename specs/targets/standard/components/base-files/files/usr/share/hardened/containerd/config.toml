@@ -1,11 +1,10 @@
-# containerd configuration. dust-init adds the registry credentials of user-data
-# (settings.container-registry) to the CRI plugin's `configs`, writes the result to
-# /run/containerd/config.toml and passes it with --config; the mirrors go to `config_path`. dust-init
-# drives containerd through CRI; `{pause.version}` is replaced by dust-builder with the bundled pause
-# image's version.
+# containerd's configuration. machine-controller adds the registry credentials of
+# settings.container-registry to the CRI plugin's `configs` and writes the result to
+# /run/containerd/config.toml, which containerd runs with; the mirrors and basic credentials
+# (`Authorization` headers) go to `config_path`.
 version = 3
-root = "/var/lib/containerd"
-state = "/run/containerd"
+# Other components' drop-ins (pause's pins the pod sandbox image).
+imports = ["/usr/share/hardened/containerd/conf.d/*.toml"]
 
 disabled_plugins = [
   "io.containerd.internal.v1.tracing",
@@ -13,39 +12,28 @@ disabled_plugins = [
   "io.containerd.nri.v1.nri",
 ]
 
-[grpc]
-  address = "/run/containerd/containerd.sock"
-
 [plugins.'io.containerd.cri.v1.images']
-  snapshotter = "overlayfs"
-
-  # Imported from the read-only root at boot, never pulled; pinned images are never collected.
-  [plugins.'io.containerd.cri.v1.images'.pinned_images]
-    sandbox = "localhost/hardened/pause:{pause.version}"
+  # Unpacked layers are synced before the image is recorded: otherwise a crash (or power loss)
+  # soon after a pull leaves an image whose files never reached the disk, which containerd
+  # believes complete (programs then fail with "corrupted shared library").
+  image_pull_with_sync_fs = true
 
   [plugins.'io.containerd.cri.v1.images'.registry]
     config_path = "/run/containerd/certs.d"
 
-[plugins.'io.containerd.cri.v1.runtime']
-  enable_selinux = false
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
 
-  [plugins.'io.containerd.cri.v1.runtime'.containerd]
-    default_runtime_name = "runc"
+  [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+    BinaryName = "/usr/bin/runc"
 
-    [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
-      runtime_type = "io.containerd.runc.v2"
+# CNI only serves kubelet's pods (workloads use the host network): the image's plugins first,
+# then those network add-ons install (/opt/cni/bin, a link into /var). The configuration
+# directory is on /run, writable. Neither exists in an image without kubelet.
+[plugins.'io.containerd.cri.v1.runtime'.cni]
+  bin_dirs = ["/usr/libexec/cni", "/opt/cni/bin"]
+  conf_dir = "/run/cni/net.d"
 
-      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
-        BinaryName = "/usr/bin/runc"
-        SystemdCgroup = false
-
-  # dust-init's workloads use the host network, so CNI only serves kubelet's pods: the plugins
-  # of the image (first, on the read-only root), then those cluster network add-ons install
-  # (/opt/cni/bin, a link into /var). Neither exists in an image without kubelet. The
-  # configuration directory must be writable (the root is not), and is rebuilt at every boot.
-  [plugins.'io.containerd.cri.v1.runtime'.cni]
-    bin_dirs = ["/usr/libexec/cni", "/opt/cni/bin"]
-    conf_dir = "/run/cni/net.d"
-
-[plugins.'io.containerd.transfer.v1.local']
-  config_path = "/run/containerd/certs.d"
+# The same for other clients (ctr).
+[plugins.'io.containerd.service.v1.diff-service']
+  sync_fs = true

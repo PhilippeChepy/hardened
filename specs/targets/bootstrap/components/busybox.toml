@@ -1,6 +1,4 @@
-# BusyBox, static, under /cross: the shell and core utilities of the bootstrap toolset, built on
-# StageX. It runs on an empty root, where the first components of `tools` build before our musl and
-# userland exist.
+# Static, under /cross: it runs on an empty root, before our musl and userland exist.
 
 version = "1.37.0"
 kind = "application"

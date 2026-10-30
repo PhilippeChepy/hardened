@@ -1,0 +1,38 @@
+version = "2.88.4"
+kind = "library"
+summary = "GLib, for QEMU and swtpm"
+license = "LGPL-2.1-or-later"
+homepage = "https://gitlab.gnome.org/GNOME/glib"
+cpe = "gnome:glib"
+
+depends-on = [
+    "llvm",
+    "meson",
+    "ninja",
+    "pkgconf",
+    "python",
+    "py-packaging",
+    "libffi",
+    "pcre2",
+    "zlib",
+]
+
+[sources.src]
+url = "https://download.gnome.org/sources/glib/2.88/glib-{version}.tar.xz"
+sha256 = "25fd169f3b2f91fe2391ad297883ce0fcf30c69fc789ffd1c9672d1332b1c5a8"
+
+[[build]]
+meson.args = [
+    "-Dintrospection=disabled",
+    "-Dtests=false",
+    "-Dnls=disabled",
+    "-Dman-pages=disabled",
+    "-Dselinux=disabled",
+    "-Dxattr=false",
+    "-Dlibmount=disabled",
+    "-Dlibelf=disabled",
+    "-Dsysprof=disabled",
+    "-Ddtrace=disabled",
+    "-Dsystemtap=disabled",
+    "-Dglib_debug=disabled",
+]

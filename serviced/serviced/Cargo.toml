@@ -1,0 +1,25 @@
+[package]
+name = "serviced"
+description = "PID 1 of hardened: supervises the services, confines them, listens on their sockets, keeps their logs, and handles power"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+libserviced.workspace = true
+rustix.workspace = true
+seccompiler.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+toml.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

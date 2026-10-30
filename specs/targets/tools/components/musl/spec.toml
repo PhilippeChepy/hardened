@@ -1,7 +1,5 @@
-# musl, the C library of every environment after the bootstrap and of the image, with mimalloc 3
-# as its allocator, the way Chimera Linux builds it with mimalloc 2. Built by the bootstrap
-# clang, with ThinLTO (but its start files, its dynamic linker's entry and mimalloc); the image's
-# programs link it statically.
+# mimalloc 3 as its allocator, the way Chimera Linux builds musl with mimalloc 2. ThinLTO, but
+# for its start files, its dynamic linker's entry and mimalloc.
 #
 # Patches: musl's fixes since 1.2.6 (`001`-`008`, upstream commits) and the CVE-2026-107891 fix
 # (regcomp), as Chimera carries them; Chimera's plumbing for an external allocator (`0001`) and
@@ -81,7 +79,7 @@ run.cmd = [
 [[build]]
 make.args = ["EXTRA_OBJ=src/malloc/external/mimalloc.o"]
 make.env = [["OBJCOPY", "/cross/llvm/bin/llvm-objcopy"], ["NM", "/cross/llvm/bin/llvm-nm"]]
-make.install = true
+make.install.targets = ["install"]
 
 # Relative, so the sysroot copies resolve too.
 [[build]]
