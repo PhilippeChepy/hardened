@@ -9,8 +9,9 @@ impl From<Duration> for prost_types::Duration {
     fn from(duration: Duration) -> Self {
         let millis = duration.millis();
         Self {
-            seconds: i64::try_from(millis / 1000).expect("u64::MAX / 1000 fits in an i64"),
-            nanos: i32::try_from(millis % 1000 * 1_000_000).expect("below 10^9"),
+            // u64::MAX / 1000 fits in an i64, and below 10^9 in an i32: neither saturates.
+            seconds: i64::try_from(millis / 1000).unwrap_or(i64::MAX),
+            nanos: i32::try_from(millis % 1000 * 1_000_000).unwrap_or(i32::MAX),
         }
     }
 }

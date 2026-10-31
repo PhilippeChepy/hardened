@@ -467,7 +467,9 @@ impl Engine {
         let names: Vec<ServiceName> = self.entries.keys().cloned().collect();
         for name in names {
             let service = services.remove(&name);
-            let entry = self.entries.get_mut(&name).expect("listed");
+            let Some(entry) = self.entries.get_mut(&name) else {
+                continue;
+            };
             let Some(service) = service else {
                 if entry.stopping().is_some_and(|stopping| stopping.remove) {
                     continue;
@@ -492,10 +494,13 @@ impl Engine {
             }
             entry.reset();
             // Stopped as it was defined: its own exec-stop undoes what it did.
-            if self.stop(&name).is_none() {
-                self.entries.get_mut(&name).expect("listed").idle();
+            let stopping = self.stop(&name).is_some();
+            if let Some(entry) = self.entries.get_mut(&name) {
+                if !stopping {
+                    entry.idle();
+                }
+                entry.service = Arc::new(service);
             }
-            self.entries.get_mut(&name).expect("listed").service = Arc::new(service);
         }
         for (name, service) in services {
             info!(service = %name, "service added");
@@ -542,11 +547,12 @@ impl Engine {
         match self.stop(name) {
             Some(stopping) => stopping.hold = true,
             None => {
-                let entry = self.entries.get_mut(name).expect("listed");
-                entry.life = Life::Stopped {
-                    exec_stop_left: false,
-                };
-                entry.set(State::Stopped, None);
+                if let Some(entry) = self.entries.get_mut(name) {
+                    entry.life = Life::Stopped {
+                        exec_stop_left: false,
+                    };
+                    entry.set(State::Stopped, None);
+                }
             }
         }
         self.settle();
@@ -564,8 +570,10 @@ impl Engine {
         }
         entry.activated = true;
         // Nothing to wait for: it is not running, stopped or not.
-        if self.stop(name).is_none() {
-            self.entries.get_mut(name).expect("listed").life = Life::Idle;
+        if self.stop(name).is_none()
+            && let Some(entry) = self.entries.get_mut(name)
+        {
+            entry.life = Life::Idle;
         }
         self.settle();
         Ok(())
@@ -884,7 +892,11 @@ impl Engine {
             let mut changed = false;
             let names: Vec<ServiceName> = self.entries.keys().cloned().collect();
             for name in names {
-                if self.entries[&name].life != Life::Idle {
+                if self
+                    .entries
+                    .get(&name)
+                    .is_none_or(|entry| entry.life != Life::Idle)
+                {
                     continue;
                 }
                 match self.evaluate(&name) {
@@ -903,10 +915,14 @@ impl Engine {
                                 by = %name,
                                 "required by a service, activating the service"
                             );
-                            activate(self.entries.get_mut(&required).expect("listed"));
-                            changed = true;
+                            if let Some(required) = self.entries.get_mut(&required) {
+                                activate(required);
+                                changed = true;
+                            }
                         }
-                        let entry = self.entries.get_mut(&name).expect("listed");
+                        let Some(entry) = self.entries.get_mut(&name) else {
+                            continue;
+                        };
                         if entry.status.state != state
                             || entry.status.reason.as_ref() != Some(&reason)
                         {
@@ -1001,9 +1017,11 @@ impl Engine {
 
     /// Starts a new run of `name`.
     fn start_run(&mut self, name: &ServiceName) {
+        let Some(entry) = self.entries.get_mut(name) else {
+            return;
+        };
         self.next_id += 1;
         let run = self.next_id;
-        let entry = self.entries.get_mut(name).expect("listed");
         entry.life = Life::Running(Run {
             id: run,
             phase: Phase::Pre { ready: None },

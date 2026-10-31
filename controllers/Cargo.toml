@@ -82,6 +82,11 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 uuid = "1.29.0"
 zeroize = "1.9.1"
 
+[workspace.lints.clippy]
+# No panic on a failure in production code: tests may (clippy.toml).
+expect_used = "deny"
+unwrap_used = "deny"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

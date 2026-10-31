@@ -171,21 +171,19 @@ pub fn make(
                 kdfe(z, b"IDENTITY\0", ephemeral_x, x)
             })
             .map_err(|_| CredentialError::Crypto("ECDH with the endorsement key"))?;
-            let secret = [tpm2b(ephemeral_x), tpm2b(&public.as_ref()[33..])].concat();
+            let secret = [tpm2b(ephemeral_x)?, tpm2b(&public.as_ref()[33..])?].concat();
             (seed, secret)
         }
     };
 
-    let symmetric: [u8; 16] = kdfa(&seed, b"STORAGE", &ak_name, &[], 128)
-        .try_into()
-        .expect("128 bits");
-    let mut encrypted = tpm2b(credential);
+    let symmetric: [u8; 16] = kdfa(&seed, b"STORAGE", &ak_name, &[]);
+    let mut encrypted = tpm2b(credential)?;
     cfb_mode::Encryptor::<Aes128>::new(&symmetric.into(), &[0; 16].into()).encrypt(&mut encrypted);
-    let integrity = kdfa(&seed, b"INTEGRITY", &[], &[], 256);
+    let integrity: [u8; 32] = kdfa(&seed, b"INTEGRITY", &[], &[]);
     let key = hmac::Key::new(hmac::HMAC_SHA256, &integrity);
     let hmac = hmac::sign(&key, &[&encrypted[..], &ak_name].concat());
     Ok(Credential {
-        blob: [tpm2b(hmac.as_ref()), encrypted].concat(),
+        blob: [tpm2b(hmac.as_ref())?, encrypted].concat(),
         secret,
     })
 }
@@ -198,18 +196,19 @@ fn name(public: &[u8]) -> Result<Vec<u8>, CredentialError> {
     Ok([&ALG_SHA256.to_be_bytes()[..], &Sha256::digest(public)].concat())
 }
 
-fn tpm2b(bytes: &[u8]) -> Vec<u8> {
-    let len = u16::try_from(bytes.len()).expect("TPM2B contents fit a u16");
-    [&len.to_be_bytes()[..], bytes].concat()
+fn tpm2b(bytes: &[u8]) -> Result<Vec<u8>, CredentialError> {
+    let len =
+        u16::try_from(bytes.len()).map_err(|_| CredentialError::Crypto("a TPM2B over 64 KiB"))?;
+    Ok([&len.to_be_bytes()[..], bytes].concat())
 }
 
-/// KDFa with SHA-256 (TPM 2.0 Part 1, §11.4.10.2): HMAC in counter mode.
-fn kdfa(key: &[u8], label: &[u8], context_u: &[u8], context_v: &[u8], bits: u32) -> Vec<u8> {
+/// KDFa with SHA-256 (TPM 2.0 Part 1, §11.4.10.2): HMAC in counter mode, `N` bytes.
+fn kdfa<const N: usize>(key: &[u8], label: &[u8], context_u: &[u8], context_v: &[u8]) -> [u8; N] {
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
-    let bytes = (bits / 8) as usize;
-    let mut out = Vec::with_capacity(bytes + 32);
+    let bits = u32::try_from(N * 8).unwrap_or(u32::MAX);
+    let mut out = Vec::with_capacity(N + 32);
     let mut counter = 1_u32;
-    while out.len() < bytes {
+    while out.len() < N {
         let mut context = hmac::Context::with_key(&key);
         context.update(&counter.to_be_bytes());
         context.update(label);
@@ -220,8 +219,7 @@ fn kdfa(key: &[u8], label: &[u8], context_u: &[u8], context_v: &[u8], bits: u32)
         out.extend_from_slice(context.sign().as_ref());
         counter += 1;
     }
-    out.truncate(bytes);
-    out
+    std::array::from_fn(|i| out[i])
 }
 
 /// KDFe with SHA-256 for a 256-bit seed (TPM 2.0 Part 1, §11.4.10.3), `label` with its NUL.

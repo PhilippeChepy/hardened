@@ -54,9 +54,10 @@ impl Sealing for SealingService {
             })
             .await??;
         tracing::info!("sealed a secret to PCR 11");
-        Ok(Response::new(SealedSecret {
-            sealed: SealedObject::new(&sealed, &policy).encode(),
-        }))
+        let sealed = SealedObject::new(&sealed, &policy)
+            .encode()
+            .map_err(|error| Status::internal(format!("encoding the sealed secret: {error}")))?;
+        Ok(Response::new(SealedSecret { sealed }))
     }
 
     async fn unseal(&self, request: Request<SealedSecret>) -> Result<Response<Secret>, Status> {
@@ -115,7 +116,7 @@ mod tests {
             public: vec![2],
         };
         SealedSecret {
-            sealed: SealedObject::new(&sealed, &[0; 32]).encode(),
+            sealed: SealedObject::new(&sealed, &[0; 32]).encode().unwrap(),
         }
     }
 

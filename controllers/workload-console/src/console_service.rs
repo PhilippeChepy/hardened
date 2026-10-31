@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use controllers_helpers::InvalidMessage;
+use controllers_helpers::WorkloadName;
 use controllers_helpers::invalid_message;
 use controllers_helpers::invalid_message::FieldResult as _;
 use controllers_helpers::invalid_message::WithinResult as _;
@@ -15,7 +16,6 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 use tonic::Streaming;
-use workload_console::ContainerId;
 use workload_console::ExecProcess;
 use workload_console::console::ExecRequest;
 use workload_console::console::ExecResponse;
@@ -59,14 +59,14 @@ impl Console for ConsoleService {
                 "the first request must be the start",
             ));
         };
-        let (container, process) =
+        let (workload, process) =
             parse_start(start).map_err(|error| Status::invalid_argument(error.to_string()))?;
         let permit = self
             .sessions
             .clone()
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("too many processes running"))?;
-        let session = Session::start(&self.ctr, container, process)
+        let session = Session::start(&self.ctr, workload, process)
             .map_err(|error| Status::internal(format!("running ctr: {error}")))?;
         // A request other than an input ends the call.
         let inputs = requests.map_while(|request| match request {
@@ -84,11 +84,11 @@ impl Console for ConsoleService {
     }
 }
 
-fn parse_start(start: ExecStart) -> Result<(ContainerId, ExecProcess), InvalidMessage> {
-    let container = ContainerId::try_from(start.container).field("container")?;
+fn parse_start(start: ExecStart) -> Result<(WorkloadName, ExecProcess), InvalidMessage> {
+    let workload = WorkloadName::try_from(start.workload).field("workload")?;
     let process = invalid_message::required(start.process, "process")?;
     let process = ExecProcess::try_from(process).within("process")?;
-    Ok((container, process))
+    Ok((workload, process))
 }
 
 #[cfg(test)]
@@ -99,21 +99,21 @@ mod tests {
 
     #[test]
     fn parses_the_start() {
-        let start = |container: &str, command: &[&str]| ExecStart {
-            container: container.into(),
+        let start = |workload: &str, command: &[&str]| ExecStart {
+            workload: workload.into(),
             process: Some(console::Process {
                 command: command.iter().map(|&argument| argument.into()).collect(),
                 terminal: None,
             }),
         };
-        let (container, process) = parse_start(start("workload-web", &["sh"])).unwrap();
-        assert_eq!(container.as_str(), "workload-web");
+        let (workload, process) = parse_start(start("web", &["sh"])).unwrap();
+        assert_eq!(workload.container_id(), "workload-web");
         assert_eq!(process.command.first().as_str(), "sh");
         let field = |start: ExecStart| parse_start(start).unwrap_err().field().to_owned();
-        assert_eq!(field(start("-web", &["sh"])), "container");
+        assert_eq!(field(start("-web", &["sh"])), "workload");
         assert_eq!(field(start("web", &[])), "process.command");
         let no_process = ExecStart {
-            container: "web".into(),
+            workload: "web".into(),
             process: None,
         };
         assert_eq!(field(no_process), "process");

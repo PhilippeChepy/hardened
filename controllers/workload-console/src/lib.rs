@@ -2,7 +2,6 @@
 
 #![warn(missing_docs)]
 
-mod container_id;
 mod exec_process;
 mod socket;
 mod terminal_size;
@@ -13,7 +12,6 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/hardened.rs"));
 }
 
-pub use container_id::ContainerId;
 pub use exec_process::ExecProcess;
 pub use generated::hardened::console::v1 as console;
 pub use socket::SOCKET;

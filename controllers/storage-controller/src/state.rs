@@ -46,7 +46,7 @@ impl State {
 
     /// Writes the state at `path`, atomically: a restart finds this one or the previous one.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
-        let json = serde_json::to_vec(self).expect("the state serializes");
+        let json = serde_json::to_vec(self).context("encoding the state")?;
         let partial = path.with_extension("json.partial");
         fs::write(&partial, json)
             .and_then(|()| fs::rename(&partial, path))

@@ -2,6 +2,8 @@
 
 use controllers_helpers::Hostname;
 
+const HARDENED: Hostname = Hostname::from_static("hardened");
+
 /// Cleans up a hostname offered by a platform or DHCP server: first word, trailing dots
 /// stripped, lowercased; falls back to its first label when the whole name is invalid.
 #[must_use]
@@ -30,8 +32,8 @@ pub fn from_instance_id(instance_id: Option<&str>) -> Hostname {
     } else {
         format!("hardened-{short}")
     };
-    name.parse()
-        .expect("a prefix and at most 8 alphanumerics form a valid label")
+    // A prefix and at most 8 alphanumerics: always a valid label, `hardened` otherwise.
+    name.parse().unwrap_or(HARDENED)
 }
 
 /// The first label.

@@ -1,5 +1,11 @@
 //! Certificates for tests.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test support: a failure is the failing test's"
+)]
+
 /// A self-signed certificate and its key, PEM.
 #[must_use]
 pub fn certificate_and_key() -> (String, String) {

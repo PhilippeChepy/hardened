@@ -4,6 +4,7 @@ use crate::domain_name;
 use crate::validated_string;
 
 validated_string!(
+    const
     /// RFC 1123 hostname.
     Hostname,
     "hostname",

@@ -250,7 +250,7 @@ impl Token {
     /// The sealed key, if this token is one storage-controller wrote.
     fn sealed(&self) -> anyhow::Result<Vec<u8>> {
         ensure!(self.keyslots == [KEYSLOT], "keyslots {:?}", self.keyslots);
-        Ok(serde_json::to_vec(&self.sealed).expect("a JSON object serializes"))
+        serde_json::to_vec(&self.sealed).context("encoding the sealed key")
     }
 
     /// Our token among those of a LUKS2 header's JSON metadata.
@@ -318,7 +318,10 @@ fn run(program: &str, args: &[&str], input: &[u8]) -> anyhow::Result<(ExitStatus
         .stderr(Stdio::piped())
         .spawn()
         .with_context(context)?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("no pipe to the program's stdin")?;
     // Written from another thread while the output is read, so neither side blocks on a full
     // pipe. `input` may be the key: it is written from where it is, never copied.
     let (written, output) = thread::scope(|scope| {

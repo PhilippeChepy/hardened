@@ -32,7 +32,7 @@ impl DefinedWorkload {
     /// not define one (logged).
     #[must_use]
     fn from_service(service: &api::Service) -> Option<Self> {
-        let name = service_file::workload_name(&service.name)?;
+        let name = WorkloadName::from_service_name(&service.name)?;
         let definition = match toml::from_str::<Service>(&service.definition) {
             Ok(definition) => definition,
             Err(error) => {
@@ -86,12 +86,12 @@ mod tests {
     fn service(name: &str, layers: &[Layer]) -> api::Service {
         let name: WorkloadName = name.parse().unwrap();
         api::Service {
-            name: service_file::service_name(&name).to_string(),
+            name: name.service_name().to_string(),
             layers: layers
                 .iter()
                 .map(|layer| i32::from(api::Layer::from(*layer)))
                 .collect(),
-            definition: service_file::to_toml(&name, &workload()),
+            definition: service_file::to_toml(&name, &workload()).unwrap(),
             ..api::Service::default()
         }
     }

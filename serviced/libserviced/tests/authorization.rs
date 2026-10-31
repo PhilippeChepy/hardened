@@ -1,5 +1,10 @@
 //! Serving behind authorization, with a fake serviced identifying every process as one service.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "a test: a failure is the test's"
+)]
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 

@@ -119,10 +119,8 @@ where
 /// zeros (`15.0%` comes back as `15%`).
 impl From<Threshold> for kubelet::Threshold {
     fn from(threshold: Threshold) -> Self {
-        let value = match threshold.as_str().strip_suffix('%') {
-            Some(percent) => threshold::Threshold::Percent(
-                percent.parse().expect("a validated percentage is a number"),
-            ),
+        let value = match threshold.percent() {
+            Some(percent) => threshold::Threshold::Percent(percent),
             None => threshold::Threshold::Quantity(threshold.into()),
         };
         Self {

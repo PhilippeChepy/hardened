@@ -82,7 +82,7 @@ impl WorkloadsService {
     /// Fails unless the workload `name` runs.
     async fn require_running(&self, name: &WorkloadName) -> Result<(), Status> {
         let request = api::ServiceRef {
-            name: service_file::service_name(name).to_string(),
+            name: name.service_name().to_string(),
         };
         let service = match self.serviced.clone().get_service(request).await {
             Ok(response) => response.into_inner(),
@@ -145,8 +145,9 @@ impl Workloads for WorkloadsService {
         let configuration = self.configured().await?;
         refuse_user_data(&configuration, &name)?;
 
-        let service = service_file::service_name(&name);
-        let contents = service_file::to_toml(&name, &workload);
+        let service = name.service_name().clone();
+        let contents = service_file::to_toml(&name, &workload)
+            .map_err(|error| Status::internal(format!("workload {name}: {error}")))?;
         definition::write_service_file(&self.root, Layer::Persistent, &service, &contents)
             .map_err(controller::service_file_error)?;
         client::reload(&mut self.serviced.clone()).await?;
@@ -166,7 +167,7 @@ impl Workloads for WorkloadsService {
         // Held until serviced reloaded.
         let configuration = self.configured().await?;
         refuse_user_data(&configuration, &name)?;
-        let service = service_file::service_name(&name);
+        let service = name.service_name().clone();
         let removed = definition::remove_service_file(&self.root, Layer::Persistent, &service)
             .map_err(controller::service_file_error)?;
         if !removed {
@@ -180,7 +181,7 @@ impl Workloads for WorkloadsService {
     async fn restart(&self, request: Request<WorkloadRef>) -> Result<Response<()>, Status> {
         let name = parse_name(request.into_inner().name)?;
         let request = api::ServiceRef {
-            name: service_file::service_name(&name).to_string(),
+            name: name.service_name().to_string(),
         };
         match self.serviced.clone().restart(request).await {
             Ok(_) => Ok(Response::new(())),
@@ -198,7 +199,7 @@ impl Workloads for WorkloadsService {
         let WorkloadLogsRequest { name, follow, tail } = request.into_inner();
         let name = parse_name(name)?;
         let request = api::LogsRequest {
-            service: service_file::service_name(&name).to_string(),
+            service: name.service_name().to_string(),
             tail,
             follow,
         };
@@ -238,12 +239,12 @@ impl Workloads for WorkloadsService {
             .and_then(|process| ExecProcess::try_from(process).within("process"))
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
         self.require_running(&name).await?;
-        let container = service_file::container_id(&name);
+        let workload = name.to_string();
         tracing::info!(workload = %name, "running a process in the workload");
 
         let start = console::ExecRequest {
             request: Some(console::exec_request::Request::Start(console::ExecStart {
-                container: container.into(),
+                workload,
                 process: Some(process.into()),
             })),
         };
@@ -499,7 +500,7 @@ mod tests {
             let Some(Wire::Start(start)) = requests.message().await?.unwrap().request else {
                 panic!("the first request is the start");
             };
-            let started = format!("{} {:?}\n", start.container, start.process.unwrap().command);
+            let started = format!("{} {:?}\n", start.workload, start.process.unwrap().command);
             let (responses, stream) = mpsc::channel(4);
             tokio::spawn(async move {
                 let stdout = exec_response::Response::Stdout;
@@ -626,7 +627,7 @@ mod tests {
         assert_eq!(
             received,
             [
-                exec_response::Response::Stdout(b"workload-db [\"cat\"]\n".to_vec()),
+                exec_response::Response::Stdout(b"db [\"cat\"]\n".to_vec()),
                 exec_response::Response::Stdout(b"hello".to_vec()),
                 exec_response::Response::ExitCode(7),
             ]

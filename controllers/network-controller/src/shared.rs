@@ -7,6 +7,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
+use std::sync::PoisonError;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
@@ -47,10 +48,8 @@ impl Shared {
     }
 
     fn state_lock(&self) -> MutexGuard<'_, State> {
-        // Only a bug panics with the lock held: what it left is not to be trusted.
-        self.state
-            .lock()
-            .expect("a panic while updating the network state")
+        // Only a bug panics with the lock held; the state, whole values assigned, is kept.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Registers the interface `name` of `index` as one DHCP runs on.

@@ -29,6 +29,7 @@ use crate::rendered::Rendered;
 use crate::state::State;
 
 const KUBELET: &str = "kubelet";
+const KUBELET_SERVICE: ServiceName = ServiceName::from_static(KUBELET);
 
 /// Serves `KubeletController`.
 pub struct Controller {
@@ -83,7 +84,7 @@ impl Controller {
         let service = || ServiceRef {
             name: KUBELET.to_owned(),
         };
-        let name: ServiceName = KUBELET.parse().expect("a valid service name");
+        let name = KUBELET_SERVICE;
         let Some(kubelet) = &state.kubelet else {
             definition::remove_service_file(&self.root, Layer::Runtime, &name)
                 .map_err(|error| Status::internal(format!("disabling kubelet: {error}")))?;

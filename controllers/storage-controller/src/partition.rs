@@ -255,7 +255,7 @@ fn image_var_guid(root: Uuid) -> Uuid {
     use sha2::Digest as _;
 
     let digest = Sha256::digest(format!("hardened var partition {root}"));
-    uuid::Builder::from_random_bytes(digest[..16].try_into().expect("16 of 32 bytes")).into_uuid()
+    uuid::Builder::from_random_bytes(std::array::from_fn(|i| digest[i])).into_uuid()
 }
 
 /// Grows the filesystem mounted on `/var` to fill its partition, online. A no-op when it
@@ -304,8 +304,7 @@ struct Ext4Size {
 /// mounted filesystem: only a grown filesystem has more.
 #[must_use]
 fn ext4_size(superblock: &[u8; 1024]) -> Option<Ext4Size> {
-    let u32_at =
-        |at: usize| u32::from_le_bytes(superblock[at..at + 4].try_into().expect("4 bytes"));
+    let u32_at = |at: usize| u32::from_le_bytes(std::array::from_fn(|i| superblock[at + i]));
     // Offsets of `s_magic`, `s_log_block_size`, `s_feature_incompat` (`INCOMPAT_64BIT`),
     // `s_blocks_count_hi`.
     const MAGIC: usize = 0x38;

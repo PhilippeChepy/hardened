@@ -3,24 +3,60 @@
 use crate::validated_string;
 
 /// RFC 1123 domain name: dot-separated labels of 1-63 alphanumerics or '-', at most 253 chars.
-pub(crate) fn check_domain_name(name: &str) -> Result<(), &'static str> {
-    if name.is_empty() || name.len() > 253 {
+/// A `const fn`, for `from_static`.
+pub(crate) const fn check_domain_name(name: &str) -> Result<(), &'static str> {
+    if !matches!(name.len(), 1..=253) {
         return Err("must be 1 to 253 characters");
     }
-    let valid_label = |label: &str| {
-        (1..=63).contains(&label.len())
-            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-    };
-    if name.split('.').all(valid_label) {
-        Ok(())
-    } else {
-        Err("labels must be 1-63 alphanumerics or '-', not starting or ending with '-'")
+    let mut rest = name.as_bytes();
+    loop {
+        let (label, after) = first_label(rest);
+        if !valid_label(label) {
+            return Err(
+                "labels must be 1-63 alphanumerics or '-', not starting or ending with '-'",
+            );
+        }
+        match after {
+            Some(after) => rest = after,
+            None => return Ok(()),
+        }
     }
 }
 
+/// The label before the first dot of `name`, and what follows that dot, if any.
+const fn first_label(name: &[u8]) -> (&[u8], Option<&[u8]>) {
+    let mut i = 0;
+    while i < name.len() {
+        if name[i] == b'.' {
+            let (label, dot_and_rest) = name.split_at(i);
+            return (label, Some(dot_and_rest.split_at(1).1));
+        }
+        i += 1;
+    }
+    (name, None)
+}
+
+/// 1-63 alphanumerics or '-', not starting or ending with '-'.
+const fn valid_label(label: &[u8]) -> bool {
+    let (Some(&first), Some(&last)) = (label.first(), label.last()) else {
+        return false;
+    };
+    label.len() <= 63 && first != b'-' && last != b'-' && alphanumerics_or_hyphens(label)
+}
+
+const fn alphanumerics_or_hyphens(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        if !(bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-') {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 validated_string!(
+    const
     /// DNS search domain, with the hostname syntax (so it cannot inject into `resolv.conf`).
     DomainName,
     "domain name",

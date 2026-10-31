@@ -10,12 +10,13 @@
 use std::collections::BTreeMap;
 
 use controllers_helpers::WorkloadName;
+use libserviced::definition;
+use libserviced::definition::AbsolutePath;
 use libserviced::definition::Command;
 use libserviced::definition::Condition;
 use libserviced::definition::Restart;
 use libserviced::definition::Service;
 use libserviced::definition::ServiceName;
-use workload_console::ContainerId;
 use workload_controller::ImageWorkload;
 use workload_controller::Privileges;
 use workload_controller::RestartPolicy;
@@ -25,54 +26,39 @@ const NAMESPACE: &str = "system";
 /// Where machine-controller writes the registries' `hosts.toml` files (containerd's
 /// `config_path`): `ctr` reads them itself, containerd's configuration only applies to CRI.
 const HOSTS_DIR: &str = "/run/containerd/certs.d";
-const CTR: &str = "/usr/bin/ctr";
-/// Workload services are named `workload-<name>`.
-const PREFIX: &str = "workload-";
+const CTR: AbsolutePath = AbsolutePath::from_static("/usr/bin/ctr");
+const CONTAINERD: ServiceName = ServiceName::from_static("containerd");
 
-/// The name of the service running the workload `name`.
-#[must_use]
-pub fn service_name(name: &WorkloadName) -> ServiceName {
-    format!("{PREFIX}{name}")
-        .parse()
-        .expect("a workload name is a valid service name")
+/// Why a workload's service file cannot be written: what its parsing already excludes (a NUL
+/// byte in an argument, a mount source not absolute), or TOML failing to serialize it.
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceFileError {
+    /// serviced's definitions refused a value.
+    #[error(transparent)]
+    Definition(#[from] definition::Error),
+    /// The service did not serialize.
+    #[error("serializing the service: {0}")]
+    Toml(#[from] toml::ser::Error),
 }
 
-/// The container running the workload `name`, named as its service.
-#[must_use]
-pub fn container_id(name: &WorkloadName) -> ContainerId {
-    service_name(name)
-        .as_str()
-        .parse()
-        .expect("a workload's service name is a valid container ID")
-}
-
-/// The workload a service runs, by the service's name; `None` for other services.
-#[must_use]
-pub fn workload_name(service: &str) -> Option<WorkloadName> {
-    service.strip_prefix(PREFIX)?.parse().ok()
-}
-
-/// `program` with `args`, which come from a workload, checked when it was parsed.
-#[must_use]
-fn command(program: &str, args: impl IntoIterator<Item = impl Into<String>>) -> Command {
-    let program = program.parse().expect("the programs are absolute");
-    Command::new(program, args).expect("a workload's arguments have no NUL byte")
+/// `ctr` with `args`, which come from a workload, checked when it was parsed.
+fn ctr(args: impl IntoIterator<Item = impl Into<String>>) -> Result<Command, definition::Error> {
+    Command::new(CTR, args)
 }
 
 /// The service running `workload`.
-#[must_use]
-fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Service {
-    let id = service_name(name).to_string();
+fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Result<Service, ServiceFileError> {
+    let id = name.container_id().to_owned();
     let image = workload.image.as_str();
-    let ctr = |args: &[&str]| {
+    let namespaced = |args: &[&str]| {
         let args = ["--namespace", NAMESPACE].iter().chain(args);
-        command(CTR, args.copied()).ignore_failure()
+        ctr(args.copied()).map(Command::ignore_failure)
     };
     // What a run stopped abruptly (SIGKILL) left behind; `--rm` removes the rest. A container
     // record also survives a crash of the machine (tasks do not: their state is in /run).
-    let delete_container = ctr(&["containers", "delete", &id]);
+    let delete_container = namespaced(&["containers", "delete", &id])?;
     let cleanup = vec![
-        ctr(&["tasks", "delete", "--force", &id]),
+        namespaced(&["tasks", "delete", "--force", &id])?,
         delete_container.clone(),
     ];
     // Unpacked by ctr itself (`--local`), synced to disk: the transfer service's unpack does
@@ -123,16 +109,19 @@ fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Service {
     run.extend(workload.command.iter().cloned().map(String::from));
 
     let mut meta = toml::Table::new();
-    meta.insert(
-        "workload".into(),
-        toml::Value::try_from(workload).expect("a workload serializes"),
-    );
-    Service {
+    meta.insert("workload".into(), toml::Value::try_from(workload)?);
+    // Bind mount sources must exist.
+    let runtime_directories = workload
+        .mounts
+        .iter()
+        .map(|mount| mount.source.as_str().parse())
+        .collect::<Result<_, _>>()?;
+    Ok(Service {
         description: format!("workload {name}: {image}"),
         enabled: true,
         sockets: Vec::new(),
-        exec: command(CTR, run),
-        exec_pre: vec![delete_container, command(CTR, pull)],
+        exec: ctr(run)?,
+        exec_pre: vec![delete_container, ctr(pull)?],
         exec_post: cleanup,
         exec_stop: Vec::new(),
         restart: match workload.restart {
@@ -140,33 +129,25 @@ fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Service {
             RestartPolicy::OnFailure => Restart::OnFailure,
             RestartPolicy::Never => Restart::Never,
         },
-        requires: vec!["containerd".parse().expect("a valid service name")],
+        requires: vec![CONTAINERD],
         condition: Condition::default(),
         notify: false,
         env: BTreeMap::new(),
-        // Bind mount sources must exist.
-        runtime_directories: workload
-            .mounts
-            .iter()
-            .map(|mount| {
-                mount
-                    .source
-                    .as_str()
-                    .parse()
-                    .expect("a mount's source is absolute")
-            })
-            .collect(),
+        runtime_directories,
         console: workload.console,
         api: Vec::new(),
         sandbox: None,
         meta,
-    }
+    })
 }
 
 /// The service file running `workload`.
-#[must_use]
-pub fn to_toml(name: &WorkloadName, workload: &ImageWorkload) -> String {
-    toml::to_string(&to_service(name, workload)).expect("a service serializes")
+///
+/// # Errors
+///
+/// When its parsing let through what serviced refuses, or it does not serialize.
+pub fn to_toml(name: &WorkloadName, workload: &ImageWorkload) -> Result<String, ServiceFileError> {
+    Ok(toml::to_string(&to_service(name, workload)?)?)
 }
 
 /// The workload a service runs, from its `meta.workload`; `None` for other services.
@@ -207,18 +188,8 @@ console = true
     }
 
     #[test]
-    fn names() {
-        let name: WorkloadName = "web".parse().unwrap();
-        assert_eq!(service_name(&name).as_str(), "workload-web");
-        assert_eq!(workload_name("workload-web"), Some(name.clone()));
-        assert_eq!(workload_name("containerd"), None);
-        assert_eq!(workload_name("workload-"), None);
-        assert_eq!(container_id(&name).as_str(), "workload-web");
-    }
-
-    #[test]
     fn runs_the_workload_with_ctr() {
-        let service = to_service(&"web".parse().unwrap(), &workload());
+        let service = to_service(&"web".parse().unwrap(), &workload()).unwrap();
         assert_eq!(
             Vec::from(service.exec.clone()),
             [
@@ -279,7 +250,7 @@ console = true
 
     #[test]
     fn the_workload_round_trips_through_the_service_file() {
-        let text = to_toml(&"web".parse().unwrap(), &workload());
+        let text = to_toml(&"web".parse().unwrap(), &workload()).unwrap();
         let back: Service = toml::from_str(&text).unwrap();
         assert_eq!(to_workload(&back), Some(workload()));
         assert_eq!(

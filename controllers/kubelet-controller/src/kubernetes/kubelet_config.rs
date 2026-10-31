@@ -190,10 +190,12 @@ pub enum CloudProvider {
     External,
 }
 
-/// The cluster domain when `cluster-domain` is left out: `cluster.local`.
+/// The cluster domain when `cluster-domain` is left out.
+const CLUSTER_DOMAIN: DomainName = DomainName::from_static("cluster.local");
+
 #[must_use]
 pub(crate) fn default_cluster_domain() -> DomainName {
-    "cluster.local".parse().expect("a valid domain name")
+    CLUSTER_DOMAIN
 }
 
 #[cfg(test)]

@@ -91,9 +91,12 @@ impl SealedObject {
     }
 
     /// The bytes of `SealedSecret.sealed`.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("a struct of strings and numbers serializes")
+    ///
+    /// # Errors
+    ///
+    /// When JSON fails to serialize it.
+    pub fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
     }
 
     /// The sealed object and its policy, from what [`SealedObject::encode`] wrote. Fails on
@@ -130,7 +133,7 @@ mod tests {
 
     #[test]
     fn round_trips() {
-        let encoded = SealedObject::new(&sealed(), &POLICY).encode();
+        let encoded = SealedObject::new(&sealed(), &POLICY).encode().unwrap();
         assert_eq!(SealedObject::decode(&encoded).unwrap(), (sealed(), POLICY));
     }
 
@@ -145,7 +148,7 @@ mod tests {
 
     #[test]
     fn encodes_the_token_fields() {
-        let encoded = SealedObject::new(&sealed(), &POLICY).encode();
+        let encoded = SealedObject::new(&sealed(), &POLICY).encode().unwrap();
         let expected = concat!(
             r#"{"tpm2-blob":"AAMBAgMAAgQF","tpm2-pcrs":[11],"tpm2-pcr-bank":"sha256","#,
             r#""tpm2-primary-alg":"ecc","#,

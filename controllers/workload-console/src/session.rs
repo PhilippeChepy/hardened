@@ -10,6 +10,7 @@ use std::process::ExitStatus;
 use std::process::Stdio;
 use std::time::Duration;
 
+use controllers_helpers::WorkloadName;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt as _;
 use tokio::io::AsyncWriteExt as _;
@@ -22,7 +23,6 @@ use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt as _;
 use tonic::Status;
-use workload_console::ContainerId;
 use workload_console::ExecProcess;
 use workload_console::TerminalSize;
 use workload_console::console::ExecInput;
@@ -42,7 +42,7 @@ pub type Responses = mpsc::Sender<Result<ExecResponse, Status>>;
 /// A process running in a container, through its `ctr`.
 pub struct Session {
     ctr: PathBuf,
-    container: ContainerId,
+    workload: WorkloadName,
     exec_id: String,
     child: Child,
     io: Io,
@@ -64,8 +64,8 @@ enum Outcome {
 }
 
 impl Session {
-    /// Starts `process` in `container` with the program `ctr`. Within a tokio runtime.
-    pub fn start(ctr: &Path, container: ContainerId, process: ExecProcess) -> io::Result<Self> {
+    /// Starts `process` in the container of `workload` with the program `ctr`. Within a tokio runtime.
+    pub fn start(ctr: &Path, workload: WorkloadName, process: ExecProcess) -> io::Result<Self> {
         let exec_id = format!("console-{}", uuid::Uuid::new_v4().simple());
         let mut command = Command::new(ctr);
         command.args([
@@ -80,7 +80,7 @@ impl Session {
             command.arg("--tty");
         }
         command
-            .arg(container.as_str())
+            .arg(workload.container_id())
             .args(process.command.iter().map(|argument| argument.as_str()))
             .kill_on_drop(true);
         let pty = process.terminal.map(Pty::open).transpose()?;
@@ -115,16 +115,19 @@ impl Session {
         drop(command);
         let io = match pty {
             Some((pty, _slave)) => Io::Terminal(pty),
-            None => Io::Pipes {
-                stdin: child.stdin.take().expect("stdin is piped"),
-                stdout: child.stdout.take().expect("stdout is piped"),
-                stderr: child.stderr.take().expect("stderr is piped"),
-            },
+            None => {
+                let piped = |what| io::Error::other(format!("no pipe to ctr's {what}"));
+                Io::Pipes {
+                    stdin: child.stdin.take().ok_or_else(|| piped("stdin"))?,
+                    stdout: child.stdout.take().ok_or_else(|| piped("stdout"))?,
+                    stderr: child.stderr.take().ok_or_else(|| piped("stderr"))?,
+                }
+            }
         };
-        tracing::info!(%container, exec_id, "process started");
+        tracing::info!(%workload, exec_id, "process started");
         Ok(Self {
             ctr: ctr.to_owned(),
-            container,
+            workload,
             exec_id,
             child,
             io,
@@ -136,7 +139,7 @@ impl Session {
     pub async fn relay(self, inputs: impl Stream<Item = ExecInput> + Unpin, responses: Responses) {
         let Self {
             ctr,
-            container,
+            workload,
             exec_id,
             mut child,
             io,
@@ -167,18 +170,18 @@ impl Session {
         let response = match outcome {
             Outcome::Exited(Ok(status)) => {
                 let code = exit_code(status);
-                tracing::info!(%container, exec_id, code, "process exited");
+                tracing::info!(%workload, exec_id, code, "process exited");
                 Ok(ExecResponse {
                     response: Some(exec_response::Response::ExitCode(code)),
                 })
             }
             Outcome::Exited(Err(error)) => {
-                tracing::warn!(%container, exec_id, %error, "waiting for ctr failed");
+                tracing::warn!(%workload, exec_id, %error, "waiting for ctr failed");
                 Err(Status::internal(format!("waiting for ctr: {error}")))
             }
             Outcome::Ended(status) => {
-                tracing::info!(%container, exec_id, "call ended, killing the process");
-                kill(&ctr, &container, &exec_id, &mut child).await;
+                tracing::info!(%workload, exec_id, "call ended, killing the process");
+                kill(&ctr, &workload, &exec_id, &mut child).await;
                 match status {
                     Some(status) => Err(status),
                     None => return,
@@ -293,7 +296,7 @@ async fn pipe_inputs(
 }
 
 /// Kills the process, then `ctr` if it does not exit in time.
-async fn kill(ctr: &Path, container: &ContainerId, exec_id: &str, child: &mut Child) {
+async fn kill(ctr: &Path, workload: &WorkloadName, exec_id: &str, child: &mut Child) {
     let killed = Command::new(ctr)
         .args([
             "--namespace",
@@ -303,21 +306,21 @@ async fn kill(ctr: &Path, container: &ContainerId, exec_id: &str, child: &mut Ch
             "--signal",
             "SIGKILL",
         ])
-        .args(["--exec-id", exec_id, container.as_str()])
+        .args(["--exec-id", exec_id, workload.container_id()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .status()
         .await;
     match killed {
         Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!(%container, exec_id, %status, "ctr tasks kill failed"),
-        Err(error) => tracing::warn!(%container, exec_id, %error, "running ctr tasks kill failed"),
+        Ok(status) => tracing::warn!(%workload, exec_id, %status, "ctr tasks kill failed"),
+        Err(error) => tracing::warn!(%workload, exec_id, %error, "running ctr tasks kill failed"),
     }
     if tokio::time::timeout(KILL_TIMEOUT, child.wait())
         .await
         .is_err()
     {
-        tracing::warn!(%container, exec_id, "ctr did not exit, killing it");
+        tracing::warn!(%workload, exec_id, "ctr did not exit, killing it");
         let _ = child.start_kill();
     }
 }
@@ -390,7 +393,7 @@ exec "$@"
             })
             .unwrap();
             let ctr = self.dir.join("ctr");
-            let session = Session::start(&ctr, "workload-web".parse().unwrap(), process).unwrap();
+            let session = Session::start(&ctr, "web".parse().unwrap(), process).unwrap();
             let (inputs, received) = mpsc::channel(4);
             let (responses, sent) = mpsc::channel(4);
             let relay = tokio::spawn(session.relay(ReceiverStream::new(received), responses));

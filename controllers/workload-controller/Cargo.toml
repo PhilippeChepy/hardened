@@ -15,6 +15,7 @@ libserviced.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 toml.workspace = true
@@ -37,3 +38,6 @@ tonic-prost-build.workspace = true
 [lib]
 # Generated code: proto comments are not Rust doctests.
 doctest = false
+
+[lints]
+workspace = true

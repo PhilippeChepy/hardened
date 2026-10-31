@@ -307,7 +307,8 @@ impl DhcpOptions {
             }
             for chunk in value.chunks(MAX_VALUE_LEN) {
                 out.push(code);
-                out.push(u8::try_from(chunk.len()).expect("chunks are at most 255 bytes"));
+                // Chunks of at most 255 bytes: never saturates.
+                out.push(u8::try_from(chunk.len()).unwrap_or(u8::MAX));
                 out.extend_from_slice(chunk);
             }
         }

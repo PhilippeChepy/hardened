@@ -103,7 +103,8 @@ impl PcrSelection {
 
 /// Marshals a TPML_PCR_SELECTION.
 fn encode_selections(w: &mut Writer, selections: &[PcrSelection]) {
-    w.u32(u32::try_from(selections.len()).expect("too many PCR selections"));
+    // One selection per bank: never saturates.
+    w.u32(u32::try_from(selections.len()).unwrap_or(u32::MAX));
     for selection in selections {
         selection.encode(w);
     }

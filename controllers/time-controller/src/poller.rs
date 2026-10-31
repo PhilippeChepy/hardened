@@ -22,12 +22,15 @@ pub async fn poll(service: Arc<TimeService>) -> Infallible {
     let mut ready = None;
     let mut status_text = String::new();
     'configs: loop {
-        let config = configs
-            .wait_for(Option::is_some)
-            .await
-            .expect("the service keeps the sender")
-            .clone()
-            .expect("waited for a configuration");
+        let config = match configs.wait_for(Option::is_some).await {
+            Ok(config) => config.clone(),
+            Err(_) => None,
+        };
+        let Some(config) = config else {
+            // The service keeps the sender for as long as it runs: this does not happen.
+            tracing::error!("the configuration's sender is gone, polling stops");
+            return std::future::pending().await;
+        };
         tracing::info!(servers = ?config.servers, origin = ?config.origin, "polling");
         let ready = ready.get_or_insert_with(|| Ready::new(Instant::now() + READY_TIMEOUT));
         let mut client = Client::new(config.servers);
@@ -43,7 +46,10 @@ pub async fn poll(service: Arc<TimeService>) -> Infallible {
                 tokio::select! {
                     () = tokio::time::sleep_until(wake) => {}
                     changed = configs.changed() => {
-                        changed.expect("the service keeps the sender");
+                        if changed.is_err() {
+                            tracing::error!("the configuration's sender is gone, polling stops");
+                            return std::future::pending().await;
+                        }
                         continue 'configs;
                     }
                 }

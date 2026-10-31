@@ -47,7 +47,7 @@ fn sections(pe: &[u8]) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     };
     let u32_at = |at: usize| -> anyhow::Result<usize> {
         let bytes = pe.get(at..at + 4).context("truncated PE image")?;
-        Ok(u32::from_le_bytes(bytes.try_into().expect("4 bytes")) as usize)
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
     };
     let header = u32_at(0x3c)?;
     if pe.get(header..header + 4) != Some(b"PE\0\0") {

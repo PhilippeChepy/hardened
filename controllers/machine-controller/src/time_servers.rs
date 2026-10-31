@@ -1,5 +1,6 @@
 //! The servers time-controller synchronizes with.
 
+use controllers_helpers::Hostname;
 use controllers_helpers::NonEmpty;
 use machine_controller::NtpSettings;
 use time_controller::TimeConfig;
@@ -7,7 +8,7 @@ use time_controller::TimeOrigin;
 use time_controller::TimeServer;
 use tracing::warn;
 
-const DEFAULT_SERVER: &str = "pool.ntp.org";
+const DEFAULT_SERVER: Hostname = Hostname::from_static("pool.ntp.org");
 
 /// `settings.ntp.time-servers`, else the servers DHCP offered (option 42), else
 /// [`DEFAULT_SERVER`].
@@ -36,11 +37,7 @@ pub fn choose(settings: &NtpSettings, dhcp: &[String]) -> TimeConfig {
         };
     }
     TimeConfig {
-        servers: NonEmpty::new(
-            DEFAULT_SERVER
-                .parse()
-                .expect("the default server is a host name"),
-        ),
+        servers: NonEmpty::new(TimeServer::Host(DEFAULT_SERVER)),
         origin: TimeOrigin::Default,
     }
 }

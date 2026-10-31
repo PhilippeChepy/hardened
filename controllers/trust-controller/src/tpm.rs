@@ -346,8 +346,9 @@ impl Tpm {
         let size = commands::parse_nv_read_public(&response)?;
         let mut contents = Vec::with_capacity(size.into());
         while contents.len() < usize::from(size) {
-            let offset = u16::try_from(contents.len()).expect("below the index's u16 size");
-            let chunk = CHUNK.min(size - offset);
+            // Below the index's u16 size: never saturates.
+            let offset = u16::try_from(contents.len()).unwrap_or(u16::MAX);
+            let chunk = CHUNK.min(size.saturating_sub(offset));
             let response = self.execute(&commands::nv_read(index, chunk, offset))?;
             let read = commands::parse_nv_read(&response)?;
             if read.is_empty() {

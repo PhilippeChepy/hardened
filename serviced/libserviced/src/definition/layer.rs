@@ -38,7 +38,8 @@ impl Layer {
     /// The directory of its service files below `root`: `/` on the machine, another in tests.
     #[must_use]
     pub fn dir_in(self, root: &Path) -> PathBuf {
-        root.join(self.dir().strip_prefix("/").expect("an absolute directory"))
+        let dir = self.dir();
+        root.join(dir.strip_prefix("/").unwrap_or(dir))
     }
 }
 

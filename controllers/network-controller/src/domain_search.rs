@@ -74,7 +74,7 @@ pub fn encode(names: &[DomainName]) -> Vec<u8> {
     for name in names {
         for label in name.as_str().split('.') {
             // A domain name's labels are 1 to 63 bytes long.
-            value.push(u8::try_from(label.len()).expect("labels are at most 63 bytes"));
+            value.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
             value.extend_from_slice(label.as_bytes());
         }
         value.push(0);

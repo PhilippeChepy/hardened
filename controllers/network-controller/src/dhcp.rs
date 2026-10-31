@@ -459,8 +459,12 @@ pub fn random_u32() -> u32 {
     let mut buf = [0u8; 4];
     // GRND_INSECURE (Linux 5.6+) never blocks on an uninitialized pool, and requests of up to
     // 256 bytes are never short nor interrupted.
-    rustix::rand::getrandom(&mut buf, GetRandomFlags::INSECURE)
-        .expect("getrandom(GRND_INSECURE) does not fail");
+    // GRND_INSECURE does not fail; if it ever did, the clock's nanoseconds would do.
+    if rustix::rand::getrandom(&mut buf, GetRandomFlags::INSECURE).is_err() {
+        return std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+    }
     u32::from_ne_bytes(buf)
 }
 

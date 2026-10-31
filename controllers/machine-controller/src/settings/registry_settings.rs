@@ -89,10 +89,7 @@ impl Auth {
             Self::Basic { username, password } => {
                 base64_text::encode(format!("{}:{}", username.as_str(), password.expose()))
             }
-            // Encoded again: user-data's may hold whitespace.
-            Self::Encoded(auth) => base64_text::encode(
-                base64_text::decode(auth.expose().as_bytes()).expect("auth is checked base64"),
-            ),
+            Self::Encoded(auth) => auth.normalized().to_owned(),
             Self::IdentityToken(_) => return None,
         };
         Some(format!("Basic {encoded}"))
@@ -488,16 +485,26 @@ impl fmt::Debug for Secret {
     }
 }
 
-/// The base64 of `<username>:<password>`, a [`Secret`].
+/// The base64 of `<username>:<password>`, a [`Secret`], as user-data holds it and encoded again
+/// when parsed: user-data's may hold whitespace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct EncodedAuth(Secret);
+pub struct EncodedAuth {
+    text: Secret,
+    normalized: Secret,
+}
 
 impl EncodedAuth {
-    /// The base64 text, to write containerd's configuration. The only way to read it.
+    /// The base64 text, as user-data holds it.
     #[must_use]
     pub fn expose(&self) -> &str {
-        self.0.expose()
+        self.text.expose()
+    }
+
+    /// The base64 text without whitespace, for containerd's configuration.
+    #[must_use]
+    pub fn normalized(&self) -> &str {
+        self.normalized.expose()
     }
 }
 
@@ -505,22 +512,27 @@ impl TryFrom<String> for EncodedAuth {
     type Error = InvalidValue;
 
     fn try_from(text: String) -> Result<Self, Self::Error> {
-        let decoded =
-            base64_text::decode(text.as_bytes()).and_then(|bytes| String::from_utf8(bytes).ok());
-        if !decoded.is_some_and(|text| text.contains(':')) {
-            return Err(InvalidValue::new(
+        let invalid = || {
+            InvalidValue::new(
                 "registry auth",
                 PrivateKey::REDACTED,
                 "must be the base64 of <username>:<password>",
-            ));
-        }
-        Secret::try_from(text).map(Self)
+            )
+        };
+        let decoded = base64_text::decode(text.as_bytes())
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .filter(|decoded| decoded.contains(':'))
+            .ok_or_else(invalid)?;
+        Ok(Self {
+            normalized: Secret::try_from(base64_text::encode(decoded))?,
+            text: Secret::try_from(text)?,
+        })
     }
 }
 
 impl From<EncodedAuth> for String {
     fn from(auth: EncodedAuth) -> Self {
-        auth.0.into()
+        auth.text.into()
     }
 }
 

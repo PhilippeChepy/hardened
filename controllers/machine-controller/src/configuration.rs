@@ -14,6 +14,7 @@ use libserviced::api::serviced_client::ServicedClient;
 use libserviced::client;
 use libserviced::definition;
 use libserviced::definition::Layer;
+use libserviced::definition::ServiceName;
 use machine_apiproxy::ApiConfig;
 use machine_apiproxy::apiproxy;
 use machine_apiproxy::apiproxy::machine_api_proxy_client::MachineApiProxyClient;
@@ -36,6 +37,7 @@ use crate::time_servers;
 
 /// machine-apiproxy's service, which its image file leaves disabled.
 const API_PROXY_SERVICE: &str = "machine-apiproxy";
+const API_PROXY: ServiceName = ServiceName::from_static(API_PROXY_SERVICE);
 
 /// Configures the controllers for `settings`, on the machine named `hostname`, whose DHCP offered
 /// `dhcp_time_servers`.
@@ -122,7 +124,7 @@ pub async fn configure_api_proxy(
     controllers: &Controllers,
     config: &ApiConfig,
 ) -> anyhow::Result<()> {
-    let name = API_PROXY_SERVICE.parse().expect("a valid service name");
+    let name = API_PROXY;
     definition::write_service_file(&controllers.root, Layer::Runtime, &name, "enabled = true\n")
         .context("enabling machine-apiproxy")?;
     let mut serviced = ServicedClient::new(controllers.serviced.channel());

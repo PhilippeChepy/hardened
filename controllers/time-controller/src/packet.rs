@@ -85,7 +85,7 @@ impl Reply {
         }
         let leap = packet[0] >> 6;
         let stratum = packet[1];
-        let reference = packet[12..16].try_into().expect("4 bytes");
+        let reference: [u8; 4] = std::array::from_fn(|i| packet[12 + i]);
         if stratum == 0 {
             return Err(Rejected::Kiss(reference));
         }
@@ -94,11 +94,10 @@ impl Reply {
         }
         // NTP short format: 16.16 fixed-point seconds.
         let short = |at: usize| {
-            let value = u32::from_be_bytes(packet[at..at + 4].try_into().expect("4 bytes"));
+            let value = u32::from_be_bytes(std::array::from_fn(|i| packet[at + i]));
             Duration::from_nanos((u64::from(value) * 1_000_000_000) >> 16)
         };
-        let timestamp =
-            |at: usize| u64::from_be_bytes(packet[at..at + 8].try_into().expect("8 bytes"));
+        let timestamp = |at: usize| u64::from_be_bytes(std::array::from_fn(|i| packet[at + i]));
         let (receive, transmit) = (timestamp(32), timestamp(40));
         let reply = Self {
             stratum,

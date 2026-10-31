@@ -1,5 +1,6 @@
 //! A path that names the same file whatever the working directory.
 
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -13,13 +14,41 @@ use crate::definition::Error;
 /// service files it comes from.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct AbsolutePath(String);
+pub struct AbsolutePath(Cow<'static, str>);
 
 impl AbsolutePath {
+    /// Whether `path` is absolute and without NUL bytes.
+    #[must_use]
+    pub const fn is_valid(path: &str) -> bool {
+        let bytes = path.as_bytes();
+        if !matches!(bytes.first(), Some(b'/')) {
+            return false;
+        }
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == 0 {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /// The path `path`, for a `const` item: checked when compiling, an invalid path fails the
+    /// build (`const CTR: AbsolutePath = AbsolutePath::from_static("/usr/bin/ctr");`).
+    #[must_use]
+    pub const fn from_static(path: &'static str) -> Self {
+        assert!(
+            Self::is_valid(path),
+            "not an absolute path without NUL bytes"
+        );
+        Self(Cow::Borrowed(path))
+    }
+
     /// The path.
     #[must_use]
     pub fn as_path(&self) -> &Path {
-        Path::new(&self.0)
+        Path::new(self.0.as_ref())
     }
 
     /// The path, as text.
@@ -33,8 +62,8 @@ impl TryFrom<String> for AbsolutePath {
     type Error = Error;
 
     fn try_from(path: String) -> Result<Self, Error> {
-        if path.starts_with('/') && !path.contains('\0') {
-            Ok(Self(path))
+        if Self::is_valid(&path) {
+            Ok(Self(Cow::Owned(path)))
         } else {
             Err(not_absolute(Path::new(&path)))
         }
@@ -70,13 +99,13 @@ impl FromStr for AbsolutePath {
 
 impl From<AbsolutePath> for String {
     fn from(path: AbsolutePath) -> Self {
-        path.0
+        path.0.into_owned()
     }
 }
 
 impl From<AbsolutePath> for PathBuf {
     fn from(path: AbsolutePath) -> Self {
-        path.0.into()
+        path.0.into_owned().into()
     }
 }
 

@@ -1,5 +1,10 @@
 //! Forwarding serviced's API to a fake serviced, through a socket of its own.
 
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "a test: a failure is the test's"
+)]
 use std::path::Path;
 
 use controllers_helpers::Forwarder;

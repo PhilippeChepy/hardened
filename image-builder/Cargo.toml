@@ -51,7 +51,15 @@ gpt = "4.1.0"
 tempfile = "3.27.0"
 uuid = "1.29.0"
 
+[workspace.lints.clippy]
+# No panic on a failure in production code: tests may (clippy.toml).
+expect_used = "deny"
+unwrap_used = "deny"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+[lints]
+workspace = true

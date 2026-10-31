@@ -38,3 +38,5 @@ tonic-prost-build.workspace = true
 # Generated code: proto comments are not Rust doctests.
 doctest = false
 
+[lints]
+workspace = true

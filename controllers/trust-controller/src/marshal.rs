@@ -45,12 +45,13 @@ impl Writer {
         })
     }
 
-    /// Whatever `f` writes, behind a u16 size (a TPM2B of a structure).
+    /// Whatever `f` writes, behind a u16 size (a TPM2B of a structure). The structures this code
+    /// writes are far below 64 KiB; a larger one's size saturates, and the TPM refuses it.
     pub fn sized(&mut self, f: impl FnOnce(&mut Self)) -> &mut Self {
         let at = self.0.len();
         self.u16(0);
         f(self);
-        let len = u16::try_from(self.0.len() - at - 2).expect("TPM2B exceeds 64 KiB");
+        let len = u16::try_from(self.0.len() - at - 2).unwrap_or(u16::MAX);
         self.0[at..at + 2].copy_from_slice(&len.to_be_bytes());
         self
     }
@@ -120,8 +121,9 @@ pub fn command(
     bytes
 }
 
+/// A command's size: far below 4 GiB; a larger one saturates, and the TPM refuses it.
 fn len_u32(bytes: &[u8]) -> u32 {
-    u32::try_from(bytes.len()).expect("TPM command exceeds 4 GiB")
+    u32::try_from(bytes.len()).unwrap_or(u32::MAX)
 }
 
 /// The response code of a raw response, if it is long enough to carry one.

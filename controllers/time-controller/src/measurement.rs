@@ -35,8 +35,9 @@ impl From<&Measurement> for time::Correction {
 
         let corrected_at = prost_types::Timestamp {
             seconds: measurement.at_unix_ns.div_euclid(NANOS_PER_SECOND),
+            // Below 10^9: it fits in an i32, never saturates.
             nanos: i32::try_from(measurement.at_unix_ns.rem_euclid(NANOS_PER_SECOND))
-                .expect("a remainder of a division by 10^9 fits in an i32"),
+                .unwrap_or(i32::MAX),
         };
         Self {
             server: measurement.server.to_string(),

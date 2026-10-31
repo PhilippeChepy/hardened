@@ -259,8 +259,8 @@ fn kubeconfig(server: &str, user: Value) -> String {
 /// `value` as pretty JSON, ending with a newline.
 #[must_use]
 fn pretty(value: &Value) -> String {
-    let text = serde_json::to_string_pretty(value).expect("a JSON value always serializes");
-    format!("{text}\n")
+    // A `Value`'s alternate `Display` is its pretty JSON, which cannot fail.
+    format!("{value:#}\n")
 }
 
 #[cfg(test)]

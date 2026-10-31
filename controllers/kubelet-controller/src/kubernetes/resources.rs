@@ -66,12 +66,68 @@ fn check_quantity(text: &str) -> Result<(), &'static str> {
     }
 }
 
-validated_string!(
-    /// An eviction threshold: a quantity, or a percentage from 0 (included) to 100 (excluded).
-    Threshold,
-    "eviction threshold",
-    check_threshold
-);
+/// An eviction threshold: a quantity, or a percentage from 0 (included) to 100 (excluded), whose
+/// value it keeps from its parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Threshold {
+    text: String,
+    /// The percentage's bits (`f64::to_bits`), for a percentage.
+    percent: Option<u64>,
+}
+
+impl Threshold {
+    /// The threshold, as written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The percentage, for a percentage.
+    #[must_use]
+    pub fn percent(&self) -> Option<f64> {
+        self.percent.map(f64::from_bits)
+    }
+}
+
+impl TryFrom<String> for Threshold {
+    type Error = InvalidValue;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let invalid = |reason| InvalidValue::new("eviction threshold", &text, reason);
+        check_threshold(&text).map_err(invalid)?;
+        let percent = match text.strip_suffix('%') {
+            Some(percent) => Some(
+                percent
+                    .parse::<f64>()
+                    .map_err(|_| invalid("a percentage must be a number"))?
+                    .to_bits(),
+            ),
+            None => None,
+        };
+        Ok(Self { text, percent })
+    }
+}
+
+impl std::str::FromStr for Threshold {
+    type Err = InvalidValue;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::try_from(text.to_owned())
+    }
+}
+
+impl From<Threshold> for String {
+    fn from(threshold: Threshold) -> Self {
+        threshold.text
+    }
+}
+
+impl fmt::Display for Threshold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
 
 fn check_threshold(text: &str) -> Result<(), &'static str> {
     match text.strip_suffix('%') {

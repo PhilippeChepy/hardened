@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use controllers_helpers::WorkloadName;
 use libserviced::api::serviced_client::ServicedClient;
 use libserviced::client;
 use libserviced::definition;
@@ -80,12 +81,13 @@ impl Controller {
         let mut declared = BTreeSet::new();
         let mut enabled = BTreeSet::new();
         for (name, container) in configuration.workloads() {
-            let service = service_file::service_name(name);
+            let service = name.service_name().clone();
             declared.insert(service.to_string());
             if !container.enabled {
                 continue;
             }
-            let contents = service_file::to_toml(name, &container.workload);
+            let contents = service_file::to_toml(name, &container.workload)
+                .map_err(|error| Status::internal(format!("workload {name}: {error}")))?;
             definition::write_service_file(&self.root, Layer::Runtime, &service, &contents)
                 .map_err(service_file_error)?;
             tracing::info!(
@@ -103,10 +105,10 @@ impl Controller {
             .into_inner()
             .services;
         for service in services {
-            let Some(workload) = service_file::workload_name(&service.name) else {
+            let Some(workload) = WorkloadName::from_service_name(&service.name) else {
                 continue;
             };
-            let name = service_file::service_name(&workload);
+            let name = workload.service_name().clone();
             if defined_workload::has_layer(&service, Layer::Runtime)
                 && !enabled.contains(&service.name)
             {

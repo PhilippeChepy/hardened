@@ -14,7 +14,6 @@ use controllers_helpers::NonEmpty;
 use rustix::rand::GetRandomFlags;
 use time_controller::TimeServer;
 use tokio::net::UdpSocket;
-use tokio::task::JoinSet;
 
 use crate::clock;
 use crate::clock::Correction;
@@ -240,27 +239,14 @@ async fn resolve(server: &TimeServer, port: u16) -> io::Result<Vec<SocketAddr>> 
     }
 }
 
-/// Runs `futures` concurrently, as tasks, and returns their outputs in their order: the order
-/// of preference breaks ties.
+/// Runs `futures` concurrently, and returns their outputs in their order: the order of preference
+/// breaks ties.
 async fn join_ordered<F>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send,
 {
-    let mut tasks = JoinSet::new();
-    let mut outputs = Vec::new();
-    for (index, future) in futures.into_iter().enumerate() {
-        tasks.spawn(async move { (index, future.await) });
-        outputs.push(None);
-    }
-    while let Some(joined) = tasks.join_next().await {
-        let (index, output) = joined.expect("resolutions and queries do not panic");
-        outputs[index] = Some(output);
-    }
-    outputs
-        .into_iter()
-        .map(|output| output.expect("every task was joined"))
-        .collect()
+    futures_util::future::join_all(futures).await
 }
 
 /// Sends a request to `address` and waits for its reply, for [`TIMEOUT`].
