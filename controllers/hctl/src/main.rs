@@ -6,6 +6,7 @@ mod args;
 mod attest;
 mod cli;
 mod client;
+mod endorsement;
 mod exec;
 mod machine;
 mod pki;

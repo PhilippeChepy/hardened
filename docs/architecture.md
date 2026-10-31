@@ -389,19 +389,24 @@ check the exact OS image a machine booted:
   `build/out/<image>.pcrs.json` ([`pcr11.rs`](../image-builder/src/pcr11.rs): the UKI's
   sections, in systemd's order, without the boot phases systemd would add). It equals
   `systemd-measure calculate --phase=` on the UKI's sections.
-- **Verification:** `hctl attest verify --expected <image>.pcrs.json` requests a quote over a
-  random nonce, then checks it
-  ([`trust_controller::quote_verification`](../controllers/trust-controller/src/quote_verification.rs)):
-  - its ECDSA P-256 signature, by a restricted signing key bound to the TPM, which only signs
-    the TPM's own attestations;
-  - the signer's qualified name (a primary key of the endorsement hierarchy);
-  - the nonce;
-  - that the PCR values returned are those quoted.
-
-  It then compares them with the expected ones, and the attestation key with `--ak <fingerprint>`.
-- **The attestation key's origin is not proven:** the API serves no endorsement-key
-  certificate, nor credential activation. Pin the key's fingerprint, which stays the same
-  across reboots, when the machine is provisioned.
+- **Verification:** `hctl attest verify --expected <image>.pcrs.json` checks, away from the
+  machine (trust-controller's library, feature `verifier`, which the image's trust-controller
+  goes without):
+  - **The endorsement key (EK)**, RSA 2048 or ECC P-256 (the TCG's low-range templates, which
+    the TPM derives from its endorsement seed: the same at every boot): its certificate, read
+    from the TPM's NV index, must be issued by a certificate of `--ek-ca` (the TPM
+    manufacturer's, or the cloud's for a vTPM) and certify that key; or, for TPMs without one
+    (the test VM's swtpm), the key's fingerprint must be `--ek` (`hctl attest ek` prints it, to
+    pin at provisioning).
+  - **The attestation key is in the EK's TPM**, by credential activation
+    ([`credential`](../controllers/trust-controller/src/credential.rs)): hctl encrypts a random
+    secret to the EK, bound to the attestation key's name (TPM2_MakeCredential, done in
+    software), and only the TPM holding both keys returns it (TPM2_ActivateCredential).
+  - **A quote** over a random nonce, signed by that attestation key
+    ([`quote_verification`](../controllers/trust-controller/src/quote_verification.rs)): its
+    ECDSA P-256 signature by a restricted signing key, which only signs the TPM's own
+    attestations; the signer's qualified name; the nonce; the PCR values returned being those
+    quoted; then those values against the expected ones.
 
 ## Build system
 

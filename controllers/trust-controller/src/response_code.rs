@@ -27,6 +27,13 @@ impl ResponseCode {
         matches!(self.0, YIELDED | TESTING | RETRY)
     }
 
+    /// TPM_RC_HANDLE: the handle does not designate an existing object or index.
+    #[must_use]
+    pub fn is_handle(self) -> bool {
+        const HANDLE: u16 = RC_FMT1 | 0x00b;
+        self.format_one() == Some(HANDLE)
+    }
+
     /// The error of a format-one code from the TPM (`TPM_RC_POLICY_FAIL`...), without the
     /// handle, session or parameter it names.
     #[must_use]

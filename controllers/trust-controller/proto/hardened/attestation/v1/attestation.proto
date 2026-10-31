@@ -13,6 +13,19 @@ service Attestation {
   rpc EventLog(google.protobuf.Empty) returns (EventLogResponse);
   // TPM2_Quote over the selected PCRs, signed by trust-controller's attestation key.
   rpc Quote(QuoteRequest) returns (QuoteResponse);
+  // The TPM's endorsement key (EK), with its certificate if the TPM holds one, and the
+  // attestation key.
+  rpc EndorsementKey(EndorsementKeyRequest) returns (EndorsementKeyResponse);
+  // TPM2_ActivateCredential of a credential a verifier made for the attestation key and the EK:
+  // its secret comes back only from the TPM holding both.
+  rpc ActivateCredential(ActivateCredentialRequest) returns (ActivateCredentialResponse);
+}
+
+// The TCG EK Credential Profile's low-range templates.
+enum EndorsementKeyType {
+  ENDORSEMENT_KEY_TYPE_UNSPECIFIED = 0;  // defaults to RSA_2048
+  ENDORSEMENT_KEY_TYPE_RSA_2048 = 1;
+  ENDORSEMENT_KEY_TYPE_ECC_P256 = 2;
 }
 
 enum HashAlgorithm {
@@ -57,4 +70,29 @@ message QuoteResponse {
   // TPMT_PUBLIC of the attestation key, marshalled.
   bytes ak_public = 3;
   repeated PcrValue values = 4;
+}
+
+message EndorsementKeyRequest {
+  EndorsementKeyType type = 1;
+}
+
+message EndorsementKeyResponse {
+  // TPMT_PUBLIC of the EK, marshalled.
+  bytes ek_public = 1;
+  // The EK certificate of the TPM's NV index, DER; empty when the TPM holds none.
+  bytes certificate = 2;
+  // TPMT_PUBLIC of the attestation key, marshalled.
+  bytes ak_public = 3;
+}
+
+message ActivateCredentialRequest {
+  EndorsementKeyType type = 1;
+  // TPM2B_ID_OBJECT contents.
+  bytes credential_blob = 2;
+  // TPM2B_ENCRYPTED_SECRET contents.
+  bytes secret = 3;
+}
+
+message ActivateCredentialResponse {
+  bytes credential = 1;
 }

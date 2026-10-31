@@ -78,7 +78,8 @@ hctl workloads exec -it hello -- sh   # a shell in the container
 hctl workloads apply debug --image public.ecr.aws/docker/library/busybox:1.37 --privileged \
     --host-root /host -- sleep 3600     # the host's / at /host, read-only
 hctl attest quote --nonce $(openssl rand -hex 32)
-hctl attest verify --expected build/out/hardened-0.1.0-x86_64.pcrs.json   # booted this image?
+hctl attest ek                                  # the EK's fingerprint, to pin
+hctl attest verify --expected build/out/hardened-0.1.0-x86_64.pcrs.json --ek <fingerprint>
 hctl reboot                   # or shutdown: a clean stop, unlike Ctrl-A X
 ```
 

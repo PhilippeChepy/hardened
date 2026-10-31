@@ -72,6 +72,9 @@ pub enum Auth<'bytes> {
     /// One policy session, flushed once the command succeeds. Without PolicyAuthValue or
     /// PolicyPassword in its policy, it carries no HMAC.
     Policy { session: u32, nonce: &'bytes [u8] },
+    /// An empty password for the first handle, then a policy session for the second (as
+    /// [`Auth::Policy`]).
+    PasswordThenPolicy { session: u32, nonce: &'bytes [u8] },
 }
 
 /// Marshals a command: header, handle area, authorization area, then what `params` writes.
@@ -84,28 +87,31 @@ pub fn command(
 ) -> Vec<u8> {
     // TPMS_AUTH_COMMAND: sessionHandle, nonceCaller, sessionAttributes (continueSession clear),
     // hmac (the password for TPM_RS_PW, nothing for a policy session): both empty.
-    let session = match auth {
-        Auth::None => None,
-        Auth::EmptyPassword => Some((RS_PW, &[][..])),
-        Auth::Policy { session, nonce } => Some((session, nonce)),
+    let sessions: &[(u32, &[u8])] = match auth {
+        Auth::None => &[],
+        Auth::EmptyPassword => &[(RS_PW, &[])],
+        Auth::Policy { session, nonce } => &[(session, nonce)],
+        Auth::PasswordThenPolicy { session, nonce } => &[(RS_PW, &[]), (session, nonce)],
     };
     let mut w = Writer::default();
-    w.u16(if session.is_some() {
-        ST_SESSIONS
-    } else {
+    w.u16(if sessions.is_empty() {
         ST_NO_SESSIONS
+    } else {
+        ST_SESSIONS
     })
     .u32(0)
     .u32(code);
     for &handle in handles {
         w.u32(handle);
     }
-    if let Some((handle, nonce)) = session {
-        let mut session = Writer::default();
-        session.u32(handle).tpm2b(nonce).u8(0).tpm2b(&[]);
-        let session = session.into_bytes();
-        // authorizationSize, then the session.
-        w.u32(len_u32(&session)).bytes(&session);
+    if !sessions.is_empty() {
+        let mut area = Writer::default();
+        for &(handle, nonce) in sessions {
+            area.u32(handle).tpm2b(nonce).u8(0).tpm2b(&[]);
+        }
+        let area = area.into_bytes();
+        // authorizationSize, then the sessions.
+        w.u32(len_u32(&area)).bytes(&area);
     }
     params(&mut w);
     let mut bytes = w.into_bytes();

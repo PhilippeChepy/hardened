@@ -1,9 +1,13 @@
 //! trust-controller's APIs, on [`SOCKET`]: sealing secrets to the booted image
 //! (`hardened.trust.v1`), and the attestation evidence of the machine's API
-//! (`hardened.attestation.v1`); and [`quote_verification`], for its verifiers.
+//! (`hardened.attestation.v1`); and, for its verifiers (feature `verifier`), `quote_verification`
+//! and `credential`.
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "verifier")]
+pub mod credential;
+#[cfg(feature = "verifier")]
 pub mod quote_verification;
 mod socket;
 

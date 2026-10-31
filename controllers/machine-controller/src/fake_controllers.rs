@@ -366,6 +366,20 @@ impl Attestation for Fake {
     ) -> Result<Response<attestation::QuoteResponse>, Status> {
         Err(Status::unimplemented("fake"))
     }
+
+    async fn endorsement_key(
+        &self,
+        _: Request<attestation::EndorsementKeyRequest>,
+    ) -> Result<Response<attestation::EndorsementKeyResponse>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
+
+    async fn activate_credential(
+        &self,
+        _: Request<attestation::ActivateCredentialRequest>,
+    ) -> Result<Response<attestation::ActivateCredentialResponse>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
 }
 
 /// The one service the fake serviced has, ready, its last run killed by SIGKILL.

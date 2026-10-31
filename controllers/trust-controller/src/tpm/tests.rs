@@ -438,6 +438,7 @@ mod swtpm {
     use std::time::Instant;
 
     use super::*;
+    use crate::commands::EkType;
 
     /// Raw TPM commands over a stream (swtpm's data channel).
     struct Stream(TcpStream);
@@ -504,6 +505,48 @@ mod swtpm {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+    }
+
+    #[test]
+    #[ignore = "needs swtpm"]
+    #[cfg(feature = "verifier")]
+    fn credential_activation_proves_the_attestation_key() {
+        use trust_controller::credential;
+        use trust_controller::credential::EndorsementKey;
+
+        let swtpm = Swtpm::spawn();
+        let mut tpm = swtpm.connect();
+        for kind in [EkType::Rsa2048, EkType::EccP256] {
+            let endorsement = tpm.endorsement_key(kind).unwrap();
+            // swtpm without swtpm_setup holds no EK certificate.
+            assert_eq!(endorsement.certificate, None);
+            let ek = EndorsementKey::from_public(&endorsement.ek_public).unwrap();
+            let made = credential::make(&ek, &endorsement.ak_public, b"verifier secret").unwrap();
+            let activated = tpm
+                .activate_credential(kind, &made.blob, &made.secret)
+                .unwrap();
+            assert_eq!(activated.as_slice(), b"verifier secret", "{kind:?}");
+
+            let mut forged = made.blob.clone();
+            *forged.last_mut().unwrap() ^= 1;
+            let refused = tpm.activate_credential(kind, &forged, &made.secret);
+            assert!(matches!(refused, Err(TpmError::Response(_))), "{kind:?}");
+
+            // For another key: the TPM's integrity check binds the credential to the AK's name.
+            let mut other = endorsement.ak_public.clone();
+            *other.last_mut().unwrap() ^= 1;
+            let elsewhere = credential::make(&ek, &other, b"verifier secret").unwrap();
+            let refused = tpm.activate_credential(kind, &elsewhere.blob, &elsewhere.secret);
+            assert!(matches!(refused, Err(TpmError::Response(_))), "{kind:?}");
+        }
+        // The same EK at every boot: derived from the endorsement seed.
+        let first = tpm.endorsement_key(EkType::EccP256).unwrap().ek_public;
+        drop(tpm);
+        let mut tpm = swtpm.connect();
+        assert_eq!(
+            tpm.endorsement_key(EkType::EccP256).unwrap().ek_public,
+            first
+        );
     }
 
     /// TPM2_VerifySignature of `attest` with the loaded attestation key.

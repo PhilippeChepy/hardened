@@ -6,9 +6,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context as _, anyhow, bail};
+use anyhow::{Context as _, anyhow, bail, ensure};
 use clap::{Args, Subcommand, ValueEnum};
-use ring::digest;
 use ring::rand::{SecureRandom as _, SystemRandom};
 use serde::{Deserialize, Serialize};
 use tonic::transport::Channel;
@@ -18,6 +17,8 @@ use trust_controller::quote_verification;
 
 use crate::args::Nonce;
 use crate::client::CallExt;
+use crate::endorsement;
+use crate::endorsement::EkType;
 
 /// Event logs can exceed tonic's 4 MiB default.
 const MAX_MESSAGE_SIZE: usize = 64 << 20;
@@ -35,14 +36,37 @@ pub enum Command {
         #[command(flatten)]
         selection: Selection,
     },
-    /// Verifies the machine's PCRs with a fresh quote: its signature, nonce and PCR digest, then
-    /// the values against those expected, and the attestation key against a pinned one.
+    /// Shows the TPM's endorsement key (EK): its fingerprint, to pin with `verify --ek`, and
+    /// whether the TPM holds its certificate.
+    Ek {
+        #[arg(long, value_enum, default_value_t = EkType::Rsa)]
+        ek_type: EkType,
+        /// Writes the EK certificate (DER) to FILE.
+        #[arg(long, value_name = "FILE")]
+        certificate: Option<PathBuf>,
+    },
+    /// Verifies the machine: its endorsement key (certified or pinned), its attestation key (in
+    /// the same TPM, by credential activation), then a fresh quote of its PCRs (signature,
+    /// nonce, PCR digest) against the values expected.
     Verify {
         /// The expected PCR values, as the build writes them (`build/out/<image>.pcrs.json`).
         #[arg(long, value_name = "FILE")]
         expected: PathBuf,
-        /// The attestation key's fingerprint (SHA-256 of its TPMT_PUBLIC, hex) to require; the
-        /// first verification prints it.
+        #[arg(long, value_enum, default_value_t = EkType::Rsa)]
+        ek_type: EkType,
+        /// Certificates (PEM or DER) one of which must issue the TPM's EK certificate: the
+        /// TPM's manufacturer's, or the cloud's for a vTPM.
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "ek",
+            required_unless_present = "ek"
+        )]
+        ek_ca: Option<PathBuf>,
+        /// The EK's fingerprint (`hctl attest ek`), for TPMs without an EK certificate.
+        #[arg(long, value_name = "FINGERPRINT")]
+        ek: Option<String>,
+        /// The attestation key's fingerprint (SHA-256 of its TPMT_PUBLIC, hex) to require too.
         #[arg(long, value_name = "FINGERPRINT")]
         ak: Option<String>,
     },
@@ -163,7 +187,47 @@ pub async fn run(channel: Channel, command: Command) -> anyhow::Result<()> {
             serde_json::to_writer_pretty(&mut out, &quote)?;
             writeln!(out)?;
         }
-        Command::Verify { expected, ak } => {
+        Command::Ek {
+            ek_type,
+            certificate,
+        } => {
+            let endorsement = endorsement::fetch(&mut client, ek_type).await?;
+            writeln!(
+                out,
+                "fingerprint: {}",
+                endorsement::fingerprint(&endorsement.ek_public)
+            )?;
+            if endorsement.certificate.is_empty() {
+                writeln!(out, "certificate: none")?;
+            } else {
+                writeln!(out, "certificate: {} bytes", endorsement.certificate.len())?;
+                if let Some(path) = certificate {
+                    fs::write(&path, &endorsement.certificate)
+                        .with_context(|| path.display().to_string())?;
+                }
+            }
+        }
+        Command::Verify {
+            expected,
+            ek_type,
+            ek_ca,
+            ek,
+            ak,
+        } => {
+            let trust = match (&ek_ca, &ek) {
+                (Some(file), _) => endorsement::Trust::Ca(file),
+                (None, Some(pinned)) => endorsement::Trust::Pinned(pinned),
+                (None, None) => unreachable!("clap requires --ek-ca or --ek"),
+            };
+            let endorsement = endorsement::fetch(&mut client, ek_type).await?;
+            let (ek, trusted) = endorsement::trusted(&endorsement, &trust)?;
+            writeln!(out, "endorsement key: {trusted}")?;
+            endorsement::prove_attestation_key(&mut client, ek_type, &ek, &endorsement).await?;
+            writeln!(
+                out,
+                "attestation key: {} (in the EK's TPM: credential activated)",
+                endorsement::fingerprint(&endorsement.ak_public)
+            )?;
             let expected: Expected = serde_json::from_slice(
                 &fs::read(&expected).with_context(|| expected.display().to_string())?,
             )
@@ -183,6 +247,10 @@ pub async fn run(channel: Channel, command: Command) -> anyhow::Result<()> {
             };
             request.set_bank(bank.into());
             let quote = client.quote(request).await.into_result()?;
+            ensure!(
+                quote.ak_public == endorsement.ak_public,
+                "the quote is signed by another attestation key than the EK's TPM proved"
+            );
             let verified = quote_verification::verify(&quote, &nonce, bank.into())
                 .context("the quote is not valid")?;
             writeln!(out, "quote: valid (signature, fresh nonce, PCR digest)")?;
@@ -200,19 +268,12 @@ pub async fn run(channel: Channel, command: Command) -> anyhow::Result<()> {
                     mismatches += 1;
                 }
             }
-            let fingerprint = hex::encode(digest::digest(&digest::SHA256, &quote.ak_public));
-            match ak {
-                Some(pinned) if pinned.to_lowercase() == fingerprint => {
-                    writeln!(out, "attestation key: {fingerprint} (pinned)")?;
-                }
-                Some(pinned) => {
-                    writeln!(out, "attestation key: {fingerprint}, expected {pinned}")?;
-                    mismatches += 1;
-                }
-                None => writeln!(
-                    out,
-                    "attestation key: {fingerprint} (not pinned: pass --ak {fingerprint})"
-                )?,
+            let fingerprint = endorsement::fingerprint(&quote.ak_public);
+            if let Some(pinned) = ak
+                && pinned.to_lowercase() != fingerprint
+            {
+                writeln!(out, "attestation key: {fingerprint}, expected {pinned}")?;
+                mismatches += 1;
             }
             out.flush()?;
             if mismatches > 0 {

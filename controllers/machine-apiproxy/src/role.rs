@@ -61,6 +61,8 @@ impl Role {
             "/hardened.attestation.v1.Attestation/Pcrs",
             "/hardened.attestation.v1.Attestation/EventLog",
             "/hardened.attestation.v1.Attestation/Quote",
+            "/hardened.attestation.v1.Attestation/EndorsementKey",
+            "/hardened.attestation.v1.Attestation/ActivateCredential",
         ];
         if READ_ONLY.contains(&path) {
             Self::Reader
@@ -109,6 +111,7 @@ mod tests {
             "/hardened.attestation.v1.Attestation/Pcrs",
             "/hardened.attestation.v1.Attestation/EventLog",
             "/hardened.attestation.v1.Attestation/Quote",
+            "/hardened.attestation.v1.Attestation/ActivateCredential",
             "/hardened.workloads.v1.Workloads/Logs",
             "/hardened.services.v1.Services/Get",
         ] {

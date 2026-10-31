@@ -19,6 +19,10 @@ const CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
 const CC_START_AUTH_SESSION: u32 = 0x0000_0176;
 const CC_PCR_READ: u32 = 0x0000_017e;
 const CC_POLICY_PCR: u32 = 0x0000_017f;
+const CC_ACTIVATE_CREDENTIAL: u32 = 0x0000_0147;
+const CC_NV_READ: u32 = 0x0000_014e;
+const CC_POLICY_SECRET: u32 = 0x0000_0151;
+const CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 
 /// TPM_RH_OWNER: the owner (storage) hierarchy.
 pub const RH_OWNER: u32 = 0x4000_0001;
@@ -28,6 +32,7 @@ pub const RH_ENDORSEMENT: u32 = 0x4000_000b;
 
 /// TPM_ALG_ID of the hash algorithms.
 pub const ALG_SHA1: u16 = 0x0004;
+const ALG_RSA: u16 = 0x0001;
 pub const ALG_SHA256: u16 = 0x000b;
 pub const ALG_SHA384: u16 = 0x000c;
 const ALG_AES: u16 = 0x0006;
@@ -44,6 +49,7 @@ const FIXED_PARENT: u32 = 1 << 4;
 const SENSITIVE_DATA_ORIGIN: u32 = 1 << 5;
 const USER_WITH_AUTH: u32 = 1 << 6;
 const NO_DA: u32 = 1 << 10;
+const ADMIN_WITH_POLICY: u32 = 1 << 7;
 const RESTRICTED: u32 = 1 << 16;
 const DECRYPT: u32 = 1 << 17;
 const SIGN: u32 = 1 << 18;
@@ -159,6 +165,142 @@ pub fn ak_template() -> Vec<u8> {
         .tpm2b(&[])
         .tpm2b(&[]);
     w.into_bytes()
+}
+
+/// PolicySecret(TPM_RH_ENDORSEMENT): the authPolicy of the EK templates.
+const EK_POLICY: [u8; 32] = [
+    0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xb3, 0xf8, 0x1a, 0x90, 0xcc, 0x8d, 0x46, 0xa5, 0xd7, 0x24,
+    0xfd, 0x52, 0xd7, 0x6e, 0x06, 0x52, 0x0b, 0x64, 0xf2, 0xa1, 0xda, 0x1b, 0x33, 0x14, 0x69, 0xaa,
+];
+
+/// The endorsement keys of the TCG EK Credential Profile's low-range templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EkType {
+    /// RSA 2048 (template L-1), its certificate at NV index 0x01c00002.
+    Rsa2048,
+    /// ECC NIST P-256 (template L-2), its certificate at NV index 0x01c0000a.
+    EccP256,
+}
+
+impl EkType {
+    /// The NV index of the EK certificate of this type.
+    #[must_use]
+    pub fn certificate_index(self) -> u32 {
+        match self {
+            Self::Rsa2048 => 0x01c0_0002,
+            Self::EccP256 => 0x01c0_000a,
+        }
+    }
+
+    /// TPMT_PUBLIC of the EK: a restricted decryption key with AES-128-CFB, authorized by
+    /// PolicySecret(TPM_RH_ENDORSEMENT), the same on every TPM given its endorsement seed.
+    #[must_use]
+    pub fn template(self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u16(match self {
+            Self::Rsa2048 => ALG_RSA,
+            Self::EccP256 => ALG_ECC,
+        })
+        .u16(ALG_SHA256)
+        .u32(
+            FIXED_TPM
+                | FIXED_PARENT
+                | SENSITIVE_DATA_ORIGIN
+                | ADMIN_WITH_POLICY
+                | RESTRICTED
+                | DECRYPT,
+        )
+        .tpm2b(&EK_POLICY)
+        // symmetric (algorithm, keyBits, mode), scheme.
+        .u16(ALG_AES)
+        .u16(128)
+        .u16(ALG_CFB)
+        .u16(ALG_NULL);
+        match self {
+            // keyBits, exponent (the default), unique: a zeroed modulus.
+            Self::Rsa2048 => w.u16(2048).u32(0).tpm2b(&[0; 256]),
+            // curveID, kdf, unique: a zeroed point.
+            Self::EccP256 => w
+                .u16(ECC_NIST_P256)
+                .u16(ALG_NULL)
+                .tpm2b(&[0; 32])
+                .tpm2b(&[0; 32]),
+        };
+        w.into_bytes()
+    }
+}
+
+/// TPM2_NV_ReadPublic of `index`.
+#[must_use]
+pub fn nv_read_public(index: u32) -> Vec<u8> {
+    marshal::command(CC_NV_READ_PUBLIC, &[index], Auth::None, |_| {})
+}
+
+/// The size of the NV index TPM2_NV_ReadPublic described.
+pub fn parse_nv_read_public(response: &[u8]) -> Result<u16, TpmError> {
+    let mut params = marshal::response(response, 0)?.params;
+    let mut public = Reader::new(params.tpm2b()?);
+    // TPMS_NV_PUBLIC: nvIndex, nameAlg, attributes, authPolicy, dataSize.
+    public.take(4 + 2 + 4)?;
+    public.tpm2b()?;
+    public.u16()
+}
+
+/// TPM2_NV_Read of `size` bytes of `index` from `offset`, authorized by the index itself (with
+/// an empty password).
+#[must_use]
+pub fn nv_read(index: u32, size: u16, offset: u16) -> Vec<u8> {
+    marshal::command(CC_NV_READ, &[index, index], Auth::EmptyPassword, |w| {
+        w.u16(size).u16(offset);
+    })
+}
+
+/// The data TPM2_NV_Read read.
+pub fn parse_nv_read(response: &[u8]) -> Result<Vec<u8>, TpmError> {
+    let mut params = marshal::response(response, 0)?.params;
+    Ok(params.tpm2b()?.to_vec())
+}
+
+/// TPM2_PolicySecret of the endorsement hierarchy (its empty password), in the policy
+/// `session`: what the EK's policy requires.
+#[must_use]
+pub fn policy_secret_endorsement(session: u32) -> Vec<u8> {
+    marshal::command(
+        CC_POLICY_SECRET,
+        &[RH_ENDORSEMENT, session],
+        Auth::EmptyPassword,
+        |w| {
+            // nonceTPM, cpHashA, policyRef: empty; expiration: none.
+            w.tpm2b(&[]).tpm2b(&[]).tpm2b(&[]).u32(0);
+        },
+    )
+}
+
+/// TPM2_ActivateCredential of `blob` and `secret` for the attestation key `key` (its empty
+/// password) and the EK `ek`, authorized by the policy `session`.
+#[must_use]
+pub fn activate_credential(
+    key: u32,
+    ek: u32,
+    session: u32,
+    nonce: &[u8],
+    blob: &[u8],
+    secret: &[u8],
+) -> Vec<u8> {
+    marshal::command(
+        CC_ACTIVATE_CREDENTIAL,
+        &[key, ek],
+        Auth::PasswordThenPolicy { session, nonce },
+        |w| {
+            w.tpm2b(blob).tpm2b(secret);
+        },
+    )
+}
+
+/// The credential TPM2_ActivateCredential recovered.
+pub fn parse_activate_credential(response: &[u8]) -> Result<Vec<u8>, TpmError> {
+    let mut params = marshal::response(response, 0)?.params;
+    Ok(params.tpm2b()?.to_vec())
 }
 
 /// TPMT_PUBLIC of the storage key sealed objects are created under: the TCG's ECC P-256 storage

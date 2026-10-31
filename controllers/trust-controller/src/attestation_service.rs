@@ -5,6 +5,11 @@ use std::io;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use trust_controller::attestation::ActivateCredentialRequest;
+use trust_controller::attestation::ActivateCredentialResponse;
+use trust_controller::attestation::EndorsementKeyRequest;
+use trust_controller::attestation::EndorsementKeyResponse;
+use trust_controller::attestation::EndorsementKeyType;
 use trust_controller::attestation::EventLogResponse;
 use trust_controller::attestation::HashAlgorithm;
 use trust_controller::attestation::PcrValue;
@@ -15,9 +20,11 @@ use trust_controller::attestation::QuoteResponse;
 use trust_controller::attestation::attestation_server::Attestation;
 
 use crate::access;
+use crate::commands::EkType;
 use crate::hash_alg::HashAlg;
 use crate::shared_tpm::SharedTpm;
 use crate::tpm;
+use crate::tpm_error::TpmError;
 
 /// The TCG event log of the boot (firmware and systemd-stub measurements), exported by the
 /// kernel through securityfs, which a verifier replays against the quoted PCRs.
@@ -86,6 +93,60 @@ impl Attestation for AttestationService {
             ak_public: quote.ak_public,
             values: pcr_values(quote.pcrs),
         }))
+    }
+
+    async fn endorsement_key(
+        &self,
+        request: Request<EndorsementKeyRequest>,
+    ) -> Result<Response<EndorsementKeyResponse>, Status> {
+        access::require(&request, CALLER)?;
+        let kind = ek_type(request.into_inner().r#type)?;
+        let endorsement = self.tpm.run(move |tpm| tpm.endorsement_key(kind)).await??;
+        Ok(Response::new(EndorsementKeyResponse {
+            ek_public: endorsement.ek_public,
+            certificate: endorsement.certificate.unwrap_or_default(),
+            ak_public: endorsement.ak_public,
+        }))
+    }
+
+    async fn activate_credential(
+        &self,
+        request: Request<ActivateCredentialRequest>,
+    ) -> Result<Response<ActivateCredentialResponse>, Status> {
+        /// More than the largest credential (an RSA 2048 EK's) takes.
+        const MAX_LEN: usize = 512;
+        access::require(&request, CALLER)?;
+        let request = request.into_inner();
+        let kind = ek_type(request.r#type)?;
+        if request.credential_blob.len() > MAX_LEN || request.secret.len() > MAX_LEN {
+            return Err(Status::invalid_argument("credential too long"));
+        }
+        let (blob, secret) = (request.credential_blob, request.secret);
+        let activated = self
+            .tpm
+            .run(move |tpm| tpm.activate_credential(kind, &blob, &secret))
+            .await?;
+        match activated {
+            Ok(credential) => Ok(Response::new(ActivateCredentialResponse {
+                credential: credential.to_vec(),
+            })),
+            // The TPM's integrity check failed, or it could not decrypt the seed.
+            Err(TpmError::Response(rc)) => Err(Status::failed_precondition(format!(
+                "the credential is not for this TPM's keys ({rc})"
+            ))),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+/// The EK a request names; RSA 2048 when it names none.
+fn ek_type(kind: i32) -> Result<EkType, Status> {
+    match EndorsementKeyType::try_from(kind) {
+        Ok(EndorsementKeyType::Unspecified | EndorsementKeyType::Rsa2048) => Ok(EkType::Rsa2048),
+        Ok(EndorsementKeyType::EccP256) => Ok(EkType::EccP256),
+        Err(_) => Err(Status::invalid_argument(format!(
+            "unknown endorsement key type {kind}"
+        ))),
     }
 }
 

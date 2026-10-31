@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::commands;
+use crate::commands::EkType;
 use crate::commands::PcrSelection;
 use crate::commands::Primary;
 use crate::commands::SignedAttest;
@@ -49,6 +50,17 @@ pub struct Quote {
     /// The quoted PCR values, by ascending index: their SHA-256 over the concatenation is the
     /// quote's `pcrDigest`.
     pub pcrs: Vec<(u32, Vec<u8>)>,
+}
+
+/// The endorsement key's public area and certificate, and the attestation key's public area.
+#[derive(Debug)]
+pub struct Endorsement {
+    /// Marshalled TPMT_PUBLIC of the endorsement key.
+    pub ek_public: Vec<u8>,
+    /// The EK certificate of the TPM's NV index, DER, if it holds one.
+    pub certificate: Option<Vec<u8>>,
+    /// Marshalled TPMT_PUBLIC of the attestation key.
+    pub ak_public: Vec<u8>,
 }
 
 /// The attestation key, a transient object of this TPM session.
@@ -262,6 +274,88 @@ impl Tpm {
             self.flush(session);
         }
         unsealed
+    }
+
+    /// The endorsement key of `kind`, with its certificate if the TPM holds one, and the
+    /// attestation key: TPMT_PUBLIC, DER, TPMT_PUBLIC.
+    pub fn endorsement_key(&mut self, kind: EkType) -> Result<Endorsement, TpmError> {
+        let ek = self.endorsement_primary(kind)?;
+        self.flush(ek.handle);
+        let certificate = self.nv_contents(kind.certificate_index())?;
+        let ak_public = self.attestation_key()?.public.clone();
+        Ok(Endorsement {
+            ek_public: ek.public,
+            certificate,
+            ak_public,
+        })
+    }
+
+    /// Activates the credential `blob` and `secret` a verifier made for the attestation key and
+    /// the endorsement key of `kind`: its secret, which only this TPM can recover.
+    pub fn activate_credential(
+        &mut self,
+        kind: EkType,
+        blob: &[u8],
+        secret: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, TpmError> {
+        let ak = self.attestation_key()?.handle;
+        let ek = self.endorsement_primary(kind)?.handle;
+        let activated = self.activate_with(ak, ek, blob, secret);
+        self.flush(ek);
+        activated
+    }
+
+    fn activate_with(
+        &mut self,
+        ak: u32,
+        ek: u32,
+        blob: &[u8],
+        secret: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, TpmError> {
+        let response = self.execute(&commands::start_policy_session(&nonce()?))?;
+        let session = commands::parse_handle(&response)?;
+        let mut activate = || {
+            let policy = self.execute(&commands::policy_secret_endorsement(session))?;
+            marshal::response(&policy, 0)?;
+            let command = commands::activate_credential(ak, ek, session, &nonce()?, blob, secret);
+            let response = Zeroizing::new(self.execute(&command)?);
+            commands::parse_activate_credential(&response).map(Zeroizing::new)
+        };
+        let activated = activate();
+        // A successful ActivateCredential flushed the session (continueSession is clear).
+        if activated.is_err() {
+            self.flush(session);
+        }
+        activated
+    }
+
+    /// The endorsement key of `kind`, created from the endorsement seed: the same at every boot.
+    fn endorsement_primary(&mut self, kind: EkType) -> Result<Primary, TpmError> {
+        let command = commands::create_primary(commands::RH_ENDORSEMENT, &kind.template());
+        commands::parse_create_primary(&self.execute(&command)?)
+    }
+
+    /// The contents of the NV index `index`, if it exists.
+    fn nv_contents(&mut self, index: u32) -> Result<Option<Vec<u8>>, TpmError> {
+        /// Below every TPM's TPM_PT_NV_BUFFER_MAX.
+        const CHUNK: u16 = 512;
+        let response = self.execute(&commands::nv_read_public(index))?;
+        if marshal::response_code(&response).is_some_and(|rc| ResponseCode(rc).is_handle()) {
+            return Ok(None);
+        }
+        let size = commands::parse_nv_read_public(&response)?;
+        let mut contents = Vec::with_capacity(size.into());
+        while contents.len() < usize::from(size) {
+            let offset = u16::try_from(contents.len()).expect("below the index's u16 size");
+            let chunk = CHUNK.min(size - offset);
+            let response = self.execute(&commands::nv_read(index, chunk, offset))?;
+            let read = commands::parse_nv_read(&response)?;
+            if read.is_empty() {
+                return Err(TpmError::Malformed("NV index read short"));
+            }
+            contents.extend_from_slice(&read);
+        }
+        Ok(Some(contents))
     }
 
     /// The storage key: a primary key of the owner hierarchy, the same at every boot (derived from
