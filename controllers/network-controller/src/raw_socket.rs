@@ -237,11 +237,11 @@ fn parse_udp(packet: &[u8], port: u16) -> Option<Datagram<'_>> {
 fn checksum(chunks: &[&[u8]]) -> u16 {
     let mut sum: u32 = 0;
     for chunk in chunks {
-        let mut words = chunk.chunks_exact(2);
-        for word in &mut words {
-            sum += u32::from(u16::from_be_bytes([word[0], word[1]]));
+        let (words, remainder) = chunk.as_chunks::<2>();
+        for word in words {
+            sum += u32::from(u16::from_be_bytes(*word));
         }
-        if let [last] = words.remainder() {
+        if let [last] = remainder {
             sum += u32::from(*last) << 8;
         }
     }
