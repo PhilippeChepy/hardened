@@ -1,10 +1,14 @@
 //! `hardened.network.v1.NetworkController`: the DNS override, and what DHCP offered.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
 use network_controller::DnsSettings;
 use network_controller::network;
 use network_controller::network::network_controller_server::NetworkController;
+use tokio::sync::mpsc;
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -24,8 +28,13 @@ impl NetworkService {
     }
 }
 
+/// The states `WatchState` sends.
+type States = Pin<Box<dyn Stream<Item = Result<network::State, Status>> + Send>>;
+
 #[tonic::async_trait]
 impl NetworkController for NetworkService {
+    type WatchStateStream = States;
+
     async fn configure(
         &self,
         request: Request<network::Configuration>,
@@ -40,7 +49,29 @@ impl NetworkController for NetworkService {
     }
 
     async fn get_state(&self, _: Request<()>) -> Result<Response<network::State>, Status> {
-        Ok(Response::new(self.shared.snapshot()))
+        Ok(Response::new(self.shared.offered.borrow().clone()))
+    }
+
+    async fn watch_state(&self, _: Request<()>) -> Result<Response<States>, Status> {
+        let mut offered = self.shared.offered.subscribe();
+        let (sender, receiver) = mpsc::channel(1);
+        tokio::spawn(async move {
+            loop {
+                let state = offered.borrow_and_update().clone();
+                if sender.send(Ok(state)).await.is_err() {
+                    return;
+                }
+                tokio::select! {
+                    changed = offered.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                    () = sender.closed() => return,
+                }
+            }
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
 }
 
@@ -48,6 +79,8 @@ impl NetworkController for NetworkService {
 mod tests {
     use std::fs;
     use std::path::Path;
+
+    use tokio_stream::StreamExt as _;
 
     use super::*;
     use crate::persisted_state;
@@ -106,6 +139,28 @@ mod tests {
 
         configure(&service, &[], &[]).await.unwrap();
         assert_eq!(resolv_conf(dir.path()), leased, "back to DHCP");
+    }
+
+    #[tokio::test]
+    async fn watching_sends_the_state_then_its_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path());
+        let mut states = service
+            .watch_state(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        let next = async |states: &mut States| states.next().await.unwrap().unwrap();
+        assert_eq!(next(&mut states).await.ntp_servers, ["10.0.0.4"]);
+
+        let mut lease = lease(&[[10, 0, 0, 2]], Some("a.internal"), &[]);
+        lease.ntp_servers = vec![[10, 0, 0, 6].into()];
+        service.shared.bind(0, 2, "eth0", lease.clone());
+        assert_eq!(next(&mut states).await.ntp_servers, ["10.0.0.6"]);
+        // The same lease again is no change: what follows is the release.
+        service.shared.bind(0, 2, "eth0", lease);
+        service.shared.unbind(0);
+        assert_eq!(next(&mut states).await, network::State::default());
     }
 
     #[tokio::test]

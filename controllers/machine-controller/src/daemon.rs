@@ -1,5 +1,6 @@
 //! machine-controller's life: the setup and the controllers' configuration on its first start of
-//! the boot, its state reloaded on a restart, then the machine's API until it is stopped.
+//! the boot, its state reloaded on a restart, then the machine's API, following DHCP's time
+//! servers, until it is stopped.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use tracing::warn;
 
 use crate::configuration;
 use crate::controllers::Controllers;
+use crate::dhcp_watch;
 use crate::machine_api;
 use crate::setup;
 use crate::state;
@@ -80,6 +82,10 @@ pub async fn run() -> anyhow::Result<()> {
     }
     info!("serving the machine's API");
 
+    tokio::spawn(dhcp_watch::follow(
+        controllers.clone(),
+        state.settings.clone(),
+    ));
     if !state.api_proxy_configured {
         configure_api_proxy(&controllers, &mut state, path).await;
     }

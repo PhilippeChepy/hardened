@@ -72,7 +72,7 @@ into `/run/hardened`.
       ├─ network-controller     the DNS override
       ├─ storage-controller     /var: the state partition grown, unlocked with a key
       │                         trust-controller unseals (or formatted) when encrypted, mounted
-      ├─ time-controller        its source and NTP servers
+      ├─ time-controller        its source and NTP servers, again when DHCP offers others
       ├─ workload-controller    user-data's workloads
       ├─ kubelet-controller     kubelet's files, and kubelet enabled (Kubernetes targets)
       └─ machine-apiproxy       when user-data enables the API
@@ -350,8 +350,10 @@ synchronized, or 30 s after being configured without. Nothing waits for it.
 - **PTP:** every 16 s, `PTP_SYS_OFFSET` reads the PTP clock between readings of the system
   clock, ten times; the tightest reading gives the offset, its duration the error bound.
 - **Servers:** `settings.ntp.time-servers`, else those of DHCP (option 42, every interface's,
-  the primary's first), else `pool.ntp.org`; chosen once per boot, by machine-controller, which
-  configures time-controller with them. Until then, time-controller does not poll.
+  the primary's first), else `pool.ntp.org`; chosen by machine-controller, which configures
+  time-controller with them, then again whenever network-controller's `WatchState` stream shows
+  DHCP offering others that change the choice. Until the first configuration, time-controller
+  does not poll.
 - **Protocol:** SNTP (RFC 4330). Every poll interval (32 s to 2048 s, longer while the clock stays
   close), time-controller queries every address of every server and keeps the reply with the
   smallest synchronization distance; replies must echo the request's random cookie, and
@@ -598,8 +600,7 @@ one per line, rather than inline tables (but `{}`, a step without options).
 ## Known gaps / roadmap
 
 - **Time:** unauthenticated SNTP (no NTS): anyone on the path can shift the clock, unless the
-  KVM PTP clock is used. The servers are chosen at boot (a DHCP renewal changing option 42 is not
-  followed). Leap second announcements are ignored: the clock is stepped after one.
+  KVM PTP clock is used. Leap second announcements are ignored: the clock is stepped after one.
   The PTP clock is looked for at `/dev/ptp0` only.
 - **Registries:** kubelet's pulls get their credentials from the CRI plugin's `configs`,
   deprecated in containerd 2 and removed in 2.7, which will need a credential helper instead.

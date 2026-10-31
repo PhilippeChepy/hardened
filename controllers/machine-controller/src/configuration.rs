@@ -23,6 +23,7 @@ use network_controller::network;
 use network_controller::network::network_controller_client::NetworkControllerClient;
 use storage_controller::storage;
 use storage_controller::storage::storage_controller_client::StorageControllerClient;
+use time_controller::TimeConfig;
 use time_controller::time;
 use time_controller::time::time_controller_client::TimeControllerClient;
 use tonic::Response;
@@ -68,17 +69,11 @@ pub async fn configure(
         .context("configuring storage-controller")?;
     info!("storage-controller configured: /var is set up");
 
-    let time = time_servers::choose(settings, dhcp_time_servers);
-    info!(
-        source = ?time.source,
-        servers = ?time.servers,
-        origin = ?time.origin,
-        "time sources chosen"
-    );
-    let configured = TimeControllerClient::new(controllers.time.channel())
-        .configure(time::Configuration::from(time))
-        .await;
-    log_outcome(configured, "time-controller", "the clock may drift");
+    configure_time(
+        controllers,
+        time_servers::choose(settings, dhcp_time_servers),
+    )
+    .await;
 
     // Whether kubelet runs or not: workloads are in their own containerd namespace.
     let workloads = workload::Configuration::from(settings.hardened.containers.clone());
@@ -105,6 +100,22 @@ pub async fn configure(
         log_outcome(configured, "kubelet-controller", "kubelet does not run");
     }
     Ok(())
+}
+
+/// Configures time-controller with `time`; returns whether it was.
+pub async fn configure_time(controllers: &Controllers, time: TimeConfig) -> bool {
+    info!(
+        source = ?time.source,
+        servers = ?time.servers,
+        origin = ?time.origin,
+        "time sources chosen"
+    );
+    let configured = TimeControllerClient::new(controllers.time.channel())
+        .configure(time::Configuration::from(time))
+        .await;
+    let ok = configured.is_ok();
+    log_outcome(configured, "time-controller", "the clock may drift");
+    ok
 }
 
 /// Logs how configuring a controller the machine works without went, and the `consequence` of a

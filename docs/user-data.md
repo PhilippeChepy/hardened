@@ -81,7 +81,8 @@ time-servers = ["time.example.com", "192.0.2.123"]
 
 Without it, the servers come from DHCP (option 42), or else are `pool.ntp.org`, whose
 [terms](https://www.ntppool.org/en/vendors.html) ask vendors for their own zone: set your
-provider's or your own servers in production. See [Time](architecture.md#time).
+provider's or your own servers in production. DHCP's are followed: a renewal offering others
+reconfigures time-controller. See [Time](architecture.md#time).
 
 ## `settings.hardened.api`
 

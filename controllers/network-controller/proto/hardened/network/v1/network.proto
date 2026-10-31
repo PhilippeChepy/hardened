@@ -10,6 +10,8 @@ service NetworkController {
   // The resolver override of settings.dns.
   rpc Configure(Configuration) returns (google.protobuf.Empty);
   rpc GetState(google.protobuf.Empty) returns (State);
+  // The state, then the state again whenever it changes.
+  rpc WatchState(google.protobuf.Empty) returns (stream State);
 }
 
 // settings.dns: each list, when not empty, replaces what DHCP gives.

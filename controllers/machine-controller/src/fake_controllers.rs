@@ -31,7 +31,10 @@ use time_controller::time;
 use time_controller::time::time_controller_server::TimeController;
 use time_controller::time::time_controller_server::TimeControllerServer;
 use tokio::net::UnixListener;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::Request;
 use tonic::Response;
@@ -70,6 +73,8 @@ pub fn api_user_data() -> String {
 /// The fakes, and the [`Controllers`] calling them.
 pub struct FakeControllers {
     pub controllers: Arc<Controllers>,
+    /// What network-controller's fake says DHCP offered.
+    pub dhcp: Arc<watch::Sender<network::State>>,
     calls: Calls,
     dir: TempDir,
 }
@@ -80,11 +85,12 @@ impl FakeControllers {
         let dir = tempfile::tempdir().unwrap();
         let fakes = Self {
             controllers: Arc::new(Controllers::in_dir(dir.path())),
+            dhcp: Arc::new(watch::Sender::new(network::State::default())),
             calls: Calls::default(),
             dir,
         };
         fs::create_dir_all(Layer::Runtime.dir_in(fakes.dir.path())).unwrap();
-        let fake = Fake(fakes.calls.clone());
+        let fake = fakes.fake();
         let services = [
             (
                 "network-controller",
@@ -127,8 +133,15 @@ impl FakeControllers {
     pub fn start_trust(&self) {
         self.serve(
             "trust-controller",
-            Server::builder().add_service(AttestationServer::new(Fake(self.calls.clone()))),
+            Server::builder().add_service(AttestationServer::new(self.fake())),
         );
+    }
+
+    fn fake(&self) -> Fake {
+        Fake {
+            calls: self.calls.clone(),
+            dhcp: self.dhcp.clone(),
+        }
     }
 
     fn serve(&self, name: &str, router: Router) {
@@ -158,16 +171,21 @@ impl FakeControllers {
 
 /// Every fake, recording its calls.
 #[derive(Clone)]
-struct Fake(Calls);
+struct Fake {
+    calls: Calls,
+    dhcp: Arc<watch::Sender<network::State>>,
+}
 
 impl Fake {
     fn record(&self, call: String) {
-        self.0.lock().unwrap().push(call);
+        self.calls.lock().unwrap().push(call);
     }
 }
 
 #[tonic::async_trait]
 impl NetworkController for Fake {
+    type WatchStateStream = Answers<network::State>;
+
     async fn configure(
         &self,
         request: Request<network::Configuration>,
@@ -181,6 +199,23 @@ impl NetworkController for Fake {
 
     async fn get_state(&self, _: Request<()>) -> Result<Response<network::State>, Status> {
         Err(Status::unimplemented("fake"))
+    }
+
+    async fn watch_state(
+        &self,
+        _: Request<()>,
+    ) -> Result<Response<Answers<network::State>>, Status> {
+        let mut offered = self.dhcp.subscribe();
+        let (sender, receiver) = mpsc::channel(1);
+        tokio::spawn(async move {
+            loop {
+                let state = offered.borrow_and_update().clone();
+                if sender.send(Ok(state)).await.is_err() || offered.changed().await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
 }
 

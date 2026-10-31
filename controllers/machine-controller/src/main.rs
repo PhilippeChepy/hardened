@@ -10,6 +10,7 @@ mod configuration;
 mod containerd;
 mod controllers;
 mod daemon;
+mod dhcp_watch;
 #[cfg(test)]
 mod fake_controllers;
 mod hostnames;
