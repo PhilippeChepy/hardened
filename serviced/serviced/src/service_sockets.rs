@@ -182,8 +182,8 @@ path = "{root}/new/deeper/admin.sock"
     fn sockets_go_in_the_runtime_directory() {
         let me = rustix::process::getuid().as_raw();
         if rustix::process::getgid().as_raw() != me {
-            // The directory gets the sandbox user as its uid and gid, which needs both to be the
-            // test user's, or root.
+            // A directory made gets the sandbox user as its uid and gid, which needs both to be
+            // the test user's, or root.
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -191,10 +191,13 @@ path = "{root}/new/deeper/admin.sock"
         let definition = service(&format!(
             r#"
 exec = ["/usr/bin/x"]
-runtime-directories = ["{root}/own"]
+runtime-directories = ["{root}/new", "{root}/kept"]
 [[sockets]]
 name = "api"
-path = "{root}/own/api.sock"
+path = "{root}/new/api.sock"
+[[sockets]]
+name = "admin"
+path = "{root}/kept/admin.sock"
 [sandbox]
 user = {me}
 limits.memory-mib = 1
@@ -202,14 +205,18 @@ limits.tasks = 1
 limits.cpu-millicores = 1
 "#
         ));
-        let own = dir.path().join("own");
-        std::fs::create_dir(&own).unwrap();
-        std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let kept = dir.path().join("kept");
+        std::fs::create_dir(&kept).unwrap();
+        std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o700)).unwrap();
         let _sockets = ServiceSockets::bind(&definition).unwrap();
-        let metadata = std::fs::metadata(&own).unwrap();
-        assert_eq!(metadata.mode() & 0o7777, 0o755, "made as its run will");
-        assert_eq!(metadata.uid(), me);
-        assert!(own.join("api.sock").exists());
+
+        let new = std::fs::metadata(dir.path().join("new")).unwrap();
+        assert_eq!(new.mode() & 0o7777, 0o755, "made as its run will");
+        assert_eq!(new.uid(), me);
+        let kept_mode = std::fs::metadata(&kept).unwrap().mode() & 0o7777;
+        assert_eq!(kept_mode, 0o700, "an existing directory is left as it is");
+        assert!(dir.path().join("new/api.sock").exists());
+        assert!(kept.join("admin.sock").exists());
     }
 
     #[test]
