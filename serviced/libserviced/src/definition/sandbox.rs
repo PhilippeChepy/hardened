@@ -26,6 +26,9 @@ pub struct Sandbox {
     /// The socket families `socket` may create.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub socket_families: Vec<SocketFamily>,
+    /// The `ioctl` requests allowed on top of the few every program makes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ioctls: Vec<Ioctl>,
     /// The resources of its cgroup.
     pub limits: Limits,
 }
@@ -110,6 +113,25 @@ impl SocketFamily {
             Self::Inet6 => 10,
             Self::Netlink => 16,
             Self::Packet => 17,
+        }
+    }
+}
+
+/// An `ioctl` request a sandbox may make, named as in Linux's headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(missing_docs, reason = "self-explanatory variants")]
+pub enum Ioctl {
+    PtpSysOffset,
+}
+
+impl Ioctl {
+    /// The request's number on x86-64 (`PTP_SYS_OFFSET` is `_IOW('=', 5, struct
+    /// ptp_sys_offset)`).
+    #[must_use]
+    pub fn number(self) -> u64 {
+        match self {
+            Self::PtpSysOffset => 0x4340_3d05,
         }
     }
 }

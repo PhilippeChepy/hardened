@@ -111,7 +111,8 @@ service). With it ([`sandbox.rs`](../serviced/serviced/src/sandbox.rs), entered 
 - its `user`, only its `capabilities`, `no_new_privs`;
 - a seccomp allowlist: serviced's base set (memory, threads, files, polling, time), what its
   sockets need (below) and its `syscalls`. `clone` is limited to threads, `ioctl` and `prctl` to
-  the few uses programs have, `socket` to its `socket-families`; anything else kills the process;
+  the few uses programs have (plus its `ioctls`), `socket` to its `socket-families`; anything
+  else kills the process;
 - the cgroup `/sys/fs/cgroup/sandbox/<service>`, with its `limits`.
 
 | Key | Meaning |
@@ -119,6 +120,7 @@ service). With it ([`sandbox.rs`](../serviced/serviced/src/sandbox.rs), entered 
 | `user` | uid and gid, without supplementary groups. |
 | `capabilities` | Capability names without `CAP_`, kept through the `exec`; an unknown one is an error. |
 | `socket-families` | The families `socket` may create: `unix`, `inet`, `inet6`, `netlink`, `packet`. |
+| `ioctls` | `ioctl` requests allowed on top of the few every program makes, by name: `PTP_SYS_OFFSET`. |
 | `syscalls` | System calls allowed on top of serviced's base set, by x86-64 name (an unknown one is an error). A sandboxed program using another one is killed with SIGSYS. |
 | `limits.memory-mib` | `memory.max`, in MiB. |
 | `limits.tasks` | `pids.max`: processes and threads. |

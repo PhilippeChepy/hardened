@@ -233,6 +233,13 @@ impl Spec {
                 values: vec![SocketFamily::Unix.number()],
             });
         }
+        if !sandbox.ioctls.is_empty() {
+            syscalls.restricted.push(Restriction {
+                syscall: sys::IOCTL,
+                argument: 1,
+                values: sandbox.ioctls.iter().map(|ioctl| ioctl.number()).collect(),
+            });
+        }
 
         Ok(Self {
             name: name.to_string(),
@@ -689,18 +696,17 @@ fn seccomp_filters(extra: &Syscalls) -> anyhow::Result<Vec<BpfProgram>> {
         })
         .chain(BASE_RESTRICTED.iter().copied());
     for (syscall, argument, values) in restricted {
-        let alternatives = values
-            .iter()
-            .map(|&value| {
-                let condition = condition(argument, SeccompCmpOp::Eq, value)?;
-                Ok(SeccompRule::new(vec![condition])?)
-            })
-            .collect::<anyhow::Result<_>>()?;
         // A service listing `ioctl` or `prctl` would lift their restriction.
         ensure!(
-            rules.insert(syscall, alternatives).is_none(),
+            !rules.get(&syscall).is_some_and(Vec::is_empty),
             "system call {syscall} is both allowed and restricted"
         );
+        // The service's `ioctls` add to the base set's.
+        let alternatives = rules.entry(syscall).or_default();
+        for &value in values {
+            let condition = condition(argument, SeccompCmpOp::Eq, value)?;
+            alternatives.push(SeccompRule::new(vec![condition])?);
+        }
     }
     rules.insert(
         sys::CLONE,
@@ -993,6 +999,28 @@ limits.cpu-millicores = 1
             restricted: vec![],
         };
         assert!(seccomp_filters(&allowed_and_restricted).is_err());
+    }
+
+    #[test]
+    fn ioctls_add_to_the_base_requests() {
+        let ptp = service(
+            r#"
+exec = ["/usr/bin/x"]
+[sandbox]
+user = 0
+ioctls = ["PTP_SYS_OFFSET"]
+limits.memory-mib = 32
+limits.tasks = 4
+limits.cpu-millicores = 100
+"#,
+        );
+        let spec = spec_of(&"x".parse().unwrap(), &ptp, &[]);
+        assert!(spec.syscalls.restricted.contains(&Restriction {
+            syscall: sys::IOCTL,
+            argument: 1,
+            values: vec![0x4340_3d05],
+        }));
+        assert_eq!(seccomp_filters(&spec.syscalls).unwrap().len(), 2);
     }
 
     #[test]

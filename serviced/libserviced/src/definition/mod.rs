@@ -22,7 +22,7 @@ pub use command::Command;
 pub use error::Error;
 pub use layer::{Layer, Loaded, load, merge_service, read_service_file, service_file};
 pub use paths::{LogDir, RUN_LOG_DIR, RUNTIME_DIR, VAR_LOG_DIR, log_path};
-pub use sandbox::{Bind, Binds, Limits, Sandbox, SocketFamily};
+pub use sandbox::{Bind, Binds, Ioctl, Limits, Sandbox, SocketFamily};
 pub use service::{Access, Condition, Restart, Service, Socket};
 pub use service_name::ServiceName;
 pub use socket_name::SocketName;
