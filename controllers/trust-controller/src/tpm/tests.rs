@@ -432,7 +432,7 @@ fn a_failed_unseal_flushes_its_session() {
 /// End-to-end against `swtpm` (from `$SWTPM` or `PATH`), e.g. in `controllers/`:
 /// `nix shell nixpkgs#swtpm -c cargo test -p trust-controller swtpm -- --ignored`.
 mod swtpm {
-    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::os::unix::net::UnixStream;
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::Instant;
@@ -441,7 +441,7 @@ mod swtpm {
     use crate::commands::EkType;
 
     /// Raw TPM commands over a stream (swtpm's data channel).
-    struct Stream(TcpStream);
+    struct Stream(UnixStream);
 
     impl Transport for Stream {
         fn transact(&mut self, command: &[u8]) -> io::Result<Vec<u8>> {
@@ -457,41 +457,35 @@ mod swtpm {
         }
     }
 
+    /// An swtpm of its own: its sockets in its state directory, so that tests running at once
+    /// cannot reach each other's, as with TCP ports picked free then released.
     struct Swtpm {
         child: Child,
-        port: u16,
-        _state: tempfile::TempDir,
+        state: tempfile::TempDir,
     }
 
     impl Swtpm {
         fn spawn() -> Self {
             let state = tempfile::tempdir().unwrap();
-            let [port, ctrl] = [(); 2].map(|()| {
-                let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-                listener.local_addr().unwrap().port()
-            });
+            let dir = state.path().display();
             let child = Command::new(std::env::var_os("SWTPM").unwrap_or("swtpm".into()))
                 .args(["socket", "--tpm2", "--flags", "not-need-init,startup-clear"])
                 .arg("--tpmstate")
-                .arg(format!("dir={}", state.path().display()))
+                .arg(format!("dir={dir}"))
                 .arg("--server")
-                .arg(format!("type=tcp,port={port},bindaddr=127.0.0.1"))
+                .arg(format!("type=unixio,path={dir}/server.sock"))
                 .arg("--ctrl")
-                .arg(format!("type=tcp,port={ctrl},bindaddr=127.0.0.1"))
+                .arg(format!("type=unixio,path={dir}/ctrl.sock"))
                 .stdin(Stdio::null())
                 .spawn()
                 .expect("spawning swtpm");
-            Self {
-                child,
-                port,
-                _state: state,
-            }
+            Self { child, state }
         }
 
         fn connect(&self) -> Tpm {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
-                match TcpStream::connect((Ipv4Addr::LOCALHOST, self.port)) {
+                match UnixStream::connect(self.state.path().join("server.sock")) {
                     Ok(stream) => return Tpm::with_transport(Stream(stream)),
                     Err(e) if Instant::now() > deadline => panic!("connecting to swtpm: {e}"),
                     Err(_) => thread::sleep(Duration::from_millis(50)),
