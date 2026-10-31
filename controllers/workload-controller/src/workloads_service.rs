@@ -238,7 +238,7 @@ impl Workloads for WorkloadsService {
             .and_then(|process| ExecProcess::try_from(process).within("process"))
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
         self.require_running(&name).await?;
-        let container = service_file::container_id(&name).ok_or_else(|| not_found(&name))?;
+        let container = service_file::container_id(&name);
         tracing::info!(workload = %name, "running a process in the workload");
 
         let start = console::ExecRequest {

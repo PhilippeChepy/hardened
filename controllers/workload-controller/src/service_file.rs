@@ -37,11 +37,13 @@ pub fn service_name(name: &WorkloadName) -> ServiceName {
         .expect("a workload name is a valid service name")
 }
 
-/// The container running the workload `name`, named as its service; `None` when containerd
-/// would refuse that name (`--`, or a trailing `-`).
+/// The container running the workload `name`, named as its service.
 #[must_use]
-pub fn container_id(name: &WorkloadName) -> Option<ContainerId> {
-    service_name(name).as_str().parse().ok()
+pub fn container_id(name: &WorkloadName) -> ContainerId {
+    service_name(name)
+        .as_str()
+        .parse()
+        .expect("a workload's service name is a valid container ID")
 }
 
 /// The workload a service runs, by the service's name; `None` for other services.
@@ -211,8 +213,7 @@ console = true
         assert_eq!(workload_name("workload-web"), Some(name.clone()));
         assert_eq!(workload_name("containerd"), None);
         assert_eq!(workload_name("workload-"), None);
-        assert_eq!(container_id(&name).unwrap().as_str(), "workload-web");
-        assert_eq!(container_id(&"a--b".parse().unwrap()), None);
+        assert_eq!(container_id(&name).as_str(), "workload-web");
     }
 
     #[test]

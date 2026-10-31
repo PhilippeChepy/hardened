@@ -268,7 +268,8 @@ How the node runs (kubelet's configuration, logs, shutdown) and pod networking a
 
 ## `settings.hardened.containers.<name>`
 
-`<name>`: 1 to 63 characters, lowercase letters, digits or `-`, not starting with `-`.
+`<name>`: 1 to 63 characters, lowercase letters and digits separated by single `-` (containerd
+refuses `a--b` or a trailing `-`).
 
 ```toml
 [settings.hardened.containers.web]
