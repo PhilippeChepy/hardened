@@ -58,8 +58,9 @@ into `/run/hardened`.
 4. **serviced** (PID 1) mounts `/proc` (`hidepid=invisible`), `/sys`, `/dev`, `/dev/pts`,
    `/dev/shm`, `/run`, `/tmp`, cgroup2, securityfs and bpffs, pins kernel files to the root
    filesystem (LoadPin: the first file the kernel loads is one of the verity root's), applies the
-   hardened sysctls, installs the SIGCHLD reaper and power handling (signals, the ACPI power
-   button) and serves [its API](#apis). It then creates the sockets of the
+   hardened sysctls (`/usr/lib/serviced/sysctls.conf`, which the image build checks too),
+   installs the SIGCHLD reaper and power handling (signals, the ACPI power button) and serves
+   [its API](#apis). It then creates the sockets of the
    [services](#services) and starts them, each once those it requires are ready, the
    socket-activated ones on their first connection:
 

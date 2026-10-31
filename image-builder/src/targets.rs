@@ -14,6 +14,8 @@
 //! components = ["base-files", "kernel", "runc", "serviced"]
 //! kernel-cmdline = ["lockdown=integrity"]
 //!
+//! kspp-sysctls = "/usr/lib/serviced/sysctls.conf"
+//!
 //! [kspp-exceptions]
 //! CONFIG_MODULES = "signed modules, loaded only from the verity root"
 //!
@@ -36,7 +38,8 @@
 //!
 //! `kspp-exceptions` are the recommendations of kernel-hardening-checker the image's kernel does
 //! not follow, by option name, each with its reason: any other recommendation failing on the
-//! kernel's configuration or command line fails the image ([`crate::kspp`]).
+//! kernel's configuration, command line or `kspp-sysctls` (a file of the image listing the
+//! sysctls it sets, `key = value`) fails the image ([`crate::kspp`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -66,6 +69,8 @@ pub struct Target {
     pub kernel_cmdline: Vec<String>,
     /// The KSPP recommendations its kernel does not follow, and why.
     pub kspp_exceptions: BTreeMap<String, String>,
+    /// The file of its image listing the sysctls it sets, for the KSPP check.
+    pub kspp_sysctls: Option<String>,
     /// The partitions of its image.
     pub partition: Partition,
     /// How it is exported, if it is.
@@ -155,6 +160,7 @@ struct File {
     kernel_cmdline: Vec<String>,
     #[serde(default)]
     kspp_exceptions: BTreeMap<String, String>,
+    kspp_sysctls: Option<String>,
     partition: Option<PartitionFile>,
     export: Option<ExportFile>,
 }
@@ -307,6 +313,16 @@ fn resolve(
         );
         kspp_exceptions.insert(option.clone(), reason.clone());
     }
+    if let Some(path) = &file.kspp_sysctls {
+        ensure!(
+            path.starts_with('/') && !path.split('/').any(|part| part == ".."),
+            "kspp-sysctls {path:?} is not an absolute path"
+        );
+    }
+    let kspp_sysctls = file
+        .kspp_sysctls
+        .clone()
+        .or(parent.and_then(|p| p.kspp_sysctls.clone()));
     let mib = |size: Option<u64>, what: &str| -> anyhow::Result<Option<u64>> {
         ensure!(size != Some(0), "partition.{what} is empty");
         Ok(size.map(|size| size * MIB))
@@ -335,8 +351,9 @@ fn resolve(
         export.is_some()
             || (kernel_cmdline.is_empty()
                 && kspp_exceptions.is_empty()
+                && kspp_sysctls.is_none()
                 && file.partition.is_none()),
-        "kernel-cmdline, kspp-exceptions and partition are for exported targets"
+        "kernel-cmdline, kspp-exceptions, kspp-sysctls and partition are for exported targets"
     );
     Ok(Target {
         id: id.clone(),
@@ -345,6 +362,7 @@ fn resolve(
         components,
         kernel_cmdline,
         kspp_exceptions,
+        kspp_sysctls,
         partition,
         export,
     })

@@ -1,13 +1,13 @@
 //! The kernel's hardening check, as Talos runs it on its kernels: kernel-hardening-checker
-//! (`image-tools`) checks the kernel's configuration and the image's command line against the
-//! KSPP's recommendations (and a few of its author's and other projects'). Every failing
+//! (`image-tools`) checks the kernel's configuration, the image's command line and the sysctls
+//! it sets against the KSPP's recommendations (and a few of its author's and other projects'). Every failing
 //! recommendation must be one of the target's `kspp-exceptions`, with its reason, and every
 //! exception must still fail: a stale one would hide the recommendation once it fails again.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, bail, ensure};
 use serde::Deserialize;
 
 use crate::podman::Image;
@@ -23,22 +23,35 @@ struct Check {
     check_result_bool: bool,
 }
 
-/// Checks the kernel configuration `config` and the command line `cmdline` (a file) with the
-/// checker of `assembly`, failing on what `exceptions` do not account for.
+/// Checks the kernel configuration `config`, the command line `cmdline` and the sysctls
+/// `sysctls` sets (files) with the checker of `assembly`, failing on what `exceptions` do not
+/// account for.
 pub fn check(
     assembly: &Image,
     config: &Path,
     cmdline: &Path,
+    sysctls: Option<&Path>,
     exceptions: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
-    let output = assembly
+    let mut container = assembly
         .container()
         .mount_ro(config, "/kspp/config")
-        .mount_ro(cmdline, "/kspp/cmdline")
-        .output(
-            "python3 -c 'import kernel_hardening_checker; kernel_hardening_checker.main()' \
-               -c /kspp/config -l /kspp/cmdline -m json",
-        )
+        .mount_ro(cmdline, "/kspp/cmdline");
+    let mut script =
+        "python3 -c 'import kernel_hardening_checker; kernel_hardening_checker.main()' \
+                      -c /kspp/config -l /kspp/cmdline -m json"
+            .to_owned();
+    if let Some(sysctls) = sysctls {
+        ensure!(
+            sysctls.is_file(),
+            "the image has no {} (kspp-sysctls)",
+            sysctls.display()
+        );
+        container = container.mount_ro(sysctls, "/kspp/sysctls");
+        script.push_str(" -s /kspp/sysctls");
+    }
+    let output = container
+        .output(&script)
         .context("running kernel-hardening-checker")?;
     let checks: Vec<Check> =
         serde_json::from_str(&output).context("parsing kernel-hardening-checker's report")?;

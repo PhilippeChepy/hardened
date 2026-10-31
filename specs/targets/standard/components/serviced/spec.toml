@@ -14,3 +14,7 @@ cargo-build.workspace = "serviced"
 cargo-build.binaries = [
     ["serviced", "/usr/bin/serviced"],
 ]
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/sysctls.conf"
+write.file = "sysctls.conf"

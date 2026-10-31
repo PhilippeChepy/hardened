@@ -163,6 +163,11 @@ pub fn build_image(
         &assembly,
         &crate::build::locate(&built, &kernel, &KERNEL_CONFIG)?,
         &dir.join("cmdline"),
+        target
+            .kspp_sysctls
+            .as_ref()
+            .map(|path| rootfs.join(path.trim_start_matches('/')))
+            .as_deref(),
         &target.kspp_exceptions,
     )?;
     // The UKI of the command line `cmdline<suffix>`, and the ESP `esp<suffix>.img` holding it.

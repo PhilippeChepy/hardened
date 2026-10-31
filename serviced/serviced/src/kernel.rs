@@ -8,46 +8,10 @@ use tracing::{info, warn};
 /// A regular file of the root filesystem, never a module.
 const PIN_FILE: &str = "/usr/lib/os-release";
 
-/// The hardened sysctls: key, value. KSPP's but `kernel.yama.ptrace_scope=3` (no debugger at
-/// all), `user.max_user_namespaces=0` (containers), `kernel.modules_disabled=1` (user-data's
-/// modules), `net.core.bpf_jit_harden=2` (BPF dataplanes) and `accept_ra=0` (SLAAC).
-const SYSCTLS: &[(&str, &str)] = &[
-    ("kernel.kptr_restrict", "2"),
-    ("kernel.dmesg_restrict", "1"),
-    ("kernel.perf_event_paranoid", "3"),
-    ("kernel.yama.ptrace_scope", "1"),
-    ("kernel.unprivileged_bpf_disabled", "1"),
-    ("kernel.panic", "10"),
-    ("kernel.panic_on_oops", "1"),
-    ("kernel.oops_limit", "100"),
-    ("kernel.warn_limit", "100"),
-    ("kernel.randomize_va_space", "2"),
-    ("vm.mmap_min_addr", "65536"),
-    ("dev.tty.ldisc_autoload", "0"),
-    ("dev.tty.legacy_tiocsti", "0"),
-    ("fs.protected_hardlinks", "1"),
-    ("fs.protected_symlinks", "1"),
-    ("fs.protected_fifos", "2"),
-    ("fs.protected_regular", "2"),
-    ("fs.suid_dumpable", "0"),
-    ("fs.inotify.max_user_instances", "8192"),
-    ("fs.inotify.max_user_watches", "524288"),
-    ("net.ipv4.tcp_syncookies", "1"),
-    ("net.ipv4.conf.all.rp_filter", "1"),
-    ("net.ipv4.conf.default.rp_filter", "1"),
-    ("net.ipv4.conf.all.accept_redirects", "0"),
-    ("net.ipv4.conf.default.accept_redirects", "0"),
-    ("net.ipv4.conf.all.send_redirects", "0"),
-    ("net.ipv4.conf.all.accept_source_route", "0"),
-    ("net.ipv4.conf.default.accept_source_route", "0"),
-    ("net.ipv4.conf.default.send_redirects", "0"),
-    ("net.ipv4.icmp_echo_ignore_broadcasts", "1"),
-    ("net.ipv4.icmp_ignore_bogus_error_responses", "1"),
-    ("net.ipv6.conf.all.accept_source_route", "0"),
-    ("net.ipv6.conf.default.accept_source_route", "0"),
-    ("net.ipv6.conf.all.accept_redirects", "0"),
-    ("net.ipv6.conf.default.accept_redirects", "0"),
-];
+/// The hardened sysctls, `key = value` per line, which its recipe ships (and the image build
+/// checks against the KSPP's recommendations). Those it leaves out, and why, are the target's
+/// `kspp-exceptions`.
+const SYSCTLS: &str = "/usr/lib/serviced/sysctls.conf";
 
 /// Pins LoadPin to the root filesystem before anything else can load a kernel file: otherwise a
 /// privileged workload loading the first module from `/var` would pin that filesystem instead.
@@ -65,11 +29,74 @@ pub fn pin() {
     }
 }
 
-/// Sets the hardened sysctls; those the kernel lacks are warned about.
+/// Sets the hardened sysctls; those the kernel lacks, and invalid lines, are warned about.
 pub fn apply_sysctls() {
-    for (key, value) in SYSCTLS {
-        if let Err(e) = std::fs::write(format!("/proc/sys/{}", key.replace('.', "/")), value) {
-            warn!(key, value, "cannot set sysctl: {e}");
+    let text = match std::fs::read_to_string(SYSCTLS) {
+        Ok(text) => text,
+        Err(e) => {
+            warn!("cannot read {SYSCTLS}: {e}");
+            return;
         }
+    };
+    for entry in parse(&text) {
+        match entry {
+            Ok((key, value)) => {
+                let path = format!("/proc/sys/{}", key.replace('.', "/"));
+                if let Err(e) = std::fs::write(path, value) {
+                    warn!(key, value, "cannot set sysctl: {e}");
+                }
+            }
+            Err(line) => warn!(line, "invalid line in {SYSCTLS}"),
+        }
+    }
+}
+
+/// The `key = value` lines of `text`, blank lines skipped; an invalid line as is.
+fn parse(text: &str) -> impl Iterator<Item = Result<(&str, &str), &str>> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (key, value) = line.split_once('=').ok_or(line)?;
+            let (key, value) = (key.trim(), value.trim());
+            let valid = !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c))
+                && !key.split('.').any(|part| part.is_empty() || part == "..");
+            if valid && !value.is_empty() {
+                Ok((key, value))
+            } else {
+                Err(line)
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_image_s_sysctls_parse() {
+        let text = include_str!("../../../specs/targets/standard/components/serviced/sysctls.conf");
+        assert!(parse(text).all(|entry| entry.is_ok()));
+        assert!(parse(text).count() > 30);
+    }
+
+    #[test]
+    fn parses_key_value_lines() {
+        let text = "kernel.kptr_restrict = 2\n\nnet.ipv4.conf.all.rp_filter=1\nnot a line\n\
+                    ../x = 1\nvm.mmap_min_addr =\n";
+        let entries: Vec<_> = parse(text).collect();
+        assert_eq!(
+            entries,
+            [
+                Ok(("kernel.kptr_restrict", "2")),
+                Ok(("net.ipv4.conf.all.rp_filter", "1")),
+                Err("not a line"),
+                Err("../x = 1"),
+                Err("vm.mmap_min_addr ="),
+            ]
+        );
     }
 }
