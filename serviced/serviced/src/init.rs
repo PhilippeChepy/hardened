@@ -24,6 +24,7 @@ use crate::power::PowerRequest;
 use crate::process::Reaper;
 use crate::serviced_service::ServicedService;
 use crate::shutdown;
+use crate::shutdown_locks::ShutdownLocks;
 use crate::supervisor::Supervisor;
 
 /// After a failure of serviced itself, the time left to read the console before the reboot.
@@ -110,12 +111,14 @@ async fn supervise(log: Arc<LogBuffer>, reaper: Reaper) -> anyhow::Result<PowerR
     let overview = Arc::new(Overview::default());
     let resolve = caller::resolver();
     let (commands_tx, commands_rx) = mpsc::unbounded_channel();
+    let shutdown_locks = Arc::new(ShutdownLocks::default());
     let service = ServicedService {
         overview: overview.clone(),
         logs: logs.clone(),
         resolve: resolve.clone(),
         commands: commands_tx,
         power: power_tx,
+        shutdown_locks: shutdown_locks.clone(),
     };
     // Without it, the services go on as far as they can: their calls fail.
     match api_server::bind(Path::new(libserviced::SOCKET)) {
@@ -125,7 +128,7 @@ async fn supervise(log: Arc<LogBuffer>, reaper: Reaper) -> anyhow::Result<PowerR
         Err(e) => error!("serviced's API is unavailable: {e:#}"),
     }
 
-    let supervisor = Supervisor::new(reaper, commands_rx, logs, overview, resolve);
+    let supervisor = Supervisor::new(reaper, commands_rx, logs, overview, resolve, shutdown_locks);
     Ok(supervisor.run(power_rx).await)
 }
 

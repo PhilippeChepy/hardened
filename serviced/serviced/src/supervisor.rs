@@ -1,6 +1,8 @@
 //! The supervisor's loop: it feeds the [`Engine`] with the service files, what serviced's API
 //! asks and what becomes of the runs, carries out its actions, listens on the services' sockets
 //! and updates what the API shows, until a power request; then it shuts down:
+//! 0. the holders of delay locks (`WatchShutdown`) are told, and their release awaited, at most
+//!    their longest delay: the services still run (kubelet stops its pods);
 //! 1. the running services stop, dependents first, with their `exec-post`;
 //! 2. the processes they left (containers) are terminated, then killed;
 //! 3. the services that ran run their `exec-stop`, one at a time, the last started first: nothing
@@ -39,6 +41,7 @@ use crate::process::Reaper;
 use crate::run::{self, Launch, RunKind};
 use crate::service_sockets::{self, Listener, ServiceSockets};
 use crate::shutdown;
+use crate::shutdown_locks::ShutdownLocks;
 
 /// serviced's state: the engine, the runs carrying out its actions, and what feeds it.
 pub struct Supervisor {
@@ -63,11 +66,14 @@ pub struct Supervisor {
     layers: BTreeMap<ServiceName, Vec<Layer>>,
     /// The errors of the last load, logged when they change.
     load_errors: Vec<String>,
+    /// The delay locks a shutdown waits for.
+    shutdown_locks: Arc<ShutdownLocks>,
 }
 
 impl Supervisor {
     /// A supervisor spawning the services' processes through `reaper`, carrying out `commands`,
-    /// keeping their logs in `logs`, and showing them in `overview`.
+    /// keeping their logs in `logs`, showing them in `overview`, and waiting for
+    /// `shutdown_locks` before a shutdown.
     #[must_use]
     pub fn new(
         reaper: Reaper,
@@ -75,6 +81,7 @@ impl Supervisor {
         logs: Arc<LogStore>,
         overview: Arc<Overview>,
         resolve: Resolver,
+        shutdown_locks: Arc<ShutdownLocks>,
     ) -> Self {
         let (events, received) = mpsc::unbounded_channel();
         Self {
@@ -93,6 +100,7 @@ impl Supervisor {
             resolve,
             layers: BTreeMap::new(),
             load_errors: Vec::new(),
+            shutdown_locks,
         }
     }
 
@@ -118,6 +126,7 @@ impl Supervisor {
         };
 
         info!(?request, "shutting down");
+        self.delay_shutdown(&mut power).await;
         self.engine.shutdown();
         self.apply().await;
         self.wait_stopped(&mut power).await;
@@ -127,6 +136,37 @@ impl Supervisor {
         self.apply().await;
         self.wait_stopped(&mut power).await;
         request
+    }
+
+    /// Announces the shutdown to the holders of delay locks, and goes on supervising until they
+    /// release them or the longest delay passed.
+    async fn delay_shutdown(&mut self, power: &mut mpsc::Receiver<PowerRequest>) {
+        let locks = Arc::clone(&self.shutdown_locks);
+        let Some(delay) = locks.announce() else {
+            return;
+        };
+        info!(
+            delay_s = delay.as_secs(),
+            "waiting for the shutdown's delay locks"
+        );
+        let deadline = tokio::time::Instant::now() + delay;
+        let released = locks.released();
+        tokio::pin!(released);
+        loop {
+            tokio::select! {
+                () = &mut released => {
+                    info!("delay locks released");
+                    return;
+                }
+                () = tokio::time::sleep_until(deadline) => {
+                    warn!(delay_s = delay.as_secs(), "delay locks still held, shutting down");
+                    return;
+                }
+                Some(event) = self.received.recv() => self.event(event).await,
+                Some(command) = self.commands.recv() => self.command(command).await,
+                Some(other) = power.recv() => info!(request = ?other, "already shutting down"),
+            }
+        }
     }
 
     /// Handles the runs' events until the engine has nothing running; the API's requests are

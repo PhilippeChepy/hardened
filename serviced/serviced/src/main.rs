@@ -36,6 +36,7 @@ mod service_sockets;
 mod service_status;
 mod serviced_service;
 mod shutdown;
+mod shutdown_locks;
 mod supervisor;
 
 fn main() {

@@ -6,6 +6,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use tokio::sync::mpsc;
+use tokio::sync::watch;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::Request;
 use tonic::Response;
@@ -20,6 +23,8 @@ use crate::api::ProcessRef;
 use crate::api::ReloadResponse;
 use crate::api::Service;
 use crate::api::ServiceRef;
+use crate::api::ShutdownEvent;
+use crate::api::ShutdownLock;
 use crate::api::State;
 use crate::api::serviced_client::ServicedClient;
 use crate::api::serviced_server::Serviced;
@@ -50,6 +55,10 @@ pub struct FakeServiced {
     root: PathBuf,
     calls: Arc<Mutex<Vec<Call>>>,
     states: Arc<Mutex<BTreeMap<String, State>>>,
+    /// Whether a shutdown was announced to the `WatchShutdown` streams.
+    shutdown: Arc<watch::Sender<bool>>,
+    /// The delays of the shutdown locks held, in seconds.
+    locks: Arc<watch::Sender<Vec<u32>>>,
 }
 
 impl FakeServiced {
@@ -69,6 +78,8 @@ impl FakeServiced {
             root: root.to_owned(),
             calls: Arc::default(),
             states: Arc::default(),
+            shutdown: Arc::new(watch::Sender::new(false)),
+            locks: Arc::new(watch::Sender::new(Vec::new())),
         };
         let path = dir.join("serviced.sock");
         let listener = tokio::net::UnixListener::bind(&path).expect("the fake's socket");
@@ -131,6 +142,17 @@ impl FakeServiced {
             .lock()
             .expect("no test panicked setting a state")
             .insert(name.to_owned(), state);
+    }
+
+    /// Announces a shutdown to the holders of shutdown locks.
+    pub fn announce_shutdown(&self) {
+        self.shutdown.send_replace(true);
+    }
+
+    /// The delays of the shutdown locks held, in seconds, as they change.
+    #[must_use]
+    pub fn shutdown_locks(&self) -> watch::Receiver<Vec<u32>> {
+        self.locks.subscribe()
     }
 
     /// The calls made since the last time, in order; tests drop them to start afresh.
@@ -196,6 +218,7 @@ impl FakeServiced {
 #[tonic::async_trait]
 impl Serviced for FakeServiced {
     type LogsStream = tokio_stream::Empty<Result<LogLine, Status>>;
+    type WatchShutdownStream = ReceiverStream<Result<ShutdownEvent, Status>>;
 
     async fn list_services(
         &self,
@@ -241,6 +264,37 @@ impl Serviced for FakeServiced {
 
     async fn power_off(&self, _: Request<()>) -> Result<Response<()>, Status> {
         Err(Status::unimplemented("power_off"))
+    }
+
+    async fn watch_shutdown(
+        &self,
+        request: Request<ShutdownLock>,
+    ) -> Result<Response<Self::WatchShutdownStream>, Status> {
+        let delay = request.into_inner().delay_seconds;
+        self.locks.send_modify(|locks| locks.push(delay));
+        let (locks, mut shutdown) = (self.locks.clone(), self.shutdown.subscribe());
+        let (sender, events) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let event = |shutting_down| Ok(ShutdownEvent { shutting_down });
+            if sender.send(event(false)).await.is_ok() {
+                tokio::select! {
+                    () = async {
+                        let _ = shutdown.wait_for(|announced| *announced).await;
+                    } => {
+                        if sender.send(event(true)).await.is_ok() {
+                            sender.closed().await;
+                        }
+                    }
+                    () = sender.closed() => {}
+                }
+            }
+            locks.send_modify(|locks| {
+                if let Some(held) = locks.iter().position(|held| *held == delay) {
+                    locks.remove(held);
+                }
+            });
+        });
+        Ok(Response::new(ReceiverStream::new(events)))
     }
 
     async fn identify_process(

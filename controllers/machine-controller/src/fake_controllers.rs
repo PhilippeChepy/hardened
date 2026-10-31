@@ -507,6 +507,15 @@ impl Serviced for Fake {
         Ok(Response::new(()))
     }
 
+    type WatchShutdownStream = Answers<api::ShutdownEvent>;
+
+    async fn watch_shutdown(
+        &self,
+        _: Request<api::ShutdownLock>,
+    ) -> Result<Response<Answers<api::ShutdownEvent>>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
+
     async fn identify_process(
         &self,
         _: Request<api::ProcessRef>,

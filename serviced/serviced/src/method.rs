@@ -15,6 +15,7 @@ pub enum Method {
     Logs,
     Reboot,
     PowerOff,
+    WatchShutdown,
     IdentifyProcess,
 }
 
@@ -31,7 +32,8 @@ impl Method {
             | Self::Restart
             | Self::Reload
             | Self::Reboot
-            | Self::PowerOff => Some(Access::Control),
+            | Self::PowerOff
+            | Self::WatchShutdown => Some(Access::Control),
             Self::IdentifyProcess => None,
         }
     }
@@ -41,7 +43,7 @@ impl Method {
 mod tests {
     use super::*;
 
-    const ALL: [Method; 10] = [
+    const ALL: [Method; 11] = [
         Method::ListServices,
         Method::GetService,
         Method::Start,
@@ -51,6 +53,7 @@ mod tests {
         Method::Logs,
         Method::Reboot,
         Method::PowerOff,
+        Method::WatchShutdown,
         Method::IdentifyProcess,
     ];
 
@@ -68,7 +71,15 @@ mod tests {
         );
         assert_eq!(
             names(Some(Access::Control)),
-            ["Start", "Stop", "Restart", "Reload", "Reboot", "PowerOff"]
+            [
+                "Start",
+                "Stop",
+                "Restart",
+                "Reload",
+                "Reboot",
+                "PowerOff",
+                "WatchShutdown"
+            ]
         );
         assert_eq!(names(None), ["IdentifyProcess"]);
     }

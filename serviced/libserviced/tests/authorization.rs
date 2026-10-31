@@ -16,6 +16,8 @@ use libserviced::api::ProcessRef;
 use libserviced::api::ReloadResponse;
 use libserviced::api::Service;
 use libserviced::api::ServiceRef;
+use libserviced::api::ShutdownEvent;
+use libserviced::api::ShutdownLock;
 use libserviced::api::serviced_server::Serviced;
 use libserviced::api::serviced_server::ServicedServer;
 use libserviced::authorization::Caller;
@@ -37,6 +39,7 @@ enum Fake {
 #[tonic::async_trait]
 impl Serviced for Fake {
     type LogsStream = tokio_stream::Empty<Result<LogLine, Status>>;
+    type WatchShutdownStream = tokio_stream::Empty<Result<ShutdownEvent, Status>>;
 
     async fn identify_process(
         &self,
@@ -89,6 +92,13 @@ impl Serviced for Fake {
     }
 
     async fn power_off(&self, _: Request<()>) -> Result<Response<()>, Status> {
+        Err(Status::unimplemented(""))
+    }
+
+    async fn watch_shutdown(
+        &self,
+        _: Request<ShutdownLock>,
+    ) -> Result<Response<Self::WatchShutdownStream>, Status> {
         Err(Status::unimplemented(""))
     }
 }

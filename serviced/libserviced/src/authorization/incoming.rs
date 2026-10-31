@@ -28,25 +28,27 @@ const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Connections waiting for tonic.
 const QUEUE: usize = 16;
 
-/// The connections of allowed callers to a socket, for tonic's `serve_with_incoming`.
+/// The connections of allowed callers to a socket, for tonic's `serve_with_incoming`, or for a
+/// service serving another protocol on it.
 ///
 /// A background task accepts connections and identifies their callers concurrently, so a slow
 /// identification does not hold up the others; it stops when this is dropped.
 #[derive(Debug)]
-pub(crate) struct Incoming {
+pub struct Incoming {
     receiver: mpsc::Receiver<io::Result<CallerStream>>,
 }
 
 impl Incoming {
     /// Accepts connections to `socket`, identifying callers with `serviced`.
     ///
+    /// # Errors
+    ///
+    /// When the socket cannot be made non-blocking for tokio.
+    ///
     /// # Panics
     ///
     /// Outside a tokio runtime.
-    pub(crate) fn new(
-        socket: ActivatedSocket,
-        serviced: ServicedClient<Channel>,
-    ) -> io::Result<Self> {
+    pub fn new(socket: ActivatedSocket, serviced: ServicedClient<Channel>) -> io::Result<Self> {
         let (name, allow, listener) = socket.into_parts();
         listener.set_nonblocking(true)?;
         let listener = UnixListener::from_std(listener)?;

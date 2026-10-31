@@ -86,10 +86,12 @@ into `/run/hardened`.
    API; it configures machine-apiproxy afterwards. serviced logs `boot complete` once every
    enabled service has settled (ready, exited, failed, inactive or stopped).
 5. **Shutdown:** a power request comes from serviced's API (the machine API's `Reboot` and
-   `Shutdown`), a signal or the ACPI power button. serviced stops the running services, those
-   requiring others first (each with SIGTERM, then SIGKILL after 10 s), then kills
-   every remaining process (containers: SIGTERM, then SIGKILL after 20 s). Only then does it run
-   the `exec-stop` commands of the services that ran, one at a time, the last started first:
+   `Shutdown`), a signal or the ACPI power button. serviced first announces it to the holders of
+   delay locks (`WatchShutdown`) and waits, the services still running, until they release them
+   or their delay passes (at most 10 minutes). Then it stops the running services, those
+   requiring others first (each with SIGTERM, then SIGKILL after 10 s), then kills every
+   remaining process (containers: SIGTERM, then SIGKILL after 20 s). Only then does it run the
+   `exec-stop` commands of the services that ran, one at a time, the last started first:
    storage-controller's, which unmounts `/var` and closes the encrypted partition, comes after
    everything that used `/var` is gone. Then it calls `reboot(2)`.
 
@@ -188,10 +190,11 @@ hctl ──mTLS──▶ machine-apiproxy ──▶ machine-controller ─┬─
 - **serviced's API** (`hardened.serviced.v1`,
   [`serviced.proto`](../serviced/libserviced/proto/hardened/serviced/v1/serviced.proto)) on
   `/run/serviced/serviced.sock`: the services (their merged definitions and states; start, stop,
-  restart, reload), the services' logs and serviced's own, reboot and power off. Services write
-  the files of the runtime and persistent layers in their directories, then reload. serviced
-  knows its callers by their cgroup and allows what their file's `api` grants (`read`,
-  `control`): machine-controller, workload-controller and kubelet-controller have both.
+  restart, reload), the services' logs and serviced's own, reboot and power off, and delay locks
+  on shutdown (`WatchShutdown`, like logind's). Services write the files of the runtime and
+  persistent layers in their directories, then reload. serviced knows its callers by their cgroup
+  and allows what their file's `api` grants (`read`, `control`): machine-controller,
+  workload-controller and kubelet-controller have both.
   `IdentifyProcess` is open to every service.
 - **The controllers' APIs** (in each controller's `proto/` directory): `Configure` and their
   state, for machine-controller; trust-controller's `Sealing`, for storage-controller.

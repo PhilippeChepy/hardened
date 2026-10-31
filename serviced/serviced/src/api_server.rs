@@ -63,6 +63,7 @@ mod tests {
     use crate::log_store::LogStore;
     use crate::overview::{Overview, ServiceView};
     use crate::service_status::{ServiceStatus, State};
+    use crate::shutdown_locks::ShutdownLocks;
 
     /// The pid `IdentifyProcess` knows as kubelet's.
     const KUBELET_PID: u32 = 4242;
@@ -76,6 +77,7 @@ mod tests {
         caller: Arc<Mutex<Option<ServiceName>>>,
         serviced_log: Arc<LogBuffer>,
         reloads: mpsc::UnboundedReceiver<()>,
+        shutdown_locks: Arc<ShutdownLocks>,
     }
 
     impl Api {
@@ -104,6 +106,7 @@ mod tests {
             let (commands, mut received) = mpsc::unbounded_channel();
             let (power, _) = mpsc::channel(1);
             let caller: Arc<Mutex<Option<ServiceName>>> = Arc::default();
+            let shutdown_locks = Arc::new(ShutdownLocks::default());
             let chosen = caller.clone();
             let me = std::process::id();
             let resolve: Resolver = Arc::new(move |pid| match pid {
@@ -117,6 +120,7 @@ mod tests {
                 resolve,
                 commands,
                 power,
+                shutdown_locks: shutdown_locks.clone(),
             };
             // The supervisor, as far as the API sees it.
             let (reloaded, reloads) = mpsc::unbounded_channel();
@@ -144,6 +148,7 @@ mod tests {
                 caller,
                 serviced_log,
                 reloads,
+                shutdown_locks,
             }
         }
 
@@ -220,6 +225,32 @@ mod tests {
         ] {
             assert_eq!(status.code(), Code::NotFound, "{status:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_locks_last_as_long_as_their_stream() {
+        let api = Api::start().await;
+        let lock = |delay_seconds| api::ShutdownLock { delay_seconds };
+        let mut ntp = api.client(Some("time-controller")).await;
+        let status = ntp.watch_shutdown(lock(30)).await.unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied, "needs control");
+
+        let mut controller = api.client(Some("machine-controller")).await;
+        let status = controller.watch_shutdown(lock(0)).await.unwrap_err();
+        assert_eq!(status.code(), Code::InvalidArgument);
+        let mut events = controller
+            .watch_shutdown(lock(30))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!next(&mut events).await.shutting_down);
+        assert_eq!(api.shutdown_locks.announce(), Some(Duration::from_secs(30)));
+        assert!(next(&mut events).await.shutting_down);
+
+        drop(events);
+        tokio::time::timeout(Duration::from_secs(5), api.shutdown_locks.released())
+            .await
+            .expect("released once the stream is closed");
     }
 
     #[tokio::test]

@@ -27,6 +27,12 @@ impl<C> CallerStream<C> {
     pub fn new(stream: UnixStream, caller: C) -> Self {
         Self { stream, caller }
     }
+
+    /// The connection, and its caller.
+    #[must_use]
+    pub fn into_parts(self) -> (UnixStream, C) {
+        (self.stream, self.caller)
+    }
 }
 
 impl<C: Clone + Send + Sync + 'static> Connected for CallerStream<C> {

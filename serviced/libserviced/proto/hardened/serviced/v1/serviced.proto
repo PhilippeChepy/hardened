@@ -5,7 +5,7 @@ syntax = "proto3";
 //
 // serviced identifies the calling service by the cgroup of the connected process and allows what
 // the service's file grants in `api`: `read` (services and logs) and `control` (start, stop,
-// restart, reload, power). IdentifyProcess is open to every service (they
+// restart, reload, power, shutdown delay locks). IdentifyProcess is open to every service (they
 // authorize their own callers with it). Other callers are refused.
 package hardened.serviced.v1;
 
@@ -32,6 +32,11 @@ service Serviced {
 
   rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc PowerOff(google.protobuf.Empty) returns (google.protobuf.Empty);
+  // A delay lock on shutdown, held while the stream is open: a reboot or power-off is announced
+  // to its holders, then waits until they all close their streams or the longest delay passed
+  // (at most 10 minutes) before the services stop. The first event says whether a shutdown has
+  // begun, the next that it does.
+  rpc WatchShutdown(ShutdownLock) returns (stream ShutdownEvent);
 
   // The service a process belongs to (by its cgroup), for services authorizing the callers of
   // their own sockets (SO_PEERCRED gives them the pid). NOT_FOUND if it belongs to none.
@@ -132,4 +137,13 @@ message LogLine {
 
 message ProcessRef {
   uint32 pid = 1;
+}
+
+message ShutdownLock {
+  // How long the holder may delay a shutdown once announced; not 0.
+  uint32 delay_seconds = 1;
+}
+
+message ShutdownEvent {
+  bool shutting_down = 1;
 }

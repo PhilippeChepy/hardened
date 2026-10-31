@@ -4,6 +4,7 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use libserviced::api;
 use libserviced::api::serviced_server::Serviced;
@@ -24,6 +25,7 @@ use crate::method::Method;
 use crate::overview::{Overview, ServiceView};
 use crate::power::PowerRequest;
 use crate::service_status::State;
+use crate::shutdown_locks::ShutdownLocks;
 
 /// Lines queued for a streaming client.
 const STREAM_QUEUE: usize = 64;
@@ -37,6 +39,8 @@ pub struct ServicedService {
     /// To the supervisor.
     pub commands: mpsc::UnboundedSender<Command>,
     pub power: mpsc::Sender<PowerRequest>,
+    /// The delay locks `WatchShutdown` takes, which the supervisor waits for.
+    pub shutdown_locks: Arc<ShutdownLocks>,
 }
 
 impl ServicedService {
@@ -204,6 +208,40 @@ impl Serviced for ServicedService {
     async fn power_off(&self, request: Request<()>) -> Result<Response<()>, Status> {
         self.authorize(&request, Method::PowerOff).await?;
         self.power(PowerRequest::PowerOff).await
+    }
+
+    type WatchShutdownStream =
+        Pin<Box<dyn Stream<Item = Result<api::ShutdownEvent, Status>> + Send>>;
+
+    async fn watch_shutdown(
+        &self,
+        request: Request<api::ShutdownLock>,
+    ) -> Result<Response<Self::WatchShutdownStream>, Status> {
+        self.authorize(&request, Method::WatchShutdown).await?;
+        let delay = request.into_inner().delay_seconds;
+        if delay == 0 {
+            return Err(Status::invalid_argument("delay_seconds: 0"));
+        }
+        let lock = self.shutdown_locks.lock(Duration::from_secs(delay.into()));
+        let (sender, events) = mpsc::channel(1);
+        // The lock is held until the caller closes the stream.
+        tokio::spawn(async move {
+            let event = |shutting_down| Ok(api::ShutdownEvent { shutting_down });
+            if !lock.announced() {
+                if sender.send(event(false)).await.is_err() {
+                    return;
+                }
+                tokio::select! {
+                    () = lock.wait_announced() => {}
+                    () = sender.closed() => return,
+                }
+            }
+            if sender.send(event(true)).await.is_ok() {
+                sender.closed().await;
+            }
+            drop(lock);
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(events))))
     }
 
     async fn identify_process(
