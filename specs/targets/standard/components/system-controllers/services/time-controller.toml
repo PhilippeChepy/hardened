@@ -1,4 +1,4 @@
-description = "time-controller: SNTP client keeping the clock in sync"
+description = "time-controller: keeps the clock in sync with the hypervisor's PTP clock or NTP"
 exec = ["/usr/bin/time-controller"]
 notify = true
 console = true
@@ -11,11 +11,13 @@ allow = ["machine-controller"]
 
 [sandbox]
 user = 65533
-capabilities = ["SYS_TIME"]
+capabilities = ["DAC_READ_SEARCH", "SYS_TIME"]
 socket-families = ["inet", "inet6"]
+ioctls = ["PTP_SYS_OFFSET"]
 syscalls = [
     "adjtimex",
     "bind",
+    "getdents64",
     "getsockname",
     "recvmsg",
     "rename",
@@ -36,3 +38,12 @@ path = "/run/hardened"
 [[sandbox.binds]]
 path = "/run/time-controller"
 writable = true
+
+[[sandbox.binds]]
+path = "/dev/ptp0"
+device = true
+optional = true
+
+[[sandbox.binds]]
+path = "/sys/devices/virtual/ptp"
+optional = true

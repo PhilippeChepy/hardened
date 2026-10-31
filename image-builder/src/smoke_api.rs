@@ -104,8 +104,8 @@ impl Hctl {
     }
 }
 
-/// Checks the machine through its API: attestation against the image's expected PCRs, the
-/// services, and a privileged workload's exec and read-only host root; then workload-console's
+/// Checks the machine through its API: attestation against the image's expected PCRs, the PTP
+/// clock under KVM, the services, and a privileged workload's exec and read-only host root; then workload-console's
 /// exit once idle.
 pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
     eprintln!("==> checks through the machine's API");
@@ -127,6 +127,14 @@ pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
         fingerprint,
     ])?;
     eprintln!("{verified}");
+
+    // Under KVM (as `run` boots it when it can), the clock follows the host's PTP clock.
+    if fs::OpenOptions::new().write(true).open("/dev/kvm").is_ok() {
+        hctl.wait(&["time"], Duration::from_secs(60), |time| {
+            time.contains("PTP clock:     /dev/ptp0 (KVM virtual PTP)")
+        })
+        .context("the clock is not synchronized with KVM's PTP clock")?;
+    }
 
     let containerd = hctl.succeed(&["service", "status", "containerd"])?;
     ensure!(

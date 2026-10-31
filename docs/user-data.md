@@ -164,6 +164,23 @@ disk unencrypted. Turning encryption off leaves an encrypted partition alone, wi
 until it is turned back on. `hctl storage` shows what backs `/var` on this boot, and why. See
 [state-encryption.md](state-encryption.md).
 
+## `settings.hardened.time`
+
+What the clock is synchronized with.
+
+```toml
+[settings.hardened.time]
+source = "ntp"
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `source` | `auto`, `ptp`, `ntp` | `auto` | `ptp`: the hypervisor's PTP clock (KVM's `ptp_kvm`) only; `ntp`: the servers of [`settings.ntp`](#settingsntp) only; `auto`: the PTP clock when there is one, NTP when there is none or reading it fails |
+
+The PTP clock is the host's, read without the network: on KVM, it is as accurate as the host's
+own synchronization, and needs no server. Without one (another hypervisor), `ptp` leaves the clock
+unsynchronized.
+
 ## `settings.kubernetes`
 
 Present, kubelet runs, so the machine joins a Kubernetes cluster as a node. Only images that ship

@@ -74,6 +74,8 @@ message Settings {
   optional hardened.apiproxy.v1.Configuration api = 10;
   // settings.hardened.storage.
   hardened.storage.v1.Configuration storage = 11;
+  // settings.hardened.time.source.
+  hardened.time.v1.Source time_source = 12;
 }
 
 // settings.kernel.modules.<name>: the kernel never loads modules by itself.

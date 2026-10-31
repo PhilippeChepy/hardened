@@ -21,5 +21,5 @@ mod user_data;
 
 pub use kernel_settings::{KernelSettings, ModuleLoad};
 pub use registry_settings::{Auth, Endpoint, Registry, RegistrySettings};
-pub use settings::{NtpSettings, Settings};
+pub use settings::{NtpSettings, Settings, TimeSettings};
 pub use user_data::{Error, UserData};

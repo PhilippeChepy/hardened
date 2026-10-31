@@ -68,8 +68,13 @@ pub async fn configure(
         .context("configuring storage-controller")?;
     info!("storage-controller configured: /var is set up");
 
-    let time = time_servers::choose(&settings.ntp, dhcp_time_servers);
-    info!(servers = ?time.servers, origin = ?time.origin, "time servers chosen");
+    let time = time_servers::choose(settings, dhcp_time_servers);
+    info!(
+        source = ?time.source,
+        servers = ?time.servers,
+        origin = ?time.origin,
+        "time sources chosen"
+    );
     let configured = TimeControllerClient::new(controllers.time.channel())
         .configure(time::Configuration::from(time))
         .await;

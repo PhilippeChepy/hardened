@@ -1,6 +1,7 @@
 syntax = "proto3";
 
-// time-controller's API (/run/time-controller/api.sock): the NTP client.
+// time-controller's API (/run/time-controller/api.sock): the clock's synchronization, with the
+// hypervisor's PTP clock or NTP servers.
 package hardened.time.v1;
 
 import "google/protobuf/empty.proto";
@@ -22,10 +23,21 @@ enum Origin {
   ORIGIN_DEFAULT = 3;
 }
 
+// What the clock is synchronized with.
+enum Source {
+  // The hypervisor's PTP clock (KVM's) when there is one, NTP otherwise or when it fails.
+  SOURCE_AUTO = 0;
+  // The hypervisor's PTP clock only.
+  SOURCE_PTP = 1;
+  // The NTP servers only.
+  SOURCE_NTP = 2;
+}
+
 message Configuration {
   // Host names or IP addresses, in order of preference; at least one.
   repeated string servers = 1;
   Origin origin = 2;
+  Source source = 3;
 }
 
 message Status {
@@ -40,6 +52,7 @@ message Status {
   optional string error = 5;
   // Seconds between rounds.
   uint32 poll_interval_seconds = 6;
+  Source source = 7;
 }
 
 message Clock {
@@ -53,8 +66,24 @@ message Clock {
   double frequency_ppm = 4;
 }
 
-// A correction of the clock, and the reply it came from.
+// A correction of the clock, and what it came from.
 message Correction {
+  oneof source {
+    NtpReply ntp = 1;
+    PtpClock ptp = 2;
+  }
+  // What the clock was corrected by (positive: it was behind), and the delay of the
+  // measurement: the round trip to the server less its processing time, or the time the
+  // system clock took to read the PTP clock.
+  int64 offset_ns = 5;
+  int64 delay_ns = 6;
+  // Whether the clock was stepped rather than slewed.
+  bool stepped = 7;
+  google.protobuf.Timestamp corrected_at = 8;
+}
+
+// The NTP reply a correction came from.
+message NtpReply {
   // The server as configured, and the address that replied.
   string server = 1;
   string address = 2;
@@ -62,11 +91,11 @@ message Correction {
   // server above.
   uint32 stratum = 3;
   string reference = 4;
-  // What the clock was corrected by (positive: it was behind), and the round trip to the server
-  // less its processing time.
-  int64 offset_ns = 5;
-  int64 delay_ns = 6;
-  // Whether the clock was stepped rather than slewed.
-  bool stepped = 7;
-  google.protobuf.Timestamp corrected_at = 8;
+}
+
+// The PTP clock a correction came from.
+message PtpClock {
+  // Its device, and the name its driver gives it ("KVM virtual PTP").
+  string device = 1;
+  string name = 2;
 }

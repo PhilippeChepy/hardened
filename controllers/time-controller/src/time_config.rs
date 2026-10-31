@@ -6,8 +6,9 @@ use serde::Serialize;
 
 use crate::TimeServer;
 
-/// The time servers time-controller queries, chosen by machine-controller from the settings,
-/// DHCP or the default.
+/// What time-controller synchronizes the clock with: the hypervisor's PTP clock or the time
+/// servers, as `source` says; the servers chosen by machine-controller from the settings, DHCP
+/// or the default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TimeConfig {
@@ -15,6 +16,22 @@ pub struct TimeConfig {
     pub servers: NonEmpty<TimeServer>,
     /// Where they come from.
     pub origin: TimeOrigin,
+    /// What the clock is synchronized with.
+    #[serde(default)]
+    pub source: TimeSource,
+}
+
+/// What the clock is synchronized with: `settings.hardened.time.source`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimeSource {
+    /// The hypervisor's PTP clock (KVM's) when there is one, NTP otherwise or when it fails.
+    #[default]
+    Auto,
+    /// The hypervisor's PTP clock only.
+    Ptp,
+    /// The time servers only.
+    Ntp,
 }
 
 /// Where the time servers come from.

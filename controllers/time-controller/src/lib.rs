@@ -1,5 +1,5 @@
-//! time-controller's API (`hardened.time.v1`, on [`SOCKET`]): the time servers it synchronizes
-//! with ([`TimeConfig`]), and the clock's status.
+//! time-controller's API (`hardened.time.v1`, on [`SOCKET`]): what it synchronizes the clock with
+//! ([`TimeConfig`]: the hypervisor's PTP clock or time servers), and the clock's status.
 
 #![warn(missing_docs)]
 
@@ -16,5 +16,5 @@ mod generated {
 
 pub use generated::hardened::time::v1 as time;
 pub use socket::SOCKET;
-pub use time_config::{TimeConfig, TimeOrigin};
+pub use time_config::{TimeConfig, TimeOrigin, TimeSource};
 pub use time_server::TimeServer;

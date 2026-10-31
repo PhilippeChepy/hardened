@@ -45,6 +45,7 @@ impl PersistedState {
 mod tests {
     use controllers_helpers::NonEmpty;
     use time_controller::TimeOrigin;
+    use time_controller::TimeSource;
 
     use super::*;
 
@@ -58,6 +59,7 @@ mod tests {
             config: TimeConfig {
                 servers: NonEmpty::new("time.example.com".parse().unwrap()),
                 origin: TimeOrigin::Dhcp,
+                source: TimeSource::Auto,
             },
         };
         state.save(&path).unwrap();

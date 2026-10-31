@@ -23,12 +23,13 @@ impl SyncStatus {
     /// configuration) and the kernel's `clock`.
     #[must_use]
     pub fn to_message(&self, config: Option<&TimeConfig>, clock: time::Clock) -> time::Status {
-        let (servers, origin) = match config {
+        let (servers, origin, source) = match config {
             Some(config) => (
                 config.servers.iter().map(TimeServer::to_string).collect(),
                 time::Origin::from(config.origin),
+                time::Source::from(config.source),
             ),
-            None => (Vec::new(), time::Origin::Unspecified),
+            None => (Vec::new(), time::Origin::Unspecified, time::Source::Auto),
         };
         time::Status {
             clock: Some(clock),
@@ -37,6 +38,7 @@ impl SyncStatus {
             last_correction: self.last.as_ref().map(time::Correction::from),
             error: self.error.clone(),
             poll_interval_seconds: self.poll_seconds,
+            source: source.into(),
         }
     }
 }
@@ -45,6 +47,7 @@ impl SyncStatus {
 mod tests {
     use controllers_helpers::NonEmpty;
     use time_controller::TimeOrigin;
+    use time_controller::TimeSource;
 
     use super::*;
     use crate::measurement::tests::measurement;
@@ -64,6 +67,7 @@ mod tests {
             ])
             .unwrap(),
             origin: TimeOrigin::Dhcp,
+            source: TimeSource::Auto,
         };
         let status = SyncStatus {
             last: Some(measurement()),

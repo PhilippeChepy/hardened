@@ -190,16 +190,22 @@ of all at shutdown.
 
 ### time-controller
 
-SNTP client keeping the clock in sync, with the servers machine-controller gives it (user-data,
-DHCP or the default). Ready once configured and the clock is synchronized, or 30 s after being
+Keeps the clock in sync with the hypervisor's PTP clock (`ptp_kvm`, read every 16 s) or with NTP
+servers machine-controller gives it (user-data, DHCP or the default), as
+`settings.hardened.time.source` chooses: by default the PTP clock when there is one, NTP when there
+is none or it fails. Ready once configured and the clock is synchronized, or 30 s after being
 configured without a correction.
 
 - **Sandbox**: uid 65533 (not machine-apiproxy's) with `SYS_TIME`: a compromise can set the clock,
-  which anyone answering its unauthenticated queries can anyway. Families: `inet`, `inet6`.
+  which anyone answering its unauthenticated queries can anyway; `DAC_READ_SEARCH` to open
+  `/dev/ptp0`, root's, read-only like the rest of its binds. Families: `inet`, `inet6`. Ioctls:
+  `PTP_SYS_OFFSET`.
 - **System calls**: `adjtimex` (`clock_adjtime`, through musl); `bind` (its NTP sockets, and
   musl's resolver); `getsockname`, `recvmsg`, `sendmsg`, `setsockopt` (musl's resolver); `rename`
-  (its state). Its queries' `connect`, `sendto` and `recvfrom` are among serving gRPC's.
-- **Binds**: `/etc` and `/run/hardened`, for `resolv.conf` and `hosts`; its runtime directory.
+  (its state); `getdents64` (finding the PTP clock). Its queries' `connect`, `sendto` and
+  `recvfrom` are among serving gRPC's.
+- **Binds**: `/etc` and `/run/hardened`, for `resolv.conf` and `hosts`; its runtime directory;
+  `/dev/ptp0` and `/sys/devices/virtual/ptp` (where the KVM clock is named), when there are.
 
 ### trust-controller
 

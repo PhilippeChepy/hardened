@@ -8,7 +8,6 @@ use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use controllers_helpers::NonEmpty;
 use rustix::rand::GetRandomFlags;
@@ -18,7 +17,9 @@ use tokio::net::UdpSocket;
 use crate::clock;
 use crate::clock::Correction;
 use crate::clock::MIN_POLL;
+use crate::clock::now;
 use crate::measurement::Measurement;
+use crate::measurement::Source;
 use crate::packet;
 use crate::packet::Nanos;
 use crate::packet::Rejected;
@@ -179,11 +180,7 @@ impl Client {
     fn correct(&mut self, best: &Candidate) -> Result<Measurement, String> {
         let correction = Correction::for_offset(best.sample.offset);
         let (max_error, estimated_error) = (best.distance(), best.sample.delay / 2);
-        let corrected = match correction {
-            Correction::Step(offset) => clock::step(offset)
-                .and_then(|()| clock::slew(0, MIN_POLL, max_error, estimated_error)),
-            Correction::Slew(offset) => clock::slew(offset, self.poll, max_error, estimated_error),
-        };
+        let corrected = clock::apply(correction, self.poll, max_error, estimated_error);
         let offset_ms = format!("{:+.3}", best.sample.offset as f64 / 1e6);
         let delay_ms = format!("{:.3}", best.sample.delay.as_secs_f64() * 1e3);
         let (server, address, stratum) = (&best.server, best.address, best.reply.stratum);
@@ -201,10 +198,12 @@ impl Client {
         }
         self.poll = clock::next_poll(self.poll, correction);
         Ok(Measurement {
-            server: best.server.clone(),
-            address: best.address,
-            stratum,
-            reference: best.reply.reference_id(),
+            source: Source::Ntp {
+                server: best.server.clone(),
+                address: best.address,
+                stratum,
+                reference: best.reply.reference_id(),
+            },
             offset_ns: best.sample.offset,
             delay_ns: best
                 .sample
@@ -285,14 +284,6 @@ async fn exchange(address: SocketAddr) -> Result<(Reply, Sample), Failure> {
             Err(e) => return Err(e.into()),
         }
     }
-}
-
-#[must_use]
-fn now() -> Nanos {
-    let since_epoch = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    since_epoch.as_nanos().try_into().unwrap_or(Nanos::MAX)
 }
 
 #[cfg(test)]

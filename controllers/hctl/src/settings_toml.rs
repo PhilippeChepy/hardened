@@ -16,6 +16,7 @@ use machine_controller::machine;
 use machine_controller::machine::registry_credential::Auth;
 use machine_controller::machine::{ModuleLoad, RegistryCredential};
 use storage_controller::storage::Encryption;
+use time_controller::time;
 use toml::{Table, Value};
 use workload_controller::ContainerSettings;
 use workload_controller::workloads::DeclaredWorkloads;
@@ -156,6 +157,16 @@ fn hardened(settings: &machine::Settings) -> anyhow::Result<Table> {
         insert_string(&mut storage, "encryption", "tpm");
         table.insert("storage".to_owned(), Value::Table(storage));
     }
+    let source = match settings.time_source() {
+        time::Source::Auto => None,
+        time::Source::Ptp => Some("ptp"),
+        time::Source::Ntp => Some("ntp"),
+    };
+    if let Some(source) = source {
+        let mut time = Table::new();
+        insert_string(&mut time, "source", source);
+        table.insert("time".to_owned(), Value::Table(time));
+    }
     if let Some(declared) = &settings.containers {
         let declared = containers(declared).context("settings.hardened.containers")?;
         insert_table(&mut table, "containers", declared);
@@ -291,6 +302,7 @@ mod tests {
             storage: Some(storage_controller::storage::Configuration {
                 encryption: Encryption::Tpm.into(),
             }),
+            time_source: time::Source::Ptp.into(),
         }
     }
 
@@ -325,6 +337,9 @@ private-key = "<redacted>"
 
 [settings.hardened.storage]
 encryption = "tpm"
+
+[settings.hardened.time]
+source = "ptp"
 
 [settings.kernel.modules.sctp]
 allowed = false

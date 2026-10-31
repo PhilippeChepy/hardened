@@ -72,7 +72,7 @@ into `/run/hardened`.
       ├─ network-controller     the DNS override
       ├─ storage-controller     /var: the state partition grown, unlocked with a key
       │                         trust-controller unseals (or formatted) when encrypted, mounted
-      ├─ time-controller        the NTP servers
+      ├─ time-controller        its source and NTP servers
       ├─ workload-controller    user-data's workloads
       ├─ kubelet-controller     kubelet's files, and kubelet enabled (Kubernetes targets)
       └─ machine-apiproxy       when user-data enables the API
@@ -341,9 +341,14 @@ How a node runs, its networking and versions: [kubernetes-target.md](kubernetes-
 ## Time
 
 The clock starts from the hypervisor's (kvm-clock, the RTC). time-controller keeps it in sync with
-NTP servers, in the background, and is ready once the clock is synchronized, or 30 s after being
-configured without. Nothing waits for it.
+the hypervisor's PTP clock or NTP servers, in the background, and is ready once the clock is
+synchronized, or 30 s after being configured without. Nothing waits for it.
 
+- **Source:** [`settings.hardened.time.source`](user-data.md#settingshardenedtime). By default
+  (`auto`), the KVM PTP clock (`ptp_kvm`, `/dev/ptp0`) when the hypervisor has one, NTP when it
+  has none or a reading fails; `ptp` or `ntp` for one only.
+- **PTP:** every 16 s, `PTP_SYS_OFFSET` reads the PTP clock between readings of the system
+  clock, ten times; the tightest reading gives the offset, its duration the error bound.
 - **Servers:** `settings.ntp.time-servers`, else those of DHCP (option 42, every interface's,
   the primary's first), else `pool.ntp.org`; chosen once per boot, by machine-controller, which
   configures time-controller with them. Until then, time-controller does not poll.
@@ -357,11 +362,13 @@ configured without. Nothing waits for it.
 - **API:** `Machine/Time` (`hctl time`) returns time-controller's status
   (`hardened.time.v1.Status`): whether the kernel considers the clock synchronized, its error
   bounds and frequency correction, the servers and where they come from, and its last correction
-  since it started (server, stratum, offset, round trip) or why the last round made none.
+  since it started (the server and its stratum, or the PTP clock; offset, round trip) or why the
+  last round made none.
 
-It runs sandboxed with `CAP_SYS_TIME` only ([services.md](services.md#time-controller)), which
-gives a compromised time-controller nothing beyond what anyone answering its unauthenticated
-queries can do: set the clock.
+It runs sandboxed with `CAP_SYS_TIME` and `CAP_DAC_READ_SEARCH` (to open root's `/dev/ptp0`, in a
+sandbox holding only its binds) ([services.md](services.md#time-controller)), which gives a
+compromised time-controller nothing beyond what anyone answering its unauthenticated queries can
+do: set the clock.
 
 ## Attestation
 
@@ -590,9 +597,10 @@ one per line, rather than inline tables (but `{}`, a step without options).
 
 ## Known gaps / roadmap
 
-- **Time:** unauthenticated SNTP (no NTS): anyone on the path can shift the clock. The servers are
-  chosen at boot (a DHCP renewal changing option 42 is not followed). Leap second announcements
-  are ignored: the clock is stepped after one. No PTP (`ptp_kvm`) source.
+- **Time:** unauthenticated SNTP (no NTS): anyone on the path can shift the clock, unless the
+  KVM PTP clock is used. The servers are chosen at boot (a DHCP renewal changing option 42 is not
+  followed). Leap second announcements are ignored: the clock is stepped after one.
+  The PTP clock is looked for at `/dev/ptp0` only.
 - **Registries:** kubelet's pulls get their credentials from the CRI plugin's `configs`,
   deprecated in containerd 2 and removed in 2.7, which will need a credential helper instead.
   Workloads' pulls get no identity token.

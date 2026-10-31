@@ -9,6 +9,7 @@ use network_controller::DnsSettings;
 use serde::{Deserialize, Serialize};
 use storage_controller::StorageSettings;
 use time_controller::TimeServer;
+use time_controller::TimeSource;
 use workload_controller::ContainerSettings;
 
 use crate::settings::{KernelSettings, RegistrySettings};
@@ -69,10 +70,23 @@ pub struct HardenedSettings {
     /// `[settings.hardened.storage]`: the state partition.
     #[serde(default)]
     pub storage: StorageSettings,
+    /// `[settings.hardened.time]`.
+    #[serde(default)]
+    pub time: TimeSettings,
     /// `[settings.hardened.containers.<name>]`: containers, keyed by name; the API's run next to
     /// them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub containers: BTreeMap<WorkloadName, ContainerSettings>,
+}
+
+/// `[settings.hardened.time]`: what the clock is synchronized with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct TimeSettings {
+    /// The hypervisor's PTP clock, the time servers of `[settings.ntp]`, or the first falling
+    /// back to the second (the default).
+    #[serde(default)]
+    pub source: TimeSource,
 }
 
 #[cfg(test)]

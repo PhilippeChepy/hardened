@@ -7,6 +7,7 @@
 use std::io;
 use std::mem;
 use std::time::Duration;
+use std::time::SystemTime;
 
 use time_controller::time;
 
@@ -53,6 +54,31 @@ pub fn next_poll(poll: u32, correction: Correction) -> u32 {
             _ => poll.saturating_sub(1).max(MIN_POLL),
         },
     }
+}
+
+/// Applies `correction`, measured with the error bounds `max_error` and `estimated_error`, at
+/// the poll interval `poll`: a step resets the PLL's time constant to the shortest.
+pub fn apply(
+    correction: Correction,
+    poll: u32,
+    max_error: Duration,
+    estimated_error: Duration,
+) -> io::Result<()> {
+    match correction {
+        Correction::Step(offset) => {
+            step(offset).and_then(|()| slew(0, MIN_POLL, max_error, estimated_error))
+        }
+        Correction::Slew(offset) => slew(offset, poll, max_error, estimated_error),
+    }
+}
+
+/// The time, in nanoseconds since the Unix epoch.
+#[must_use]
+pub fn now() -> Nanos {
+    let since_epoch = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    since_epoch.as_nanos().try_into().unwrap_or(Nanos::MAX)
 }
 
 /// Steps the clock by `offset`.

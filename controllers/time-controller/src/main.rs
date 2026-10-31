@@ -13,6 +13,7 @@ mod measurement;
 mod packet;
 mod persisted_state;
 mod poller;
+mod ptp;
 mod ready;
 mod run;
 mod sync_status;

@@ -140,11 +140,17 @@ fn time_lines(time: &time::Status) -> Vec<String> {
         Origin::Default => "default",
         Origin::Unspecified => "unknown",
     };
+    let source = match time.source() {
+        time::Source::Auto => "PTP clock, else NTP",
+        time::Source::Ptp => "PTP clock",
+        time::Source::Ntp => "NTP",
+    };
     let mut lines = vec![
         format!(
             "Synchronized:  {}",
             if clock.synchronized { "yes" } else { "no" }
         ),
+        format!("Source:        {source}"),
         format!("Servers:       {} ({origin})", time.servers.join(", ")),
     ];
     if let Some(correction) = &time.last_correction {
@@ -158,10 +164,16 @@ fn time_lines(time: &time::Status) -> Vec<String> {
             .map_or_else(|| "-".to_owned(), |time| time.to_string());
         lines.extend([
             format!("Corrected at:  {corrected_at}"),
-            format!(
-                "Server:        {} ({}), stratum {}, reference {}",
-                correction.server, correction.address, correction.stratum, correction.reference
-            ),
+            match &correction.source {
+                Some(time::correction::Source::Ntp(reply)) => format!(
+                    "Server:        {} ({}), stratum {}, reference {}",
+                    reply.server, reply.address, reply.stratum, reply.reference
+                ),
+                Some(time::correction::Source::Ptp(clock)) => {
+                    format!("PTP clock:     {} ({})", clock.device, clock.name)
+                }
+                None => "Source:        unknown".to_owned(),
+            },
             format!(
                 "Offset:        {:+.3} ms ({how}), round trip {:.3} ms",
                 milliseconds(correction.offset_ns),
@@ -253,10 +265,12 @@ mod tests {
             servers: vec!["pool.ntp.org".into()],
             origin: Origin::Default.into(),
             last_correction: Some(time::Correction {
-                server: "pool.ntp.org".into(),
-                address: "192.0.2.1:123".into(),
-                stratum: 2,
-                reference: "192.0.2.10".into(),
+                source: Some(time::correction::Source::Ntp(time::NtpReply {
+                    server: "pool.ntp.org".into(),
+                    address: "192.0.2.1:123".into(),
+                    stratum: 2,
+                    reference: "192.0.2.10".into(),
+                })),
                 offset_ns: -1_465_000,
                 delay_ns: 12_300_000,
                 stepped: false,
@@ -266,11 +280,13 @@ mod tests {
             }),
             error: None,
             poll_interval_seconds: 64,
+            source: time::Source::Auto.into(),
         };
         assert_eq!(
             time_lines(&time),
             [
                 "Synchronized:  yes",
+                "Source:        PTP clock, else NTP",
                 "Servers:       pool.ntp.org (default)",
                 "Corrected at:  2026-01-01T00:00:00Z",
                 "Server:        pool.ntp.org (192.0.2.1:123), stratum 2, reference 192.0.2.10",
@@ -290,11 +306,30 @@ mod tests {
             time_lines(&never),
             [
                 "Synchronized:  no",
+                "Source:        PTP clock, else NTP",
                 "Servers:       10.0.0.4 (DHCP)",
                 "Error:         0.000 ms estimated, 0.000 ms at most",
                 "Frequency:     +0.000 ppm",
                 "Last error:    10.0.0.4 (10.0.0.4:123): no reply within 2s",
             ]
         );
+        let ptp = time::Status {
+            servers: vec!["pool.ntp.org".into()],
+            origin: Origin::Default.into(),
+            source: time::Source::Ptp.into(),
+            last_correction: Some(time::Correction {
+                source: Some(time::correction::Source::Ptp(time::PtpClock {
+                    device: "/dev/ptp0".into(),
+                    name: "KVM virtual PTP".into(),
+                })),
+                offset_ns: 2_000,
+                delay_ns: 1_000,
+                ..time::Correction::default()
+            }),
+            ..time::Status::default()
+        };
+        let lines = time_lines(&ptp);
+        assert_eq!(lines[1], "Source:        PTP clock");
+        assert_eq!(lines[4], "PTP clock:     /dev/ptp0 (KVM virtual PTP)");
     }
 }

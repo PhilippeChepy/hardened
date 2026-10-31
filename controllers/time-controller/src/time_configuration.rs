@@ -5,7 +5,7 @@ use controllers_helpers::NonEmpty;
 use controllers_helpers::invalid_message;
 
 use crate::time;
-use crate::{TimeConfig, TimeOrigin, TimeServer};
+use crate::{TimeConfig, TimeOrigin, TimeServer, TimeSource};
 
 impl From<TimeOrigin> for time::Origin {
     fn from(origin: TimeOrigin) -> Self {
@@ -17,11 +17,22 @@ impl From<TimeOrigin> for time::Origin {
     }
 }
 
+impl From<TimeSource> for time::Source {
+    fn from(source: TimeSource) -> Self {
+        match source {
+            TimeSource::Auto => Self::Auto,
+            TimeSource::Ptp => Self::Ptp,
+            TimeSource::Ntp => Self::Ntp,
+        }
+    }
+}
+
 impl From<TimeConfig> for time::Configuration {
     fn from(config: TimeConfig) -> Self {
         Self {
             servers: config.servers.into_iter().map(String::from).collect(),
             origin: time::Origin::from(config.origin).into(),
+            source: time::Source::from(config.source).into(),
         }
     }
 }
@@ -42,7 +53,17 @@ impl TryFrom<time::Configuration> for TimeConfig {
                 return Err(InvalidMessage::new("origin", "must be set"));
             }
         };
-        Ok(Self { servers, origin })
+        let source = match time::Source::try_from(message.source) {
+            Ok(time::Source::Auto) => TimeSource::Auto,
+            Ok(time::Source::Ptp) => TimeSource::Ptp,
+            Ok(time::Source::Ntp) => TimeSource::Ntp,
+            Err(_) => return Err(InvalidMessage::new("source", "unknown")),
+        };
+        Ok(Self {
+            servers,
+            origin,
+            source,
+        })
     }
 }
 
@@ -52,7 +73,9 @@ mod tests {
 
     #[test]
     fn round_trips() {
-        for origin in [TimeOrigin::Settings, TimeOrigin::Dhcp, TimeOrigin::Default] {
+        let sources = [TimeSource::Auto, TimeSource::Ptp, TimeSource::Ntp];
+        let origins = [TimeOrigin::Settings, TimeOrigin::Dhcp, TimeOrigin::Default];
+        for (origin, source) in origins.into_iter().zip(sources) {
             let config = TimeConfig {
                 servers: NonEmpty::from_vec(vec![
                     "time.example.com".parse().unwrap(),
@@ -60,6 +83,7 @@ mod tests {
                 ])
                 .unwrap(),
                 origin,
+                source,
             };
             let message = time::Configuration::from(config.clone());
             assert_eq!(TimeConfig::try_from(message).unwrap(), config);
@@ -71,6 +95,7 @@ mod tests {
         let valid = time::Configuration {
             servers: vec!["time.example.com".to_owned()],
             origin: time::Origin::Dhcp.into(),
+            source: time::Source::Auto.into(),
         };
         for (message, field) in [
             (

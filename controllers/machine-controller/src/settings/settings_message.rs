@@ -2,6 +2,7 @@
 
 use kubelet_controller::kubelet;
 use machine_apiproxy::apiproxy;
+use time_controller::time;
 
 use crate::machine;
 use crate::machine::registry_credential;
@@ -64,6 +65,7 @@ impl Settings {
                 api
             }),
             storage: Some(settings.hardened.storage.into()),
+            time_source: time::Source::from(settings.hardened.time.source).into(),
         }
     }
 }

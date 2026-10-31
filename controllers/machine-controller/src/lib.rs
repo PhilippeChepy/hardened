@@ -22,6 +22,7 @@ pub use generated::hardened::machine::v1 as machine;
 pub use generated::hardened::services::v1 as services;
 pub use module_name::ModuleName;
 pub use settings::{
-    Auth, Endpoint, Error, ModuleLoad, NtpSettings, Registry, RegistrySettings, Settings, UserData,
+    Auth, Endpoint, Error, ModuleLoad, NtpSettings, Registry, RegistrySettings, Settings,
+    TimeSettings, UserData,
 };
 pub use sysctl_key::SysctlKey;

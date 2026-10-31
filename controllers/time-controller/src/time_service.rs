@@ -94,6 +94,7 @@ impl TimeController for TimeService {
 mod tests {
     use controllers_helpers::NonEmpty;
     use time_controller::TimeOrigin;
+    use time_controller::TimeSource;
 
     use super::*;
     use crate::measurement::tests::measurement;
@@ -102,6 +103,7 @@ mod tests {
         Request::new(time::Configuration {
             servers: servers.iter().map(|&s| s.to_owned()).collect(),
             origin: origin.into(),
+            source: time::Source::Ntp.into(),
         })
     }
 
@@ -132,6 +134,7 @@ mod tests {
         let config = TimeConfig {
             servers: NonEmpty::new("time.example.com".parse().unwrap()),
             origin: TimeOrigin::Settings,
+            source: TimeSource::Ntp,
         };
         let persisted = PersistedState::load(&path).unwrap().unwrap();
         assert_eq!(persisted.config, config);
