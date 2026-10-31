@@ -248,10 +248,10 @@ pub fn build_image(
     // The values a verifier expects (`hctl attest verify --expected`).
     let pcr11 = crate::pcr11::expected(&fs::read(&uki)?).context("computing PCR 11")?;
     let expected = serde_json::json!({ "sha256": { "11": pcr11.to_string() } });
-    fs::write(
-        out.join(format!("{base}.pcrs.json")),
-        serde_json::to_vec_pretty(&expected)?,
-    )?;
+    let expected = serde_json::to_vec_pretty(&expected)?;
+    fs::write(out.join(format!("{base}.pcrs.json")), &expected)?;
+    // Next to the disk, for `cargo builder test`.
+    fs::write(dir.join("pcrs.json"), &expected)?;
     fs::write(
         out.join(format!("{base}.roothash")),
         format!("{}\n", verity.roothash),

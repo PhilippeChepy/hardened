@@ -109,6 +109,18 @@ on the console, then stops the VM abruptly, as a crash would:
 | 5 | the test variant, no TPM | `/var` on a tmpfs, the partition left alone |
 | 6 | the test variant, the TPM back | the partition unlocked, the fourth boot's mark found |
 
+The first boot is also checked through the machine's API: the test builds hctl, creates a PKI in
+`build/test-pki` and adds its `[settings.hardened.api]` section to the user-data. Once the boot's
+markers are seen, hctl ([`smoke_api.rs`](../image-builder/src/smoke_api.rs)):
+
+- verifies the attestation: the EK pinned by the fingerprint `hctl attest ek` gives, the
+  attestation key proven by credential activation, the PCRs against the image's `pcrs.json`;
+- checks that containerd is ready;
+- applies a privileged workload with the host's root at `/host`, then execs into it: its exit
+  code, its standard input, the host's files readable and nowhere writable (`/host`,
+  `/host/var`, `/host/run`);
+- waits for workload-console to exit once idle, then removes the workload.
+
 The test variant is a second disk holding only an ESP whose UKI adds `hardened.test-variant=1` to
 the kernel command line: the machine runs the same root filesystem, but the TPM sees another image.
 

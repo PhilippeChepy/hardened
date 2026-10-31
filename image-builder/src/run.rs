@@ -61,6 +61,8 @@ struct Boot {
     markers: &'static [&'static str],
     /// The console lines it waits for, in any order (those of concurrent tasks).
     unordered: &'static [&'static str],
+    /// Whether the machine is then checked through its API ([`crate::smoke_api`]).
+    api: bool,
 }
 
 /// The vTPM of a boot.
@@ -77,7 +79,7 @@ enum Tpm {
 /// The boots of the smoke test (see `tests/smoke-user-data.toml`), each on the disk the previous
 /// one left. The first formats the encrypted state partition, runs the workload (which marks the
 /// partition) and sees time-controller synchronize the clock (with pool.ntp.org: the test needs the
-/// Internet, as for its image); the second unseals the key and finds the first's mark; the third
+/// Internet, as for its image), then is checked through its API; the second unseals the key and finds the first's mark; the third
 /// boots another image (PCR 11 differs), which cannot unseal the key and formats the partition
 /// again; the fourth, that image with a cleared TPM, formats it again too. The fifth has no TPM:
 /// `/var` is a tmpfs, the partition left alone, as the sixth shows by unlocking it with the TPM
@@ -93,6 +95,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["hello from a hardened workload", "INFO clock synchronized"],
+        api: true,
     },
     Boot {
         name: "second boot, same disk and TPM",
@@ -104,6 +107,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["state kept from an earlier boot"],
+        api: false,
     },
     Boot {
         name: "third boot, another image on the same disk and TPM",
@@ -116,6 +120,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["hello from a hardened workload"],
+        api: false,
     },
     Boot {
         name: "fourth boot, that image with a cleared TPM",
@@ -128,6 +133,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["hello from a hardened workload"],
+        api: false,
     },
     Boot {
         name: "fifth boot, without a TPM",
@@ -138,6 +144,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["hello from a hardened workload"],
+        api: false,
     },
     Boot {
         name: "sixth boot, the TPM back",
@@ -149,6 +156,7 @@ const SMOKE_BOOTS: &[Boot] = &[
             "serviced: boot complete",
         ],
         unordered: &["state kept from an earlier boot"],
+        api: false,
     },
 ];
 
@@ -178,19 +186,27 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
         args.target.id
     );
     let state = paths.build().join("test");
+    const API_PORT: u16 = 17443;
+    let (hctl, api_user_data) =
+        crate::smoke_api::Hctl::prepare(paths, &paths.build().join("test-pki"), API_PORT)?;
+    let user_data = paths.build().join("test-user-data.toml");
+    let smoke = fs::read_to_string(paths.root.join("tests/smoke-user-data.toml"))?;
+    fs::write(&user_data, format!("{smoke}\n{api_user_data}"))?;
+    let expected_pcrs = image.with_file_name("pcrs.json");
     for (i, boot) in SMOKE_BOOTS.iter().enumerate() {
         eprintln!("==> {}", boot.name);
         let run_args = RunArgs {
             target: args.target.clone(),
-            user_data: Some(paths.root.join("tests/smoke-user-data.toml")),
+            user_data: Some(user_data.clone()),
             disk_size: "4G".into(),
             keep_state: i > 0,
             memory_mib: 2048,
-            api_port: 17443,
+            api_port: API_PORT,
         };
         if boot.tpm == Tpm::Cleared {
             fs::remove_dir_all(state.join("tpm"))?;
         }
+        let api_checks = || crate::smoke_api::check(&hctl, &expected_pcrs);
         boot_until(
             &vm,
             &image,
@@ -198,6 +214,8 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
             &run_args,
             boot,
             Duration::from_secs(args.timeout),
+            boot.api
+                .then_some(&api_checks as &dyn Fn() -> anyhow::Result<()>),
         )
         .context(boot.name)?;
     }
@@ -206,7 +224,7 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
 }
 
 /// Boots the image (from `boot.boot_disk` if any) until the console has shown every marker, in
-/// order, then stops the VM.
+/// order, runs `then` if any, then stops the VM.
 fn boot_until(
     vm: &Image,
     image: &Path,
@@ -214,6 +232,7 @@ fn boot_until(
     run_args: &RunArgs,
     boot: &Boot,
     timeout: Duration,
+    then: Option<&dyn Fn() -> anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
     let name = format!("hardened-test-{}", process::id());
     let (container, script) = qemu_container(vm, image, boot.boot_disk, boot.tpm, state, run_args)?;
@@ -262,6 +281,8 @@ fn boot_until(
         }
         unordered.retain(|marker| !line.contains(marker));
     };
+    // The console keeps being printed meanwhile, by its thread.
+    let result = result.and_then(|()| then.map_or(Ok(()), |checks| checks()));
     // Stopped abruptly, as by a crash: what was flushed (the LUKS2 header, the filesystem's
     // journal) must be enough for the next boot.
     crate::podman::remove(&name);

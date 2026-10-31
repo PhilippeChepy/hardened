@@ -31,6 +31,7 @@ mod run;
 mod sbom;
 mod seeds;
 mod sha256;
+mod smoke_api;
 mod specs;
 mod targets;
 
