@@ -49,6 +49,9 @@ supervised like any service, its output in `/var/log/serviced/kubelet.log`. kube
 node shutdown relies on systemd, so at shutdown serviced stops kubelet, then containerd, then
 every remaining process, the pods' containers included (SIGTERM, then SIGKILL after 20 s).
 
+`/etc/machine-id`, which cAdvisor and the node's `machineID` read, is derived from the instance
+ID by machine-controller: stable for the instance's life, without revealing the ID.
+
 kubelet runs on the host, unconfined. Its configuration:
 
 - the cgroupfs driver on cgroup v2 (there is no systemd), containerd's CRI socket

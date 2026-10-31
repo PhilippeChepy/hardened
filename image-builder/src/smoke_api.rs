@@ -105,8 +105,8 @@ impl Hctl {
 }
 
 /// Checks the machine through its API: attestation against the image's expected PCRs, the PTP
-/// clock under KVM, the services, and a privileged workload's exec and read-only host root; then workload-console's
-/// exit once idle.
+/// clock under KVM, the services, the machine ID, and a privileged workload's exec and read-only
+/// host root; then workload-console's exit once idle.
 pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
     eprintln!("==> checks through the machine's API");
     hctl.wait(&["version"], Duration::from_secs(120), |_| true)
@@ -184,6 +184,13 @@ pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
     ensure!(
         String::from_utf8_lossy(&os_release.stdout).contains("hardened"),
         "the host's root is not at /host"
+    );
+    let machine_id = exec(&["cat", "/host/etc/machine-id"], "")?;
+    let machine_id = String::from_utf8_lossy(&machine_id.stdout);
+    ensure!(
+        machine_id.trim_end().len() == 32
+            && machine_id.trim_end().bytes().all(|c| c.is_ascii_hexdigit()),
+        "/etc/machine-id is not 32 hexadecimal digits: {machine_id:?}"
     );
     for path in ["/host/var/probe", "/host/run/probe", "/host/probe"] {
         let written = exec(&["touch", path], "")?;

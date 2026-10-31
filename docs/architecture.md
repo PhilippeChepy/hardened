@@ -67,7 +67,8 @@ into `/run/hardened`.
    ```text
    network-controller        DHCPv4 on every physical NIC (IPv6 uses kernel SLAAC), resolv.conf
    └─ machine-controller     the platform (DMI, or hardened.platform=), metadata and user-data;
-      │                      hostname, sysctls, kernel modules, containerd's configuration; then
+      │                      hostname, machine ID, sysctls, kernel modules, containerd's
+      │                      configuration; then
       │                      configures, in order:
       ├─ network-controller     the DNS override
       ├─ storage-controller     /var: the state partition grown, unlocked with a key
@@ -242,8 +243,8 @@ the state partition ([disk layout](#disk-layout)):
 
 ```text
 /run
-├── hardened/            resolv.conf (network-controller), hostname and hosts (machine-controller),
-│                        which /etc's links point to
+├── hardened/            resolv.conf (network-controller), hostname, hosts and machine-id
+│                        (machine-controller), which /etc's links point to
 ├── serviced/            serviced.sock, its API; services/, the runtime layer; notify/<service>,
 │                        the notify sockets; logs/, the logs of runs started before /var;
 │                        sandbox/<service>/, the sandboxes' roots
@@ -614,8 +615,8 @@ one per line, rather than inline tables (but `{}`, a step without options).
   management flow (key release).
 - **Kubernetes:** an end-to-end test of a node joining a cluster (it needs a control plane in the
   test VM); graceful shutdown per pod (serviced gives every container the same 20 s, ignoring
-  `terminationGracePeriodSeconds` and priorities); `/etc/machine-id` (absent: cAdvisor and the
-  node's `machineID` read it); a full check of static pod YAML (only its top level is checked);
+  `terminationGracePeriodSeconds` and priorities); a full check of static pod YAML (only its top
+  level is checked);
   kubelet settings Bottlerocket has and hardened not yet (among others `provider-id`,
   `server-tls-bootstrap`, `credential-providers`, `pod-pids-limit`, `container-log-*`, the CPU,
   memory and topology managers, `shutdown-grace-period*`).

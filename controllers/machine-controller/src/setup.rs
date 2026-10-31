@@ -1,6 +1,6 @@
 //! The instance's setup, before the controllers are configured: the network as network-controller
-//! configured it, the platform's metadata and user-data, then the hostname, sysctls, kernel
-//! modules and containerd's configuration. serviced has already pinned kernel files to the root
+//! configured it, the platform's metadata and user-data, then the hostname and machine ID,
+//! sysctls, kernel modules and containerd's configuration. serviced has already pinned kernel files to the root
 //! (LoadPin) and set the hardened sysctls.
 //!
 //! Nothing here fails: what cannot be done is logged and worked around.
@@ -18,6 +18,7 @@ use crate::controllers::Controllers;
 use crate::hostnames;
 use crate::hosts;
 use crate::kmod;
+use crate::machine_id::MachineId;
 use crate::machine_identity::MachineIdentity;
 use crate::metadata::Metadata;
 use crate::metadata::Platform;
@@ -62,6 +63,11 @@ pub async fn run(controllers: &Controllers) -> Setup {
         .unwrap_or_else(|| hostnames::from_instance_id(instance_id.as_deref()));
     if let Err(e) = hosts::apply(&hostname) {
         error!(%hostname, "cannot apply the hostname: {e:#}");
+    }
+    match MachineId::new(instance_id.as_deref()).and_then(MachineId::write) {
+        Ok(()) if instance_id.is_none() => warn!("no instance ID: the machine ID is this boot's"),
+        Ok(()) => {}
+        Err(e) => error!("cannot write the machine ID: {e:#}"),
     }
     info!(
         %hostname,

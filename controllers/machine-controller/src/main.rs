@@ -17,6 +17,7 @@ mod hostnames;
 mod hosts;
 mod kmod;
 mod machine_api;
+mod machine_id;
 mod machine_identity;
 mod metadata;
 mod services_api;

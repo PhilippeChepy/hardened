@@ -166,13 +166,12 @@ index: one removed loses its DHCP client and lease, one plugged in (again) gets 
 
 ### machine-controller
 
-Sets the instance up from the platform's metadata and user-data: hostname and `hosts`, kernel
-modules, sysctls, containerd's configuration. Then it configures the controllers through their
-APIs, enables the services user-data asks for, and serves the machine's API
-(`hardened.machine.v1` and `hardened.services.v1`, with `hardened.workloads.v1` and
-`hardened.attestation.v1` forwarded) from
-the controllers' and serviced's, to machine-apiproxy. Ready once the controllers are configured
-and its API serves.
+Sets the instance up from the platform's metadata and user-data: hostname, `hosts` and the
+machine ID, kernel modules, sysctls, containerd's configuration. Then it configures the
+controllers through their APIs, enables the services user-data asks for, and serves the machine's
+API (`hardened.machine.v1` and `hardened.services.v1`, with `hardened.workloads.v1` and
+`hardened.attestation.v1` forwarded) from the controllers' and serviced's, to machine-apiproxy.
+Ready once the controllers are configured and its API serves.
 
 - **Unconfined**: it loads kernel modules, sets sysctls and the hostname, and writes
   containerd's configuration.

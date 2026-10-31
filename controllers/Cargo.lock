@@ -973,6 +973,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "storage-controller",
  "tempfile",
  "thiserror",

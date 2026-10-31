@@ -31,6 +31,7 @@ symlinks.links = [
     ["etc/resolv.conf", "../run/hardened/resolv.conf"],
     ["etc/hosts", "../run/hardened/hosts"],
     ["etc/hostname", "../run/hardened/hostname"],
+    ["etc/machine-id", "../run/hardened/machine-id"],
     ["etc/os-release", "../usr/lib/os-release"],
 ]
 
