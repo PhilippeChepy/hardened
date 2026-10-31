@@ -51,6 +51,16 @@ message Kubelet {
   // How long a pod evicted on a soft threshold gets to stop, at most.
   google.protobuf.Duration eviction_max_pod_grace_period = 15;
   ImageGc image_gc = 16;
+  // How long the pods get to stop when the node shuts down; absent, serviced stops them all
+  // alike.
+  ShutdownGracePeriod shutdown_grace_period = 17;
+}
+
+// kubelet's graceful node shutdown: the whole period (at most 10 minutes; 0 or absent, off), its
+// end for the critical pods (0 when absent).
+message ShutdownGracePeriod {
+  google.protobuf.Duration total = 1;
+  google.protobuf.Duration critical_pods = 2;
 }
 
 enum CloudProvider {

@@ -262,6 +262,8 @@ Zmx1ZW50L2ZsdWVudC1iaXQ6NC4wCg==
 | `eviction-soft.<signal>` | quantity, or percentage below 100 | | A threshold below which kubelet evicts pods once it lasted its grace period; same signals as `eviction-hard` |
 | `eviction-soft-grace-period.<signal>` | duration (`1m30s`) | | How long the soft threshold must be crossed before evicting. A threshold and its grace period come together: one without the other is rejected |
 | `eviction-max-pod-grace-period` | 0 to 2147483647 (seconds) | kubelet's (`0`) | The longest a pod evicted on a soft threshold gets to stop |
+| `shutdown-grace-period` | duration, at most `10m` | `0s` | How long the node's shutdown waits for kubelet to stop its pods (with their own grace periods); `0s` turns it off, and serviced stops every container alike ([graceful shutdown](kubernetes-target.md)) |
+| `shutdown-grace-period-for-critical-pods` | duration, at most `shutdown-grace-period` | `0s` | The end of that period, kept for the critical pods (`system-cluster-critical`, `system-node-critical`) |
 | `image-gc-high-threshold-percent` | 0 to 100, a number or a string | `85` | Above it (percent of disk usage), kubelet collects images... |
 | `image-gc-low-threshold-percent` | 0 to 100, a number or a string | `80` | ...until usage is back to it. It must be below the high threshold (the default standing for one left out) |
 | `image-minimum-gc-age` | duration (`1h30m`, `90s`; h, m, s, ms in that order) | `2m` | An unused image is not collected before it |

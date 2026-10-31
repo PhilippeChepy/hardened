@@ -273,7 +273,9 @@ environment, find `iptables` and `nft`.
 
 Writes kubelet's configuration, credentials and static pods from what machine-controller gives
 it, then enables kubelet with a drop-in in the runtime layer, or keeps it disabled. Ready once
-configured.
+configured. Its `logind` socket, which only kubelet may call, answers the D-Bus calls of
+kubelet's graceful node shutdown as logind would, holding a delay lock of serviced's
+(`WatchShutdown`, hence `control` access) while kubelet holds its own.
 
 - **Unconfined**: it writes kubelet's files in `/run/kubelet` and `/var/lib/kubelet`, and its
   drop-in.
@@ -284,7 +286,8 @@ The Kubernetes node agent, enabled by kubelet-controller. Its `exec-pre` imports
 image from the root filesystem into CRI's namespace, so it is never pulled. Its runtime
 directories are its state, where network add-ons install CNI plugins (`/opt/cni/bin` links
 there) and write the CNI configuration (`/etc/cni/net.d` links there). It sends `READY=1` once
-started; `PATH` is where CNI plugins and kubelet find `mount`, `iptables` and `nft`.
+started; `PATH` is where CNI plugins and kubelet find `mount`, `iptables` and `nft`;
+`DBUS_SYSTEM_BUS_ADDRESS` is kubelet-controller's `logind` socket.
 
 - **Unconfined**: it runs the node's pods. Stopping it leaves their containers, which serviced
   stops with the remaining processes at shutdown.

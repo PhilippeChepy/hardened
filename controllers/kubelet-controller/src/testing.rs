@@ -24,6 +24,8 @@ image-gc-high-threshold-percent = 90
 image-gc-low-threshold-percent = 70
 image-minimum-gc-age = "5m"
 image-maximum-gc-age = "168h"
+shutdown-grace-period = "1m"
+shutdown-grace-period-for-critical-pods = "20s"
 
 [node-labels]
 "example.com/role" = "web"

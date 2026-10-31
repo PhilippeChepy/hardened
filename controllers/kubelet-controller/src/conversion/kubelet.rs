@@ -15,8 +15,8 @@ use crate::kubernetes;
 use crate::{
     ApiServerUrl, BootstrapToken, CloudProvider, Duration, EvictionSignal, ImageAges, ImageGc,
     KubeletConfig, LabelValue, NodeLabelKey, Percent, PodGracePeriod, PodManifest, QualifiedName,
-    Quantity, ReservedResource, SoftEviction, StaticPod, TaintEffect, TaintValue, Threshold,
-    ThresholdPercents,
+    Quantity, ReservedResource, ShutdownGracePeriod, SoftEviction, StaticPod, TaintEffect,
+    TaintValue, Threshold, ThresholdPercents,
 };
 
 impl From<ReservedResource> for kubelet::Resource {
@@ -285,6 +285,12 @@ impl From<KubeletConfig> for kubelet::Kubelet {
                 .eviction_max_pod_grace_period
                 .map(prost_types::Duration::from),
             image_gc: Some(config.image_gc.into()),
+            shutdown_grace_period: config.shutdown_grace_period.map(|period| {
+                kubelet::ShutdownGracePeriod {
+                    total: Some(period.total().into()),
+                    critical_pods: Some(period.critical_pods().into()),
+                }
+            }),
         }
     }
 }
@@ -357,8 +363,31 @@ impl TryFrom<kubelet::Kubelet> for KubeletConfig {
                 .transpose()
                 .within("image_gc")?
                 .unwrap_or_default(),
+            shutdown_grace_period: message
+                .shutdown_grace_period
+                .map(shutdown_grace_period)
+                .transpose()
+                .within("shutdown_grace_period")?
+                .flatten(),
         })
     }
+}
+
+/// Checked as `settings.kubernetes` is: absent durations are 0, a total of 0 is off.
+fn shutdown_grace_period(
+    message: kubelet::ShutdownGracePeriod,
+) -> Result<Option<ShutdownGracePeriod>, InvalidMessage> {
+    let total = message
+        .total
+        .map(Duration::try_from)
+        .transpose()
+        .field("total")?;
+    let critical_pods = message
+        .critical_pods
+        .map(Duration::try_from)
+        .transpose()
+        .field("critical_pods")?;
+    ShutdownGracePeriod::from_settings(total, critical_pods).field("total")
 }
 
 /// Inserts `value` under `key`, rejecting a key given twice.

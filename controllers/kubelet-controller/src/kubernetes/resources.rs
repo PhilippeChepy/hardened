@@ -186,7 +186,7 @@ impl Duration {
 
     /// The duration in milliseconds.
     #[must_use]
-    pub(crate) fn millis(self) -> u64 {
+    pub fn millis(self) -> u64 {
         self.0
     }
 

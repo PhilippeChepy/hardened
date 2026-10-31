@@ -87,13 +87,14 @@ into `/run/hardened`.
    enabled service has settled (ready, exited, failed, inactive or stopped).
 5. **Shutdown:** a power request comes from serviced's API (the machine API's `Reboot` and
    `Shutdown`), a signal or the ACPI power button. serviced first announces it to the holders of
-   delay locks (`WatchShutdown`) and waits, the services still running, until they release them
-   or their delay passes (at most 10 minutes). Then it stops the running services, those
-   requiring others first (each with SIGTERM, then SIGKILL after 10 s), then kills every
-   remaining process (containers: SIGTERM, then SIGKILL after 20 s). Only then does it run the
-   `exec-stop` commands of the services that ran, one at a time, the last started first:
-   storage-controller's, which unmounts `/var` and closes the encrypted partition, comes after
-   everything that used `/var` is gone. Then it calls `reboot(2)`.
+   delay locks (`WatchShutdown`: kubelet's, through kubelet-controller) and waits, the services
+   still running, until they release them or their delay passes (at most 10 minutes). Then it
+   stops the running services, those requiring others first (each with SIGTERM, then SIGKILL
+   after 10 s), then kills every remaining process (containers: SIGTERM, then SIGKILL after
+   20 s). Only then does it run the `exec-stop` commands of the services that ran, one at a
+   time, the last started first: storage-controller's, which unmounts `/var` and closes the
+   encrypted partition, comes after everything that used `/var` is gone. Then it calls
+   `reboot(2)`.
 
 A service that fails is restarted with backoff (1 s to 60 s), as its file says; services requiring
 it wait. If serviced itself fails (an error or a panic), it logs why and reboots 30 seconds later.
@@ -617,12 +618,11 @@ one per line, rather than inline tables (but `{}`, a step without options).
 - **Attestation:** SEV-SNP and TDX evidence (through configfs-tsm), and the remote-attestation
   management flow (key release).
 - **Kubernetes:** an end-to-end test of a node joining a cluster (it needs a control plane in the
-  test VM); graceful shutdown per pod (serviced gives every container the same 20 s, ignoring
-  `terminationGracePeriodSeconds` and priorities); a full check of static pod YAML (only its top
-  level is checked);
-  kubelet settings Bottlerocket has and hardened not yet (among others `provider-id`,
-  `server-tls-bootstrap`, `credential-providers`, `pod-pids-limit`, `container-log-*`, the CPU,
-  memory and topology managers, `shutdown-grace-period*`).
+  test VM); graceful shutdown by pod priority (`shutdownGracePeriodByPodPriority`: only the
+  critical and the other pods are told apart); a full check of static pod YAML (only its top
+  level is checked); kubelet settings Bottlerocket has and hardened not yet (among others
+  `provider-id`, `server-tls-bootstrap`, `credential-providers`, `pod-pids-limit`,
+  `container-log-*`, the CPU, memory and topology managers).
 - **State encryption:** off by default; bound to plain PCR 11, so an image update formats
   `/var`; no integrity protection, TPM parameter encryption or recovery key
   ([choices](state-encryption.md#choices)).

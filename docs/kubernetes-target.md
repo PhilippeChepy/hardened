@@ -45,9 +45,17 @@ Without `settings.kubernetes`, kubelet-controller keeps kubelet disabled.
 
 serviced starts kubelet once containerd is ready: kubelet's service first imports the bundled
 `pause` image (`ctr images import`), the sandbox image containerd's configuration pins. kubelet is
-supervised like any service, its output in `/var/log/serviced/kubelet.log`. kubelet's graceful
-node shutdown relies on systemd, so at shutdown serviced stops kubelet, then containerd, then
-every remaining process, the pods' containers included (SIGTERM, then SIGKILL after 20 s).
+supervised like any service, its output in `/var/log/serviced/kubelet.log`.
+
+With a `shutdown-grace-period`, kubelet stops the node's pods itself when the node shuts down:
+their `terminationGracePeriodSeconds`, preStop hooks and the critical pods last
+(`shutdown-grace-period-for-critical-pods`). Its graceful node shutdown takes a delay lock from
+logind over D-Bus; kubelet-controller answers as logind, on `/run/kubelet-controller/logind.sock`
+(kubelet's `DBUS_SYSTEM_BUS_ADDRESS`), and holds one of serviced's for as long as kubelet holds
+its own (the period plus 5 s): serviced announces the shutdown to it, kubelet is sent
+`PrepareForShutdown`, stops the pods, then releases its lock, and serviced goes on. With `0s`
+(the default, as in Bottlerocket), or past the delay, serviced stops kubelet, then containerd,
+then every remaining process, the pods' containers included (SIGTERM, then SIGKILL after 20 s).
 
 `/etc/machine-id`, which cAdvisor and the node's `machineID` read, is derived from the instance
 ID by machine-controller: stable for the instance's life, without revealing the ID.

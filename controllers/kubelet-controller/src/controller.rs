@@ -7,6 +7,7 @@ use controllers_helpers::Hostname;
 use controllers_helpers::InvalidMessage;
 use controllers_helpers::invalid_message::FieldResult;
 use controllers_helpers::invalid_message::WithinResult;
+use kubelet_controller::Duration;
 use kubelet_controller::KubeletConfig;
 use kubelet_controller::kubelet;
 use kubelet_controller::kubelet::kubelet_controller_server::KubeletController;
@@ -18,6 +19,7 @@ use libserviced::definition::Layer;
 use libserviced::definition::ServiceName;
 use libserviced::notify;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tonic::Code;
 use tonic::Request;
 use tonic::Response;
@@ -40,6 +42,8 @@ pub struct Controller {
     /// tests.
     root: PathBuf,
     state: PathBuf,
+    /// kubelet's shutdown grace period, for its logind.
+    grace_period: watch::Sender<Option<Duration>>,
 }
 
 impl Controller {
@@ -52,7 +56,24 @@ impl Controller {
             current: Mutex::new(None),
             root,
             state,
+            grace_period: watch::Sender::new(None),
         }
+    }
+
+    /// kubelet's shutdown grace period, as it changes.
+    #[must_use]
+    pub fn grace_period(&self) -> watch::Receiver<Option<Duration>> {
+        self.grace_period.subscribe()
+    }
+
+    /// Publishes the grace period kubelet runs with in `state`, before kubelet (re)starts and
+    /// reads its logind's.
+    fn publish_grace_period(&self, state: &State) {
+        let period = state
+            .kubelet
+            .as_ref()
+            .and_then(Rendered::shutdown_grace_period);
+        self.grace_period.send_replace(period);
     }
 
     /// Applies the state kept from an earlier run, if any, and then is ready. A failure is
@@ -68,6 +89,7 @@ impl Controller {
             }
         };
         let mut current = self.current.lock().await;
+        self.publish_grace_period(&state);
         match self.apply(None, &state).await {
             Ok(()) => ready(),
             Err(status) => {
@@ -135,6 +157,7 @@ impl KubeletController for Controller {
         state.save(&self.state).map_err(|error| {
             Status::internal(format!("keeping {}: {error}", self.state.display()))
         })?;
+        self.publish_grace_period(&state);
         let applied = self.apply(current.as_ref(), &state).await;
         *current = state.kubelet;
         applied?;

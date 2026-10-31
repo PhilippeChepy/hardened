@@ -13,6 +13,7 @@ use super::image_gc::{ImageAges, ImageGc, Percent, ThresholdPercents};
 use super::labels::{LabelValue, NodeLabelKey, QualifiedName};
 use super::pod_grace_period::PodGracePeriod;
 use super::resources::{Duration, EvictionSignal, Quantity, ReservedResource, Threshold};
+use super::shutdown_grace_period::ShutdownGracePeriod;
 use super::soft_eviction::SoftEviction;
 use super::static_pod::StaticPod;
 use super::taint_value::TaintValue;
@@ -59,6 +60,9 @@ pub struct KubeletConfig {
     pub eviction_max_pod_grace_period: Option<PodGracePeriod>,
     /// Image garbage collection.
     pub image_gc: ImageGc,
+    /// How long the pods get to stop when the node shuts down; without it, serviced stops them
+    /// all alike.
+    pub shutdown_grace_period: Option<ShutdownGracePeriod>,
 }
 
 /// `[settings.kubernetes]` as written: Bottlerocket's flat keys, converted from and to
@@ -99,6 +103,8 @@ struct Keys {
     image_gc_low_threshold_percent: Option<Percent>,
     image_minimum_gc_age: Option<Duration>,
     image_maximum_gc_age: Option<Duration>,
+    shutdown_grace_period: Option<Duration>,
+    shutdown_grace_period_for_critical_pods: Option<Duration>,
 }
 
 /// `cluster-dns-ip`: one address, or a list.
@@ -140,6 +146,11 @@ impl TryFrom<Keys> for KubeletConfig {
                 keys.image_minimum_gc_age,
                 keys.image_maximum_gc_age,
             )?,
+            shutdown_grace_period: ShutdownGracePeriod::from_settings(
+                keys.shutdown_grace_period,
+                keys.shutdown_grace_period_for_critical_pods,
+            )
+            .map_err(|error| error.to_string())?,
         })
     }
 }
@@ -178,6 +189,11 @@ impl From<KubeletConfig> for Keys {
             image_gc_low_threshold_percent: thresholds.map(ThresholdPercents::low),
             image_minimum_gc_age: ages.map(ImageAges::minimum),
             image_maximum_gc_age: ages.and_then(ImageAges::maximum),
+            shutdown_grace_period: config.shutdown_grace_period.map(ShutdownGracePeriod::total),
+            shutdown_grace_period_for_critical_pods: config
+                .shutdown_grace_period
+                .map(ShutdownGracePeriod::critical_pods)
+                .filter(|critical| critical.millis() > 0),
         }
     }
 }
@@ -333,6 +349,40 @@ mod tests {
             error.contains("needs its eviction-soft-grace-period"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn shutdown_grace_periods_as_kubelet_checks_them() {
+        let config = kubernetes("shutdown-grace-period = \"30s\"").unwrap();
+        let period = config.shutdown_grace_period.unwrap();
+        assert_eq!(period.total().to_string(), "30s");
+        assert_eq!(period.critical_pods().to_string(), "0s");
+        // Off, as Bottlerocket's defaults (0s) leave it.
+        for off in [
+            "",
+            "shutdown-grace-period = \"0s\"",
+            "shutdown-grace-period-for-critical-pods = \"0s\"",
+            "shutdown-grace-period = \"0s\"\nshutdown-grace-period-for-critical-pods = \"0s\"",
+        ] {
+            assert!(
+                kubernetes(off).unwrap().shutdown_grace_period.is_none(),
+                "{off:?}"
+            );
+        }
+        for (extra, why) in [
+            (
+                "shutdown-grace-period-for-critical-pods = \"10s\"",
+                "at most the shutdown grace period",
+            ),
+            (
+                "shutdown-grace-period = \"10s\"\nshutdown-grace-period-for-critical-pods = \"20s\"",
+                "at most the shutdown grace period",
+            ),
+            ("shutdown-grace-period = \"11m\"", "at most 10m"),
+        ] {
+            let error = rejected(extra);
+            assert!(error.contains(why), "{extra}: {error}");
+        }
     }
 
     #[test]

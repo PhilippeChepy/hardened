@@ -9,3 +9,8 @@ api = ["read", "control"]
 name = "api"
 path = "/run/kubelet-controller/api.sock"
 allow = ["machine-controller"]
+
+[[sockets]]
+name = "logind"
+path = "/run/kubelet-controller/logind.sock"
+allow = ["kubelet"]

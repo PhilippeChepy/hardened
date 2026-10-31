@@ -6,3 +6,4 @@ requires = ["containerd"]
 notify = true
 runtime-directories = ["/var/lib/kubelet", "/var/lib/cni/bin", "/run/cni/net.d"]
 env.PATH = "/usr/bin"
+env.DBUS_SYSTEM_BUS_ADDRESS = "unix:path=/run/kubelet-controller/logind.sock"

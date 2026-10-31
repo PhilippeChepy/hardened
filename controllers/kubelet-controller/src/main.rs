@@ -1,14 +1,18 @@
 //! kubelet-controller: writes kubelet's configuration, credentials and static pods from what
 //! machine-controller gives it, then enables kubelet's service, or keeps it disabled. It serves
-//! `KubeletController` on its activated `api` socket, and is ready once configured.
+//! `KubeletController` on its activated `api` socket, and is ready once configured; and, on its
+//! `logind` socket, the logind kubelet's graceful node shutdown needs.
 
 mod controller;
+mod dbus_message;
+mod logind;
 mod rendered;
 mod state;
 
 use std::env;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use kubelet_controller::kubelet::kubelet_controller_server::KubeletControllerServer;
@@ -22,6 +26,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::controller::Controller;
+use crate::logind::Logind;
 
 fn main() -> anyhow::Result<()> {
     let filter = env::var("RUST_LOG")
@@ -45,10 +50,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let socket = Sockets::from_env()
-        .context("taking the sockets serviced passed")?
-        .take("api")
-        .context("taking the api socket")?;
+    let mut sockets = Sockets::from_env().context("taking the sockets serviced passed")?;
+    let socket = sockets.take("api").context("taking the api socket")?;
+    let logind_socket = sockets.take("logind").context("taking the logind socket")?;
     // Volumes with `Bidirectional` or `HostToContainer` propagation (CSI drivers, Cilium's bpffs)
     // need shared host mounts; kubelet itself only shares /var/lib/kubelet.
     rustix::mount::mount_change(
@@ -68,6 +72,12 @@ async fn run() -> anyhow::Result<()> {
         PathBuf::from(state::PATH),
     );
     controller.restore().await;
+    let logind = Arc::new(Logind::new(serviced.clone(), controller.grace_period()));
+    tokio::spawn(async move {
+        if let Err(error) = logind.serve(logind_socket).await {
+            tracing::error!(%error, "no logind for kubelet: pods are not stopped gracefully");
+        }
+    });
     let router = Server::builder().add_service(KubeletControllerServer::new(controller));
     tracing::info!("serving");
     libserviced::authorization::serve(router, socket, serviced, async move {

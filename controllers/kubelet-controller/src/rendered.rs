@@ -16,8 +16,10 @@ use std::path::Path;
 use controllers_helpers::Hostname;
 use controllers_helpers::atomic_file;
 use kubelet_controller::CloudProvider;
+use kubelet_controller::Duration;
 use kubelet_controller::ImageAges;
 use kubelet_controller::KubeletConfig;
+use kubelet_controller::ShutdownGracePeriod;
 use kubelet_controller::ThresholdPercents;
 use serde::Deserialize;
 use serde::Serialize;
@@ -46,6 +48,9 @@ const CONTAINERD_SOCKET: &str = "/run/containerd/containerd.sock";
 pub struct Rendered {
     files: Vec<RenderedFile>,
     args: Vec<String>,
+    /// `shutdownGracePeriod`, which kubelet's logind must allow.
+    #[serde(default)]
+    shutdown_grace_period: Option<Duration>,
 }
 
 /// A file kubelet reads.
@@ -82,6 +87,12 @@ impl Rendered {
     #[must_use]
     pub fn args(&self) -> &[String] {
         &self.args
+    }
+
+    /// kubelet's `shutdownGracePeriod`, if it has one.
+    #[must_use]
+    pub fn shutdown_grace_period(&self) -> Option<Duration> {
+        self.shutdown_grace_period
     }
 
     /// Writes the files below `root` (`/` but in tests), and removes the manifests of static
@@ -159,7 +170,11 @@ pub fn render(config: &KubeletConfig, node_name: &Hostname) -> Rendered {
     if let Some(CloudProvider::External) = config.cloud_provider {
         args.push("--cloud-provider=external".into());
     }
-    Rendered { files, args }
+    Rendered {
+        files,
+        args,
+        shutdown_grace_period: config.shutdown_grace_period.map(ShutdownGracePeriod::total),
+    }
 }
 
 /// kubelet's `KubeletConfiguration`, in JSON (which it reads as YAML).
@@ -225,6 +240,18 @@ fn kubelet_configuration(config: &KubeletConfig) -> String {
         (
             "imageMaximumGCAge",
             json!(ages.and_then(ImageAges::maximum)),
+        ),
+        (
+            "shutdownGracePeriod",
+            json!(config.shutdown_grace_period.map(ShutdownGracePeriod::total)),
+        ),
+        (
+            "shutdownGracePeriodCriticalPods",
+            json!(
+                config
+                    .shutdown_grace_period
+                    .map(ShutdownGracePeriod::critical_pods)
+            ),
         ),
     ];
     // Left out (absent or empty), kubelet's defaults apply.
@@ -396,6 +423,8 @@ image-gc-high-threshold-percent = 90
 image-gc-low-threshold-percent = 70
 image-minimum-gc-age = "5m"
 image-maximum-gc-age = "168h"
+shutdown-grace-period = "45s"
+shutdown-grace-period-for-critical-pods = "15s"
 
 [node-labels]
 "node.kubernetes.io/pool" = "blue"
@@ -463,6 +492,14 @@ pid = "1000"
         assert_eq!(configuration["imageGCLowThresholdPercent"], 70);
         assert_eq!(configuration["imageMinimumGCAge"], "5m");
         assert_eq!(configuration["imageMaximumGCAge"], "168h");
+        assert_eq!(configuration["shutdownGracePeriod"], "45s");
+        assert_eq!(configuration["shutdownGracePeriodCriticalPods"], "15s");
+        assert_eq!(
+            rendered
+                .shutdown_grace_period()
+                .map(|period| period.to_string()),
+            Some("45s".to_owned())
+        );
         assert_eq!(
             file(&rendered, "/var/lib/kubelet/manifests/web.yaml"),
             (POD, true)

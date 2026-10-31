@@ -24,7 +24,7 @@ pub use generated::hardened::kubelet::v1 as kubelet;
 pub use kubernetes::{
     ApiServerUrl, BootstrapToken, CloudProvider, Duration, EvictionSignal, ImageAges, ImageGc,
     KubeletConfig, LabelValue, NodeLabelKey, Percent, PodGracePeriod, PodManifest, QualifiedName,
-    Quantity, ReservedResource, SoftEviction, StaticPod, TaintEffect, TaintValue, Threshold,
-    ThresholdPercents,
+    Quantity, ReservedResource, ShutdownGracePeriod, SoftEviction, StaticPod, TaintEffect,
+    TaintValue, Threshold, ThresholdPercents,
 };
 pub use socket::SOCKET;
