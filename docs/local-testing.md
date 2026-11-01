@@ -94,8 +94,8 @@ cargo builder test --target kubernetes-1-37
 ```
 
 `test` builds the image (skip it with `--no-build` to reuse the last one) and a test variant of
-it, then boots the VM six times, headless, on the same disk, with
-[tests/smoke-user-data.toml](../tests/smoke-user-data.toml). That user-data encrypts the state
+it, then boots the VM six times (seven for targets shipping kubelet), headless, on the same disk,
+with [tests/smoke-user-data.toml](../tests/smoke-user-data.toml). That user-data encrypts the state
 partition with the TPM and runs a short-lived workload that prints to the console, says when it
 finds a mark an earlier boot left on `/var`, and leaves its own. Each boot waits for its markers
 on the console, then stops the VM abruptly, as a crash would:
@@ -108,6 +108,7 @@ on the console, then stops the VM abruptly, as a crash would:
 | 4 | the test variant, a cleared TPM | the TPM cannot unseal the key: formatted again |
 | 5 | the test variant, no TPM | `/var` on a tmpfs, the partition left alone |
 | 6 | the test variant, the TPM back | the partition unlocked, the fourth boot's mark found |
+| 7 (targets shipping kubelet) | the image, same TPM | kubelet runs a probe pod and takes its shutdown delay lock; after a reboot through the API, the pod is stopped and kubelet releases its lock before serviced stops the services |
 
 The first boot is also checked through the machine's API: the test builds hctl, creates a PKI in
 `build/test-pki` and adds its `[settings.hardened.api]` section to the user-data. Once the boot's
@@ -120,6 +121,15 @@ markers are seen, hctl ([`smoke_api.rs`](../image-builder/src/smoke_api.rs)):
   code, its standard input, the host's files readable and nowhere writable (`/host`,
   `/host/var`, `/host/run`);
 - waits for workload-console to exit once idle, then removes the workload.
+
+The seventh boot adds [tests/smoke-kubernetes-user-data.toml](../tests/smoke-kubernetes-user-data.toml)
+to the user-data: a cluster whose API server does not exist (kubelet runs its static pods
+without), a 30 s shutdown grace period, and the
+[probe pod](../tests/smoke-kubelet-probe.yaml), privileged to write to the kernel's log so that
+the console shows it running, then told to stop. Once kubelet holds its lock, the test reboots the
+machine with hctl and waits for, in order: kubelet-controller relaying serviced's announcement,
+the pod's SIGTERM and its exit, kubelet releasing its lock, and serviced going on with the
+shutdown.
 
 The test variant is a second disk holding only an ESP whose UKI adds `hardened.test-variant=1` to
 the kernel command line: the machine runs the same root filesystem, but the TPM sees another image.

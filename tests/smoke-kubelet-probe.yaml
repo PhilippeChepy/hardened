@@ -1,0 +1,23 @@
+# The kubelet boot's static pod: on the host's network (there is no CNI plugin) and privileged,
+# to write to the kernel's log, which the serial console shows. It stops within its grace period
+# once told to.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe
+spec:
+  hostNetwork: true
+  terminationGracePeriodSeconds: 15
+  containers:
+    - name: probe
+      image: public.ecr.aws/docker/library/busybox:1.37
+      securityContext:
+        privileged: true
+      command:
+        - sh
+        - -c
+        - |
+          say() { echo "$1" > /dev/kmsg; }
+          trap 'say "kubelet probe got SIGTERM"; sleep 2; say "kubelet probe stopped"; exit 0' TERM
+          say "kubelet probe running"
+          while true; do sleep 1; done

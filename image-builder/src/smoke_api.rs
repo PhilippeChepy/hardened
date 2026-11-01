@@ -216,3 +216,12 @@ pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
     eprintln!("==> the API's checks passed");
     Ok(())
 }
+
+/// Reboots the machine through its API, once it answers.
+pub fn reboot(hctl: &Hctl) -> anyhow::Result<()> {
+    hctl.wait(&["version"], Duration::from_secs(120), |_| true)
+        .context("the API does not answer")?;
+    eprintln!("==> rebooting through the machine's API");
+    hctl.succeed(&["reboot"])?;
+    Ok(())
+}

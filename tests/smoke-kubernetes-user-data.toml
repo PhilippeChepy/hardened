@@ -1,0 +1,15 @@
+# Added to the smoke user-data for the kubelet boot of targets shipping kubelet: a cluster whose
+# API server does not exist (192.0.2.1 is reserved for documentation), which kubelet runs its
+# static pods without, and a graceful shutdown. The test's PKI CA stands for the cluster's; the
+# probe pod (tests/smoke-kubelet-probe.yaml) prints to the console when it runs and when it is
+# stopped. The test fills in both.
+
+[settings.kubernetes]
+api-server = "https://192.0.2.1:6443"
+cluster-certificate = "{cluster-certificate}"
+bootstrap-token = "abcdef.0123456789abcdef"
+shutdown-grace-period = "30s"
+shutdown-grace-period-for-critical-pods = "10s"
+
+[settings.kubernetes.static-pods.probe]
+manifest = "{probe}"

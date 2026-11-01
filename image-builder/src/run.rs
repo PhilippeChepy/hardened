@@ -10,6 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, ensure};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::build::Options;
 use crate::pipeline::Pipeline;
@@ -64,6 +66,29 @@ struct Boot {
     /// Whether the machine is then checked through its API ([`crate::smoke_api`]).
     api: bool,
 }
+
+/// The boot of targets shipping kubelet, on the disk the others left: kubelet, with an API server
+/// that does not exist, runs the probe pod and takes its shutdown delay lock; the machine is
+/// rebooted through its API, and serviced waits for kubelet to stop the pod and release its lock
+/// before stopping the services.
+const KUBELET_BOOT: Boot = Boot {
+    name: "kubelet's graceful shutdown",
+    boot_disk: None,
+    tpm: Tpm::Kept,
+    markers: &["shutdown delay lock taken who=\"kubelet\""],
+    unordered: &["kubelet probe running"],
+    api: false,
+};
+
+/// What the kubelet boot then sees on the console, in order, once the reboot is asked for: a
+/// lock still held when its delay ran out would log "delay locks still held" instead of the last.
+const KUBELET_SHUTDOWN: &[&str] = &[
+    "serviced announced a shutdown, kubelet is told",
+    "kubelet probe got SIGTERM",
+    "kubelet probe stopped",
+    "shutdown delay lock released who=\"kubelet\"",
+    "delay locks released",
+];
 
 /// The vTPM of a boot.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -214,17 +239,76 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
             &run_args,
             boot,
             Duration::from_secs(args.timeout),
-            boot.api
-                .then_some(&api_checks as &dyn Fn() -> anyhow::Result<()>),
+            boot.api.then_some(Then {
+                checks: &api_checks,
+                markers: &[],
+            }),
         )
         .context(boot.name)?;
+    }
+    if paths
+        .targets()
+        .join(&args.target.id)
+        .join("components/kubelet")
+        .exists()
+    {
+        eprintln!("==> {}", KUBELET_BOOT.name);
+        let kubelet_user_data = paths.build().join("test-user-data-kubelet.toml");
+        let kubernetes = kubernetes_user_data(paths)?;
+        fs::write(
+            &kubelet_user_data,
+            format!("{smoke}\n{api_user_data}\n{kubernetes}"),
+        )?;
+        let run_args = RunArgs {
+            target: args.target.clone(),
+            user_data: Some(kubelet_user_data),
+            disk_size: "4G".into(),
+            keep_state: true,
+            memory_mib: 2048,
+            api_port: API_PORT,
+        };
+        let reboot = || crate::smoke_api::reboot(&hctl);
+        boot_until(
+            &vm,
+            &image,
+            &state,
+            &run_args,
+            &KUBELET_BOOT,
+            Duration::from_secs(args.timeout),
+            Some(Then {
+                checks: &reboot,
+                markers: KUBELET_SHUTDOWN,
+            }),
+        )
+        .context(KUBELET_BOOT.name)?;
     }
     eprintln!("==> smoke test passed");
     Ok(())
 }
 
+/// `tests/smoke-kubernetes-user-data.toml`, with the test PKI's CA as the cluster's and the probe
+/// pod's manifest, both in base64.
+fn kubernetes_user_data(paths: &Paths) -> anyhow::Result<String> {
+    let tests = paths.root.join("tests");
+    let template = fs::read_to_string(tests.join("smoke-kubernetes-user-data.toml"))?;
+    let ca = fs::read(paths.build().join("test-pki/ca.pem")).context("the test PKI's CA")?;
+    let probe = fs::read(tests.join("smoke-kubelet-probe.yaml"))?;
+    Ok(template
+        .replace("{cluster-certificate}", &STANDARD.encode(ca))
+        .replace("{probe}", &STANDARD.encode(probe)))
+}
+
+/// What a boot does once its markers are shown.
+struct Then<'a> {
+    /// Checks, or actions such as a reboot.
+    checks: &'a dyn Fn() -> anyhow::Result<()>,
+    /// The console lines then waited for, in order.
+    markers: &'a [&'a str],
+}
+
 /// Boots the image (from `boot.boot_disk` if any) until the console has shown every marker, in
-/// order, runs `then` if any, then stops the VM.
+/// order, runs `then`'s checks if any and waits for the markers that follow them, in order, then
+/// stops the VM.
 fn boot_until(
     vm: &Image,
     image: &Path,
@@ -232,7 +316,7 @@ fn boot_until(
     run_args: &RunArgs,
     boot: &Boot,
     timeout: Duration,
-    then: Option<&dyn Fn() -> anyhow::Result<()>>,
+    then: Option<Then<'_>>,
 ) -> anyhow::Result<()> {
     let name = format!("hardened-test-{}", process::id());
     let (container, script) = qemu_container(vm, image, boot.boot_disk, boot.tpm, state, run_args)?;
@@ -254,12 +338,36 @@ fn boot_until(
     });
 
     let deadline = Instant::now() + timeout;
-    let mut pending = boot.markers.iter().peekable();
-    let mut unordered: Vec<&str> = boot.unordered.to_vec();
-    let result = loop {
+    let result = wait_for(&rx, deadline, boot.markers, boot.unordered).and_then(|()| {
+        // The console keeps being printed meanwhile, by its thread.
+        let Some(then) = then else {
+            return Ok(());
+        };
+        (then.checks)()?;
+        wait_for(&rx, deadline, then.markers, &[])
+    });
+    // Stopped abruptly, as by a crash: what was flushed (the LUKS2 header, the filesystem's
+    // journal) must be enough for the next boot.
+    crate::podman::remove(&name);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+/// Reads the console's lines from `rx` until it has shown `markers`, in order, and `unordered`,
+/// before `deadline`.
+fn wait_for(
+    rx: &mpsc::Receiver<String>,
+    deadline: Instant,
+    markers: &[&str],
+    unordered: &[&str],
+) -> anyhow::Result<()> {
+    let mut pending = markers.iter().peekable();
+    let mut unordered: Vec<&str> = unordered.to_vec();
+    loop {
         let next = pending.peek();
         if next.is_none() && unordered.is_empty() {
-            break Ok(());
+            return Ok(());
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         let line = match rx.recv_timeout(remaining) {
@@ -270,25 +378,17 @@ fn boot_until(
                     .into_iter()
                     .chain(unordered)
                     .collect();
-                break Err(anyhow!("timed out waiting for {waited:?}"));
+                return Err(anyhow!("timed out waiting for {waited:?}"));
             }
         };
         if line.contains("Kernel panic") {
-            break Err(anyhow!("kernel panic"));
+            return Err(anyhow!("kernel panic"));
         }
         if next.is_some_and(|marker| line.contains(*marker)) {
             pending.next();
         }
         unordered.retain(|marker| !line.contains(marker));
-    };
-    // The console keeps being printed meanwhile, by its thread.
-    let result = result.and_then(|()| then.map_or(Ok(()), |checks| checks()));
-    // Stopped abruptly, as by a crash: what was flushed (the LUKS2 header, the filesystem's
-    // journal) must be enough for the next boot.
-    crate::podman::remove(&name);
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+    }
 }
 
 fn latest_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<PathBuf> {
