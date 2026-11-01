@@ -100,6 +100,20 @@ mod tests {
                     ),
                     (name("time-controller"), service(r#"["read"]"#)),
                     (name("web"), service("[]")),
+                    (
+                        name("getty"),
+                        service(&format!(
+                            "[\"read\", \"control\"]\napi-users = [{}]",
+                            rustix::process::getuid().as_raw()
+                        )),
+                    ),
+                    (
+                        name("getty-other"),
+                        service(&format!(
+                            "[\"read\", \"control\"]\napi-users = [{}]",
+                            rustix::process::getuid().as_raw() + 1
+                        )),
+                    ),
                 ]))
                 .await;
             let serviced_log = Arc::new(LogBuffer::new(100, 1 << 20));
@@ -189,13 +203,22 @@ mod tests {
             .iter()
             .map(|service| service.name.as_str())
             .collect();
-        assert_eq!(names, ["machine-controller", "time-controller", "web"]);
-        assert_eq!(services[0].state(), api::State::Ready);
         assert_eq!(
-            services[0].layers().collect::<Vec<_>>(),
+            names,
+            [
+                "getty",
+                "getty-other",
+                "machine-controller",
+                "time-controller",
+                "web"
+            ]
+        );
+        assert_eq!(services[2].state(), api::State::Ready);
+        assert_eq!(
+            services[2].layers().collect::<Vec<_>>(),
             [api::Layer::Image]
         );
-        assert!(services[0].definition.contains("exec = [\"/usr/bin/x\"]"));
+        assert!(services[2].definition.contains("exec = [\"/usr/bin/x\"]"));
 
         let refused = [
             ntp.restart(service_ref("web")).await.unwrap_err(),
@@ -251,6 +274,26 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), api.shutdown_locks.released())
             .await
             .expect("released once the stream is closed");
+    }
+
+    #[tokio::test]
+    async fn api_users_limit_a_grant_to_their_processes() {
+        let api = Api::start().await;
+        let mut mine = api.client(Some("getty")).await;
+        mine.restart(service_ref("web")).await.unwrap();
+        let mut other = api.client(Some("getty-other")).await;
+        for status in [
+            other.restart(service_ref("web")).await.unwrap_err(),
+            other.list_services(()).await.unwrap_err(),
+        ] {
+            assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+        }
+        let identified = other
+            .identify_process(api::ProcessRef { pid: KUBELET_PID })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(identified.name, "kubelet", "IdentifyProcess needs no grant");
     }
 
     #[tokio::test]

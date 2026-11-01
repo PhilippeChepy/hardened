@@ -137,6 +137,7 @@ fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Result<Service, 
         runtime_directories,
         console: workload.console,
         api: Vec::new(),
+        api_users: Vec::new(),
         sandbox: None,
         meta,
     })

@@ -43,6 +43,8 @@ pub enum Caller {
     Unknown,
     Process {
         pid: u32,
+        /// Its user, when known.
+        uid: Option<u32>,
         /// The service it belongs to; `None` for any other process, refused.
         service: Option<ServiceName>,
     },
@@ -52,17 +54,26 @@ impl Caller {
     /// The peer of `stream`, found by its credentials (`SO_PEERCRED`) and `resolve`.
     #[must_use]
     pub fn of(stream: &UnixStream, resolve: &Resolver) -> Self {
-        let pid = stream
-            .peer_cred()
-            .ok()
+        let credentials = stream.peer_cred().ok();
+        let pid = (credentials.as_ref())
             .and_then(|credentials| credentials.pid())
             .and_then(|pid| u32::try_from(pid).ok());
         match pid {
             Some(pid) => Self::Process {
                 pid,
+                uid: credentials.map(|credentials| credentials.uid()),
                 service: resolve(pid),
             },
             None => Self::Unknown,
+        }
+    }
+
+    /// Its user, if known.
+    #[must_use]
+    pub fn uid(&self) -> Option<u32> {
+        match self {
+            Self::Process { uid, .. } => *uid,
+            Self::Unknown => None,
         }
     }
 
@@ -82,8 +93,11 @@ impl Display for Caller {
             Self::Process {
                 pid,
                 service: Some(service),
+                ..
             } => write!(f, "{service} (pid {pid})"),
-            Self::Process { pid, service: None } => write!(f, "pid {pid}, of no service"),
+            Self::Process {
+                pid, service: None, ..
+            } => write!(f, "pid {pid}, of no service"),
             Self::Unknown => f.write_str("unknown process"),
         }
     }

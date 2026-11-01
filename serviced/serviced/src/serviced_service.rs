@@ -52,7 +52,7 @@ impl ServicedService {
             .unwrap_or(&Caller::Unknown);
         let access = method.access();
         match caller.service() {
-            Some(service) if self.overview.grants(service, access).await => {
+            Some(service) if self.overview.grants(service, access, caller.uid()).await => {
                 // What changes something; reads would flood the log.
                 if access == Some(Access::Control) {
                     info!(caller = %caller, ?method, "API call");

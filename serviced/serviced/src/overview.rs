@@ -43,11 +43,22 @@ impl Overview {
         self.services.read().await.get(name).cloned()
     }
 
-    /// Whether service `name` exists and its `api` grants `access` (`None`: whatever it grants).
+    /// Whether service `name` exists and its `api` grants `access` to its processes of user `uid`
+    /// (its `api-users`, when it lists some); `None` needs no grant, only the service.
     #[must_use]
-    pub async fn grants(&self, name: &ServiceName, access: Option<Access>) -> bool {
+    pub async fn grants(
+        &self,
+        name: &ServiceName,
+        access: Option<Access>,
+        uid: Option<u32>,
+    ) -> bool {
         self.services.read().await.get(name).is_some_and(|service| {
-            access.is_none_or(|access| service.definition.api.contains(&access))
+            let definition = &service.definition;
+            access.is_none_or(|access| {
+                definition.api.contains(&access)
+                    && (definition.api_users.is_empty()
+                        || uid.is_some_and(|uid| definition.api_users.contains(&uid)))
+            })
         })
     }
 }

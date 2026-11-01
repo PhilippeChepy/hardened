@@ -97,6 +97,10 @@ their cgroup:
 enabled services whose condition holds exist then, and those of the others are gone. It answers
 which files or services it left out, and why.
 
+`api-users` (uids) limits a service's `api` to its processes running as those users: a login
+service (a getty) can grant serviced's API to root's sessions (`servicectl`), not to every user
+logging in through it.
+
 `IdentifyProcess` is open to every service.
 
 ### Sandbox

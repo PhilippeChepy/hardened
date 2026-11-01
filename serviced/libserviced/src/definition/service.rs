@@ -65,6 +65,11 @@ pub struct Service {
     /// What the service may do through serviced's API, besides `IdentifyProcess`, open to all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api: Vec<Access>,
+    /// The users (uids) of the service's processes `api` is granted to; all of them when empty.
+    /// A login service grants serviced's API to the sessions of root alone, not to every user
+    /// logging in through it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_users: Vec<u32>,
     /// Confinement; without it, the program runs as root, in the host's namespaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<Sandbox>,
@@ -177,6 +182,8 @@ mod tests {
         let text = r#"
 exec = ["/usr/bin/x", "--flag"]
 exec-post = [["-/usr/bin/ctr", "rm"]]
+api = ["read", "control"]
+api-users = [0]
 runtime-directories = ["/run/x"]
 condition.path-exists = "/dev/tpmrm0"
 
