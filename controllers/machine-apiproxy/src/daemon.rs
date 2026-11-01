@@ -36,11 +36,14 @@ pub async fn run() -> anyhow::Result<()> {
     match state::load(path) {
         Ok(Some(config)) => {
             if let Err(e) = listener.apply(config).await {
-                tracing::error!("cannot serve with the configuration kept: {e:#}");
+                tracing::error!(
+                    error = format!("{e:#}"),
+                    "cannot serve with the configuration kept"
+                );
             }
         }
         Ok(None) => {}
-        Err(e) => tracing::warn!("ignoring the configuration kept: {e:#}"),
+        Err(e) => tracing::warn!(error = format!("{e:#}"), "ignoring the configuration kept"),
     }
 
     let mut terminate = unix::signal(SignalKind::terminate()).context("handling SIGTERM")?;

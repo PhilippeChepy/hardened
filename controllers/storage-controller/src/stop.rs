@@ -29,9 +29,9 @@ pub fn run() -> anyhow::Result<()> {
         match rustix::mount::unmount(&target, UnmountFlags::empty()) {
             Ok(()) => info!(path = %target.display(), "unmounted"),
             Err(e) => {
-                warn!(path = %target.display(), "cannot unmount: {e}; detaching it");
+                warn!(path = %target.display(), error = %e, "cannot unmount, detaching it");
                 if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::DETACH) {
-                    warn!(path = %target.display(), "cannot detach: {e}");
+                    warn!(path = %target.display(), error = %e, "cannot detach");
                 }
             }
         }
@@ -56,7 +56,10 @@ fn forget_backing(path: &Path) {
         _ => Ok(()),
     });
     if let Err(e) = forgotten {
-        warn!("cannot record that /var is no longer set up: {e:#}");
+        warn!(
+            error = format!("{e:#}"),
+            "cannot record that /var is no longer set up"
+        );
     }
 }
 

@@ -37,7 +37,7 @@ pub async fn serve(listener: UnixListener, service: ServicedService) {
         .serve_with_incoming(incoming)
         .await;
     if let Err(e) = served {
-        error!("serviced's API stopped: {e}");
+        error!(error = %e, "serviced's API stopped");
     }
 }
 

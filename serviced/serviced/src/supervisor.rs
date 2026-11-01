@@ -193,7 +193,7 @@ impl Supervisor {
         let errors: Vec<String> = errors.iter().map(ToString::to_string).collect();
         if errors != self.load_errors {
             for e in &errors {
-                error!("invalid service, left out: {e}");
+                error!(error = %e, "invalid service, left out");
             }
             self.load_errors = errors;
         }
@@ -231,7 +231,11 @@ impl Supervisor {
                 && !self.sockets.contains_key(name)
                 && let Err(e) = self.bind(name, service)
             {
-                error!(service = %name, "cannot listen on the service's sockets: {e:#}");
+                error!(
+                    service = %name,
+                    error = format!("{e:#}"),
+                    "cannot listen on the service's sockets"
+                );
             }
         }
     }
@@ -339,7 +343,9 @@ impl Supervisor {
                 Ok(watch) => {
                     self.watches.insert(service, watch);
                 }
-                Err(e) => warn!(service = %service, "cannot watch the service's sockets: {e}"),
+                Err(e) => {
+                    warn!(service = %service, error = %e, "cannot watch the service's sockets")
+                }
             }
         }
     }

@@ -128,7 +128,7 @@ async fn wait_for_interfaces(
             Ok(LinkEvent::Lost) => true,
             Ok(_) => false,
             Err(err) => {
-                tracing::error!("link events: {err}");
+                tracing::error!(error = %err, "link events");
                 // Until the caller's timeout.
                 return future::pending().await;
             }
@@ -149,7 +149,7 @@ async fn physical_links(netlink: &Netlink, sysfs: &Path) -> Vec<LinkState> {
             links
         }
         Err(err) => {
-            tracing::warn!("listing the links: {err}");
+            tracing::warn!(error = %err, "listing the links");
             Vec::new()
         }
     }
@@ -164,12 +164,14 @@ async fn watch_interfaces(mut interfaces: Interfaces, netlink: Netlink, mut even
             Ok(LinkEvent::Lost) => match netlink.links().await {
                 Ok(links) => interfaces.reconcile(&links),
                 Err(err) => {
-                    tracing::warn!("listing the links: {err}");
+                    tracing::warn!(error = %err, "listing the links");
                     continue;
                 }
             },
             Ok(event) => interfaces.changes(&event),
-            Err(err) => return tracing::error!("link events: {err}, no longer watching"),
+            Err(err) => {
+                return tracing::error!(error = %err, "link events failed, no longer watching");
+            }
         };
         interfaces.apply(&netlink, changes).await;
     }

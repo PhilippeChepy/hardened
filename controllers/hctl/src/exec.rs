@@ -7,7 +7,8 @@ use std::thread;
 use anyhow::Context as _;
 use clap::Args;
 use rustix::termios::{OptionalActions, Termios};
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix;
+use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
@@ -66,7 +67,7 @@ pub async fn run(channel: Channel, args: ExecArgs) -> anyhow::Result<ExitCode> {
     }
     if args.tty {
         let requests = requests.clone();
-        let mut resized = signal(SignalKind::window_change()).context("handling SIGWINCH")?;
+        let mut resized = unix::signal(SignalKind::window_change()).context("handling SIGWINCH")?;
         tokio::spawn(async move {
             while resized.recv().await.is_some() {
                 let resize = input(exec_input::Input::Resize(terminal_size()));

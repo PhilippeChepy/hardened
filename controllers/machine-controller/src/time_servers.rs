@@ -27,7 +27,7 @@ pub fn choose(settings: &Settings, dhcp: &[String]) -> TimeConfig {
         .filter_map(|server| match server.parse() {
             Ok(server) => Some(server),
             Err(e) => {
-                warn!(server, "ignoring a time server of DHCP: {e}");
+                warn!(server, error = %e, "ignoring a time server of DHCP");
                 None
             }
         })

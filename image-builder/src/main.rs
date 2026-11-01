@@ -20,6 +20,7 @@ mod keys;
 mod kspp;
 mod oci;
 mod patch;
+mod paths;
 mod pcr11;
 mod pipeline;
 mod podman;
@@ -33,12 +34,13 @@ mod seeds;
 mod sha256;
 mod smoke_api;
 mod specs;
+mod target_arg;
 mod targets;
 
-use std::path::PathBuf;
-
-use anyhow::Context;
 use clap::{Parser, Subcommand};
+
+pub use paths::Paths;
+pub use target_arg::TargetArg;
 
 /// Timestamp of every reproducible output (file mtimes, kernel build date...): 2026-01-01.
 ///
@@ -79,84 +81,6 @@ enum Command {
     Run(run::RunArgs),
     /// Builds the image, boots it headless and waits for the smoke-test markers.
     Test(run::TestArgs),
-}
-
-/// The target an image command works on.
-#[derive(Debug, Clone, clap::Args)]
-pub struct TargetArg {
-    /// A target of specs/targets/.
-    #[arg(long = "target", default_value = "standard")]
-    pub id: String,
-}
-
-/// Well-known locations, relative to the repository root.
-#[derive(Debug, Clone)]
-pub struct Paths {
-    pub root: PathBuf,
-}
-
-impl Paths {
-    pub fn discover() -> anyhow::Result<Self> {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest_dir
-            .ancestors()
-            .nth(1)
-            .context("image-builder must live at the root of the repository")?
-            .to_path_buf();
-        Ok(Self { root })
-    }
-
-    /// The build's specifications: `components/` (the recipes) and `targets/`.
-    pub fn specs(&self) -> PathBuf {
-        self.root.join("specs")
-    }
-    pub fn targets(&self) -> PathBuf {
-        self.specs().join("targets")
-    }
-    pub fn build(&self) -> PathBuf {
-        self.root.join("build")
-    }
-    pub fn sources(&self) -> PathBuf {
-        self.build().join("cache/sources")
-    }
-    pub fn cache(&self) -> PathBuf {
-        self.build().join("cache")
-    }
-    pub fn outputs(&self) -> PathBuf {
-        self.build().join("components")
-    }
-    pub fn work(&self) -> PathBuf {
-        self.build().join("work")
-    }
-    /// Where the image of `target` is assembled.
-    pub fn image(&self, target: &str) -> PathBuf {
-        self.build().join("image").join(target)
-    }
-    pub fn out(&self) -> PathBuf {
-        self.build().join("out")
-    }
-    /// Build logs: one per component and per environment, overwritten by each build.
-    pub fn logs(&self) -> PathBuf {
-        self.build().join("logs")
-    }
-    pub fn keys(&self) -> PathBuf {
-        self.build().join("keys")
-    }
-
-    /// Takes the exclusive lock on `build/`, held until the returned file is dropped: two
-    /// builders would delete each other's work directories.
-    fn lock(&self) -> anyhow::Result<std::fs::File> {
-        std::fs::create_dir_all(self.build())?;
-        let path = self.build().join(".lock");
-        let file = std::fs::File::create(&path).with_context(|| path.display().to_string())?;
-        match file.try_lock() {
-            Ok(()) => Ok(file),
-            Err(std::fs::TryLockError::WouldBlock) => {
-                anyhow::bail!("another image-builder is using {}", self.build().display())
-            }
-            Err(std::fs::TryLockError::Error(e)) => Err(e).context(path.display().to_string()),
-        }
-    }
 }
 
 fn main() -> anyhow::Result<()> {

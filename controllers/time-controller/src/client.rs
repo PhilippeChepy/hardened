@@ -17,7 +17,6 @@ use tokio::net::UdpSocket;
 use crate::clock;
 use crate::clock::Correction;
 use crate::clock::MIN_POLL;
-use crate::clock::now;
 use crate::measurement::Measurement;
 use crate::measurement::Source;
 use crate::packet;
@@ -212,7 +211,7 @@ impl Client {
                 .try_into()
                 .unwrap_or(Nanos::MAX),
             stepped: matches!(correction, Correction::Step(_)),
-            at_unix_ns: now(),
+            at_unix_ns: clock::now(),
         })
     }
 }
@@ -267,14 +266,14 @@ async fn exchange(address: SocketAddr) -> Result<(Reply, Sample), Failure> {
     let mut cookie = [0; 8];
     rustix::rand::getrandom(&mut cookie, GetRandomFlags::empty()).map_err(io::Error::from)?;
 
-    let sent = now();
+    let sent = clock::now();
     socket.send(&packet::request(cookie)).await?;
     let mut buffer = [0; 1024];
     loop {
         // The task resumes when the reply is readable and receives it at once: the time is
         // taken right after.
         let length = socket.recv(&mut buffer).await?;
-        let received = now();
+        let received = clock::now();
         match Reply::parse(&buffer[..length], cookie) {
             Ok(reply) => {
                 let sample = Sample::new(&reply, sent, received);
@@ -303,7 +302,7 @@ mod tests {
             reply[0] = (4 << 3) | 4;
             reply[1] = 2;
             reply[24..32].copy_from_slice(&buffer[40..48]);
-            let at = packet::tests::timestamp(now());
+            let at = packet::tests::timestamp(clock::now());
             reply[32..40].copy_from_slice(&at);
             reply[40..48].copy_from_slice(&at);
             socket.send_to(&reply, peer).await.unwrap();

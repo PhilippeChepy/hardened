@@ -103,12 +103,12 @@ enum Tpm {
 
 /// The boots of the smoke test (see `tests/smoke-user-data.toml`), each on the disk the previous
 /// one left. The first formats the encrypted state partition, runs the workload (which marks the
-/// partition) and sees time-controller synchronize the clock (with pool.ntp.org: the test needs the
-/// Internet, as for its image), then is checked through its API; the second unseals the key and finds the first's mark; the third
-/// boots another image (PCR 11 differs), which cannot unseal the key and formats the partition
-/// again; the fourth, that image with a cleared TPM, formats it again too. The fifth has no TPM:
-/// `/var` is a tmpfs, the partition left alone, as the sixth shows by unlocking it with the TPM
-/// back and finding the fourth's mark.
+/// partition) and sees time-controller synchronize the clock (with pool.ntp.org: the test needs
+/// the Internet, as for its image), then is checked through its API; the second unseals the key
+/// and finds the first's mark; the third boots another image (PCR 11 differs), which cannot unseal
+/// the key and formats the partition again; the fourth, that image with a cleared TPM, formats it
+/// again too. The fifth has no TPM: `/var` is a tmpfs, the partition left alone, as the sixth
+/// shows by unlocking it with the TPM back and finding the fourth's mark.
 const SMOKE_BOOTS: &[Boot] = &[
     Boot {
         name: "first boot",

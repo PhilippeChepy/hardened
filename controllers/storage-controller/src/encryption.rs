@@ -341,7 +341,7 @@ fn run(program: &str, args: &[&str], input: &[u8]) -> anyhow::Result<(ExitStatus
     }
     if !output.status.success() {
         for line in String::from_utf8_lossy(&output.stderr).lines() {
-            warn!("{program}: {line}");
+            warn!(program, stderr = line, "failed");
         }
     }
     Ok((output.status, output.stdout))

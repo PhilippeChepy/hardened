@@ -108,7 +108,9 @@ async fn serve_connection(
     let client = match Client::from_session(session) {
         Ok(client) => Arc::new(client),
         // The verifier makes a client certificate mandatory, and parsed it.
-        Err(error) => return warn!(%peer, "{error:#}"),
+        Err(error) => {
+            return warn!(%peer, error = format!("{error:#}"), "cannot identify the client");
+        }
     };
     debug!(%peer, ?client, "connected");
 

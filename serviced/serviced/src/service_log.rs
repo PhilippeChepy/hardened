@@ -87,7 +87,7 @@ impl ServiceLog {
             let mut tail = self.tail.lock().await;
             for line in &lines {
                 if let Err(e) = self.memory.output(line.clone()) {
-                    warn!(service = %self.service, "{e}");
+                    warn!(service = %self.service, error = %e, "cannot keep the output in memory");
                 }
                 if tail.len() == TAIL_LINES {
                     tail.pop_front();
@@ -109,10 +109,17 @@ impl ServiceLog {
         match tokio::task::spawn_blocking(move || io(&mut file)).await {
             Ok(errors) => {
                 for e in errors {
-                    warn!(service = %self.service, path = %path.display(), "{e}");
+                    warn!(
+                        service = %self.service,
+                        path = %path.display(),
+                        error = %e,
+                        "writing the log"
+                    );
                 }
             }
-            Err(e) => warn!(service = %self.service, path = %path.display(), "log write: {e}"),
+            Err(e) => {
+                warn!(service = %self.service, path = %path.display(), error = %e, "log write")
+            }
         }
     }
 

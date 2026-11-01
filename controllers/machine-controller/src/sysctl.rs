@@ -26,6 +26,6 @@ pub fn apply(overrides: &BTreeMap<SysctlKey, String>) {
 fn set(key: &str, value: &str) {
     let path = Path::new("/proc/sys").join(key.replace('.', "/"));
     if let Err(e) = fs::write(path, value) {
-        warn!(%key, value, "cannot set sysctl: {e}");
+        warn!(%key, value, error = %e, "cannot set sysctl");
     }
 }

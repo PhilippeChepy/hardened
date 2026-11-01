@@ -108,7 +108,7 @@ async fn read(
     let mut datagram = vec![0; MAX_DATAGRAM];
     loop {
         if let Err(e) = socket.readable().await {
-            warn!(service = %service, "notify socket failed: {e}");
+            warn!(service = %service, error = %e, "notify socket failed");
             return;
         }
         let received = socket.try_io(Interest::READABLE, || receive(&socket, &mut datagram));
@@ -116,7 +116,7 @@ async fn read(
             Ok(received) => received,
             Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
             Err(e) => {
-                warn!(service = %service, "notify socket failed: {e}");
+                warn!(service = %service, error = %e, "notify socket failed");
                 return;
             }
         };

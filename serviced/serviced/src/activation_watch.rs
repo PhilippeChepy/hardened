@@ -49,7 +49,7 @@ async fn wait(
         Ok(_) => {
             let _ = events.send(Event::Activated { service, socket });
         }
-        Err(e) => warn!(service = %service, %socket, "cannot watch the socket: {e}"),
+        Err(e) => warn!(service = %service, %socket, error = %e, "cannot watch the socket"),
     }
 }
 

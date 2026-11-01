@@ -1,7 +1,7 @@
 //! The instance's setup, before the controllers are configured: the network as network-controller
 //! configured it, the platform's metadata and user-data, then the hostname and machine ID,
-//! sysctls, kernel modules and containerd's configuration. serviced has already pinned kernel files to the root
-//! (LoadPin) and set the hardened sysctls.
+//! sysctls, kernel modules and containerd's configuration. serviced has already pinned kernel
+//! files to the root (LoadPin) and set the hardened sysctls.
 //!
 //! Nothing here fails: what cannot be done is logged and worked around.
 
@@ -62,12 +62,12 @@ pub async fn run(controllers: &Controllers) -> Setup {
         })
         .unwrap_or_else(|| hostnames::from_instance_id(instance_id.as_deref()));
     if let Err(e) = hosts::apply(&hostname) {
-        error!(%hostname, "cannot apply the hostname: {e:#}");
+        error!(%hostname, error = format!("{e:#}"), "cannot apply the hostname");
     }
     match MachineId::new(instance_id.as_deref()).and_then(MachineId::write) {
         Ok(()) if instance_id.is_none() => warn!("no instance ID: the machine ID is this boot's"),
         Ok(()) => {}
-        Err(e) => error!("cannot write the machine ID: {e:#}"),
+        Err(e) => error!(error = format!("{e:#}"), "cannot write the machine ID"),
     }
     info!(
         %hostname,
@@ -85,7 +85,7 @@ pub async fn run(controllers: &Controllers) -> Setup {
     sysctl::apply(&settings.kernel.sysctl);
     let modules = settings.kernel.modules.clone();
     if let Err(e) = tokio::task::spawn_blocking(move || kmod::load(&modules)).await {
-        error!("cannot load the kernel modules: {e}");
+        error!(error = %e, "cannot load the kernel modules");
     }
     containerd::configure(&settings.container_registry);
 
@@ -112,7 +112,7 @@ fn parse(user_data: Option<&[u8]>) -> Settings {
     match UserData::parse(raw) {
         Ok(user_data) => user_data.settings,
         Err(e) => {
-            error!("ignoring invalid user-data: {e}");
+            error!(error = %e, "ignoring invalid user-data");
             Settings::default()
         }
     }
@@ -141,7 +141,7 @@ async fn fetch_metadata(platform: Option<Platform>) -> Metadata {
         return Metadata::default();
     };
     platform.fetch().await.unwrap_or_else(|e| {
-        error!(%platform, "fetching metadata failed: {e:#}");
+        error!(%platform, error = format!("{e:#}"), "fetching metadata failed");
         Metadata::default()
     })
 }

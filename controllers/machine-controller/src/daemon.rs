@@ -37,7 +37,10 @@ pub async fn run() -> anyhow::Result<()> {
     let path = Path::new(state::PATH);
 
     let kept = State::load(path).unwrap_or_else(|e| {
-        warn!("ignoring the state of an earlier start: {e:#}");
+        warn!(
+            error = format!("{e:#}"),
+            "ignoring the state of an earlier start"
+        );
         None
     });
     let mut state = match kept {
@@ -78,7 +81,7 @@ pub async fn run() -> anyhow::Result<()> {
         router, socket, serviced, shutdown,
     ));
     if let Err(e) = notify::ready() {
-        error!("cannot tell serviced machine-controller is ready: {e}");
+        error!(error = %e, "cannot tell serviced machine-controller is ready");
     }
     info!("serving the machine's API");
 
@@ -105,13 +108,19 @@ async fn configure_api_proxy(controllers: &Controllers, state: &mut State, path:
             state.api_proxy_configured = true;
             save(state, path);
         }
-        Err(e) => error!("cannot configure machine-apiproxy, the API is not served: {e:#}"),
+        Err(e) => error!(
+            error = format!("{e:#}"),
+            "cannot configure machine-apiproxy, the API is not served"
+        ),
     }
 }
 
 /// Keeps `state`; without it, a restart sets the instance up again.
 fn save(state: &State, path: &Path) {
     if let Err(e) = state.save(path) {
-        error!("cannot keep the state, a restart sets the instance up again: {e:#}");
+        error!(
+            error = format!("{e:#}"),
+            "cannot keep the state, a restart sets the instance up again"
+        );
     }
 }

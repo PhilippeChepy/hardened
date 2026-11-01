@@ -85,7 +85,7 @@ impl Running {
         // An error means the task is already over.
         let _ = self.stop.send(());
         if let Err(e) = self.task.await {
-            tracing::error!("the listener's task failed: {e}");
+            tracing::error!(error = %e, "the listener's task failed");
         }
     }
 }

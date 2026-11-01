@@ -164,7 +164,7 @@ impl NetlinkSocket {
                 .filter_map(|bytes| match NetlinkMessage::deserialize(bytes) {
                     Ok(message) => Some(message),
                     Err(error) => {
-                        tracing::debug!("skipping an undecodable netlink message: {error}");
+                        tracing::debug!(%error, "skipping an undecodable netlink message");
                         None
                     }
                 })

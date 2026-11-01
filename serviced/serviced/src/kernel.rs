@@ -25,7 +25,7 @@ pub fn pin() {
             info!("kernel files pinned to the root filesystem")
         }
         Ok(()) => warn!("{PIN_FILE} loaded as a kernel module"),
-        Err(e) => warn!("cannot pin kernel files to the root filesystem: {e}"),
+        Err(e) => warn!(error = %e, "cannot pin kernel files to the root filesystem"),
     }
 }
 
@@ -34,7 +34,7 @@ pub fn apply_sysctls() {
     let text = match std::fs::read_to_string(SYSCTLS) {
         Ok(text) => text,
         Err(e) => {
-            warn!("cannot read {SYSCTLS}: {e}");
+            warn!(path = SYSCTLS, error = %e, "cannot read the hardened sysctls");
             return;
         }
     };
@@ -43,7 +43,7 @@ pub fn apply_sysctls() {
             Ok((key, value)) => {
                 let path = format!("/proc/sys/{}", key.replace('.', "/"));
                 if let Err(e) = std::fs::write(path, value) {
-                    warn!(key, value, "cannot set sysctl: {e}");
+                    warn!(key, value, error = %e, "cannot set sysctl");
                 }
             }
             Err(line) => warn!(line, "invalid line in {SYSCTLS}"),

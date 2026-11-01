@@ -65,7 +65,10 @@ fn mount_partition(encryption: Encryption, runtime: &Handle) -> Result<Backing, 
             return Err("no state partition".into());
         }
         Err(e) => {
-            warn!("state partition unavailable, /var will not persist: {e:#}");
+            warn!(
+                error = format!("{e:#}"),
+                "state partition unavailable, /var will not persist"
+            );
             return Err(format!("state partition unavailable: {e:#}"));
         }
     };
@@ -117,7 +120,11 @@ fn mount_partition(encryption: Encryption, runtime: &Handle) -> Result<Backing, 
     }
     info!(device = %device.display(), "state partition mounted on /var");
     if let Err(e) = grow_filesystem(device) {
-        warn!(device = %device.display(), "cannot grow the state filesystem: {e:#}");
+        warn!(
+            device = %device.display(),
+            error = format!("{e:#}"),
+            "cannot grow the state filesystem"
+        );
     }
     Ok(backing)
 }

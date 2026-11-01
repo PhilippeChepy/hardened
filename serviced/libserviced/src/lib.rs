@@ -15,15 +15,12 @@ pub mod activation;
 mod atomic_file;
 pub mod authorization;
 pub mod client;
+mod connect;
 pub mod definition;
 pub mod notify;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod unix_channel;
-
-use std::path::Path;
-
-use tonic::transport::Channel;
 
 /// The code prost and tonic generate from `proto/`, whose comments document what they cover.
 #[allow(missing_docs)]
@@ -37,25 +34,4 @@ pub use generated::hardened::serviced::v1 as api;
 /// serviced's socket.
 pub const SOCKET: &str = "/run/serviced/serviced.sock";
 
-/// A client of serviced's API on [`SOCKET`].
-///
-/// # Errors
-///
-/// When the socket cannot be connected to.
-pub async fn connect()
--> Result<api::serviced_client::ServicedClient<Channel>, tonic::transport::Error> {
-    connect_to(Path::new(SOCKET)).await
-}
-
-/// A client of serviced's API on `socket` (tests use their own).
-///
-/// # Errors
-///
-/// When the socket cannot be connected to.
-pub async fn connect_to(
-    socket: &Path,
-) -> Result<api::serviced_client::ServicedClient<Channel>, tonic::transport::Error> {
-    Ok(api::serviced_client::ServicedClient::new(
-        unix_channel::connect(socket).await?,
-    ))
-}
+pub use connect::{connect, connect_to};

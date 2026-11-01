@@ -64,7 +64,7 @@ pub fn run() -> ! {
     {
         Ok(runtime) => runtime,
         Err(e) => {
-            error!("cannot start the async runtime: {e}");
+            error!(error = %e, "cannot start the async runtime");
             std::thread::sleep(FAILURE_DELAY);
             shutdown::finish(PowerRequest::Reboot);
         }
@@ -75,7 +75,7 @@ pub fn run() -> ! {
             Ok(reaper) => reaper,
             Err(e) => {
                 // No service started yet: nothing to stop.
-                error!("serviced failed, rebooting soon: {e:#}");
+                error!(error = format!("{e:#}"), "serviced failed, rebooting soon");
                 tokio::time::sleep(FAILURE_DELAY).await;
                 return PowerRequest::Reboot;
             }
@@ -84,11 +84,11 @@ pub fn run() -> ! {
         match tokio::spawn(supervise(log, reaper.clone())).await {
             Ok(Ok(request)) => request,
             Ok(Err(e)) => {
-                error!("serviced failed: {e:#}");
+                error!(error = format!("{e:#}"), "serviced failed");
                 fail(&reaper).await
             }
             Err(e) => {
-                error!("serviced's supervisor failed: {e}");
+                error!(error = %e, "serviced's supervisor failed");
                 fail(&reaper).await
             }
         }
@@ -125,7 +125,7 @@ async fn supervise(log: Arc<LogBuffer>, reaper: Reaper) -> anyhow::Result<PowerR
         Ok(listener) => {
             tokio::spawn(api_server::serve(listener, service));
         }
-        Err(e) => error!("serviced's API is unavailable: {e:#}"),
+        Err(e) => error!(error = format!("{e:#}"), "serviced's API is unavailable"),
     }
 
     let supervisor = Supervisor::new(reaper, commands_rx, logs, overview, resolve, shutdown_locks);

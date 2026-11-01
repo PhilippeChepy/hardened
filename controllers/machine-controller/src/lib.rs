@@ -1,6 +1,6 @@
-//! The machine's API (`hardened.machine.v1`, and `hardened.services.v1`), which machine-controller serves on its socket and
-//! machine-apiproxy over mutual TLS, and the settings machine-controller reads from user-data
-//! ([`UserData`], [`Settings`]).
+//! The machine's API (`hardened.machine.v1`, and `hardened.services.v1`), which
+//! machine-controller serves on its socket and machine-apiproxy over mutual TLS, and the settings
+//! machine-controller reads from user-data ([`UserData`], [`Settings`]).
 //!
 //! machine-controller pushes each controller its part of the settings, a type of the
 //! controller's crate, as that controller's message; it applies the kernel's and the container

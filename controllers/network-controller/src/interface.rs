@@ -37,7 +37,11 @@ pub async fn start(
         return None;
     };
     if let Err(err) = netlink.set_up(&link.name).await {
-        tracing::error!("{err:#}");
+        tracing::error!(
+            interface = %link.name,
+            error = format!("{err:#}"),
+            "cannot set the link up"
+        );
         return None;
     }
     let link = Link {
@@ -65,7 +69,7 @@ async fn run_dhcp(shared: Arc<Shared>, netlink: Netlink, link: Link) {
         match dhcp::bind(&link.name, dhcp::CLIENT_PORT) {
             Ok(socket) => break socket,
             Err(err) => {
-                tracing::error!(interface = %link.name, "DHCP socket: {err}");
+                tracing::error!(interface = %link.name, error = %err, "DHCP socket");
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
@@ -128,7 +132,7 @@ async fn acquire(client: &Client, link: &Link) -> Lease {
         match RawSocket::open(link.index) {
             Ok(socket) => return client.acquire(&socket).await,
             Err(err) => {
-                tracing::error!(interface = %link.name, "DHCP packet socket: {err}");
+                tracing::error!(interface = %link.name, error = %err, "DHCP packet socket");
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
@@ -188,6 +192,6 @@ async fn remove_lease(netlink: &Netlink, link: &Link, lease: &Lease, metric: u32
 
 fn log_error(result: anyhow::Result<()>) {
     if let Err(err) = result {
-        tracing::error!("{err:#}");
+        tracing::error!(error = format!("{err:#}"), "configuring the interface");
     }
 }

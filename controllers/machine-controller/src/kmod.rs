@@ -43,7 +43,7 @@ pub fn load(modules: &BTreeMap<ModuleName, ModuleLoad>) {
     let index = match Index::read(dir) {
         Ok(index) => index,
         Err(e) => {
-            warn!("cannot load kernel modules: {e:#}");
+            warn!(error = format!("{e:#}"), "cannot load kernel modules");
             return;
         }
     };
@@ -51,7 +51,7 @@ pub fn load(modules: &BTreeMap<ModuleName, ModuleLoad>) {
     for name in requested {
         match index.load(name, &denied, &mut loaded) {
             Ok(()) => info!(module = %name, "kernel module loaded"),
-            Err(e) => warn!(module = %name, "cannot load kernel module: {e:#}"),
+            Err(e) => warn!(module = %name, error = format!("{e:#}"), "cannot load kernel module"),
         }
     }
 }

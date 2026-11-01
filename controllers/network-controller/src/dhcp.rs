@@ -763,7 +763,7 @@ impl Client {
             match parse_reply(&buf[..len], msg.xid, &self.mac, source, sent) {
                 Ok(reply) if wanted(&reply) => return Ok(Some(reply)),
                 Ok(reply) => {
-                    tracing::debug!(interface = %self.ifname, "DHCP: ignoring {reply:?}");
+                    tracing::debug!(interface = %self.ifname, ?reply, "DHCP: ignoring a reply");
                 }
                 Err(why) => tracing::trace!(
                     interface = %self.ifname,

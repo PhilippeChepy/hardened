@@ -1,8 +1,8 @@
 //! The kernel's hardening check, as Talos runs it on its kernels: kernel-hardening-checker
 //! (`image-tools`) checks the kernel's configuration, the image's command line and the sysctls
-//! it sets against the KSPP's recommendations (and a few of its author's and other projects'). Every failing
-//! recommendation must be one of the target's `kspp-exceptions`, with its reason, and every
-//! exception must still fail: a stale one would hide the recommendation once it fails again.
+//! it sets against the KSPP's recommendations (and a few of its author's and other projects').
+//! Every failing recommendation must be one of the target's `kspp-exceptions`, with its reason, and
+//! every exception must still fail: a stale one would hide the recommendation once it fails again.
 
 use std::collections::BTreeMap;
 use std::path::Path;

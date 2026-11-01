@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("starting the async runtime")?;
     if let Err(e) = runtime.block_on(daemon::run()) {
-        tracing::error!("{e:#}");
+        tracing::error!(error = format!("{e:#}"), "machine-controller failed");
         process::exit(1);
     }
     Ok(())

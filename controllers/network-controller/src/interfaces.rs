@@ -120,7 +120,7 @@ impl Interfaces {
         if let Err(error) = task.await
             && !error.is_cancelled()
         {
-            tracing::error!(interface = %name, "DHCP task: {error}");
+            tracing::error!(interface = %name, %error, "DHCP task");
         }
         self.shared.remove_interface(index);
     }

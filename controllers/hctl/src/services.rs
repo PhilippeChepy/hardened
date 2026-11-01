@@ -4,8 +4,9 @@ use std::io::{self, Write};
 
 use clap::Subcommand;
 use libserviced::api::Layer;
+use machine_controller::services::service::LastExit;
 use machine_controller::services::services_client::ServicesClient;
-use machine_controller::services::{LogsRequest, Service, ServiceRef, service::LastExit};
+use machine_controller::services::{LogsRequest, Service, ServiceRef};
 use tonic::transport::Channel;
 
 use crate::client::{CallExt, CallFailed};

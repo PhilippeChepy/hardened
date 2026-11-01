@@ -47,12 +47,15 @@ pub fn configure(registry: &RegistrySettings) {
     let Err(e) = write_config(registry) else {
         return;
     };
-    error!("cannot apply settings.container-registry, containerd runs without it: {e:#}");
+    error!(
+        error = format!("{e:#}"),
+        "cannot apply settings.container-registry, containerd runs without it"
+    );
     let copied = fs::read(BASE_CONFIG)
         .and_then(|base| atomic_file::write(Path::new(CONFIG), &base, 0o600))
         .with_context(|| format!("copying {BASE_CONFIG} to {CONFIG}"));
     if let Err(e) = copied {
-        error!("containerd has no configuration: {e:#}");
+        error!(error = format!("{e:#}"), "containerd has no configuration");
     }
 }
 

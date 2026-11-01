@@ -122,7 +122,7 @@ pub async fn configure_time(controllers: &Controllers, time: TimeConfig) -> bool
 /// failure.
 fn log_outcome(configured: Result<Response<()>, Status>, controller: &str, consequence: &str) {
     match configured {
-        Ok(_) => info!("{controller} configured"),
+        Ok(_) => info!(controller, "controller configured"),
         Err(status) => error!(
             "cannot configure {controller}, {consequence}: {}",
             status.message()

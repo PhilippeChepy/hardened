@@ -4,6 +4,7 @@ use controllers_helpers::base64_text;
 use controllers_helpers::testing;
 
 /// `[settings.kubernetes]` with every key set, durations in their normalized form.
+#[must_use]
 pub fn full_toml() -> String {
     let (certificate, _) = testing::certificate_and_key();
     let certificate = base64_text::encode(certificate);

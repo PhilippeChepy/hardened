@@ -127,14 +127,14 @@ impl StorageController for StorageService {
 /// Keeps `state`. A failure only costs a restart its memory: `/var` is set up anyway.
 fn save(state: &State, path: &Path) {
     if let Err(e) = state.save(path) {
-        error!("cannot keep the state: {e:#}");
+        error!(error = format!("{e:#}"), "cannot keep the state");
     }
 }
 
 /// Tells serviced `/var` is set up, so the services requiring it start.
 fn ready() {
     if let Err(e) = notify::ready() {
-        error!("cannot notify serviced of the readiness: {e}");
+        error!(error = %e, "cannot notify serviced of the readiness");
     }
 }
 

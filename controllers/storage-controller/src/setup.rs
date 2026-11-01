@@ -45,7 +45,7 @@ pub fn run(encryption: Encryption, runtime: &Handle) -> anyhow::Result<Backing> 
     let dirs = [Path::new(definition::VAR_LOG_DIR), Layer::Persistent.dir()];
     for dir in dirs {
         if let Err(e) = root_dir(dir) {
-            error!("cannot create {}: {e}", dir.display());
+            error!(dir = %dir.display(), error = %e, "cannot create the directory");
         }
     }
     info!("/var set up");

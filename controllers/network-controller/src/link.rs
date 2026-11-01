@@ -144,7 +144,7 @@ impl Netlink {
         let mut events = match LinkEvents::subscribe() {
             Ok(events) => events,
             Err(err) => {
-                tracing::warn!(interface = %link.name, "subscribing to link events: {err}");
+                tracing::warn!(interface = %link.name, error = %err, "subscribing to link events");
                 return false;
             }
         };
@@ -156,7 +156,9 @@ impl Netlink {
                     match self.link_message(&link.name).await {
                         Ok(msg) if msg.header.flags.contains(LinkFlags::LowerUp) => return true,
                         Ok(_) => {}
-                        Err(err) => tracing::debug!("{err:#}"),
+                        Err(err) => {
+                            tracing::debug!(error = format!("{err:#}"), "cannot read the link")
+                        }
                     }
                 }
                 look_up = match events.next().await {
@@ -170,7 +172,7 @@ impl Netlink {
                     Ok(LinkEvent::Lost) => true,
                     Ok(_) => false,
                     Err(err) => {
-                        tracing::warn!(interface = %link.name, "link events: {err}");
+                        tracing::warn!(interface = %link.name, error = %err, "link events");
                         return false;
                     }
                 };

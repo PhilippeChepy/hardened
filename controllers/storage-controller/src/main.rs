@@ -55,7 +55,7 @@ fn main() {
         Some(Command::Stop) => stop::run(),
     };
     if let Err(e) = result {
-        error!("{e:#}");
+        error!(error = format!("{e:#}"), "storage-controller failed");
         process::exit(1);
     }
 }

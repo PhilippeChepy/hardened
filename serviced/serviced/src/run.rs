@@ -130,7 +130,13 @@ impl Runner {
             RunKind::ExecStop => {
                 match self.confine() {
                     Ok(confinement) => self.exec_stop(&confinement, &log).await,
-                    Err(e) => warn!(service = %self.launch.name, "exec-stop failed: {e:#}"),
+                    Err(e) => {
+                        warn!(
+                            service = %self.launch.name,
+                            error = format!("{e:#}"),
+                            "exec-stop failed"
+                        )
+                    }
                 }
                 Outcome::NotStarted {
                     reason: "stopped".to_owned(),
@@ -230,7 +236,11 @@ impl Runner {
             let (child, output) = match self.spawn(command, confinement, log, &[]).await {
                 Ok(spawned) => spawned,
                 Err(e) if command.may_fail() => {
-                    warn!(service = %self.launch.name, "exec-pre failed, ignored: {e:#}");
+                    warn!(
+                        service = %self.launch.name,
+                        error = format!("{e:#}"),
+                        "exec-pre failed, ignored"
+                    );
                     continue;
                 }
                 Err(e) => return not_started(format!("exec-pre: {e:#}")).await,
@@ -306,7 +316,12 @@ impl Runner {
         let (child, output) = match self.spawn(command, confinement, log, &[]).await {
             Ok(spawned) => spawned,
             Err(e) => {
-                warn!(service = %self.launch.name, "{what} failed: {e:#}");
+                warn!(
+                    service = %self.launch.name,
+                    command = what,
+                    error = format!("{e:#}"),
+                    "cannot run"
+                );
                 return;
             }
         };

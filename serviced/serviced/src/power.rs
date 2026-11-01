@@ -55,7 +55,7 @@ pub fn watch(tx: mpsc::Sender<PowerRequest>) -> anyhow::Result<()> {
         let tx = tx.clone();
         tokio::spawn(async move {
             if let Err(e) = read_power_button(&device, &tx).await {
-                warn!(device = %device.display(), "power button: {e}");
+                warn!(device = %device.display(), error = %e, "power button");
             }
         });
     }

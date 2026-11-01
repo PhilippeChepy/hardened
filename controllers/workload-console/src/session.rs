@@ -64,7 +64,8 @@ enum Outcome {
 }
 
 impl Session {
-    /// Starts `process` in the container of `workload` with the program `ctr`. Within a tokio runtime.
+    /// Starts `process` in the container of `workload` with the program `ctr`. Within a tokio
+    /// runtime.
     pub fn start(ctr: &Path, workload: WorkloadName, process: ExecProcess) -> io::Result<Self> {
         let exec_id = format!("console-{}", uuid::Uuid::new_v4().simple());
         let mut command = Command::new(ctr);
