@@ -55,6 +55,7 @@ Stopping a service sends its process SIGTERM, then SIGKILL after 10 s; each `exe
 | `requires` | Services that must be ready first. If one fails, is disabled or does not exist, this one does not start. |
 | `condition.path-exists` | The service is skipped unless the path, absolute, exists. Its sockets are not created: its callers fail at once rather than wait. |
 | `notify` | Ready once the service sent `READY=1` on `NOTIFY_SOCKET` (systemd's notify protocol), rather than once started. Every process gets `NOTIFY_SOCKET`; `STATUS=` shows in the service's status. |
+| `oneshot` | A job rather than a daemon (systemd's `Type=oneshot` with `RemainAfterExit=yes`): ready once `exec` exited successfully, and staying so; never restarted then (`restart` applies to its failures). Its `exec-stop` runs at shutdown with the others': remounting a filesystem read-write, say, and read-only again. |
 
 ### Sockets and activation
 

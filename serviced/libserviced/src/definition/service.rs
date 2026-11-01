@@ -48,6 +48,11 @@ pub struct Service {
     /// Ready once it sent `READY=1` on `NOTIFY_SOCKET`, rather than once started.
     #[serde(default, skip_serializing_if = "Not::not")]
     pub notify: bool,
+    /// A job rather than a daemon: ready once `exec` exited successfully, and staying so, never
+    /// restarted then (`restart` applies to its failures). What requires it starts after it,
+    /// and its `exec-stop` runs at shutdown.
+    #[serde(default, skip_serializing_if = "Not::not")]
+    pub oneshot: bool,
     /// The environment, the only one the program gets.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,

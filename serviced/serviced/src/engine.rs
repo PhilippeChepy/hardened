@@ -589,6 +589,16 @@ impl Engine {
                     exec_stop_left: false,
                 };
                 entry.set(State::Stopped, None);
+            } else if entry.life == Life::Settled
+                && entry.service.oneshot
+                && entry.status.state == State::Ready
+                && !entry.service.exec_stop.is_empty()
+            {
+                // What a oneshot did is undone with the others, once every process is gone.
+                entry.life = Life::Stopped {
+                    exec_stop_left: true,
+                };
+                entry.set(State::Stopped, None);
             }
         }
         self.settle();
@@ -714,7 +724,8 @@ impl Engine {
             Phase::Pre { ready } => ready,
             _ => None,
         };
-        let ready_now = !entry.service.notify || early_ready == Some(pid);
+        let ready_now = (!entry.service.notify && !entry.service.oneshot)
+            || (entry.service.notify && early_ready == Some(pid));
         current.phase = if ready_now { Phase::Ready } else { Phase::Exec };
         current.started = Some(now);
         entry.status.pid = Some(pid);
@@ -790,6 +801,8 @@ impl Engine {
         }
 
         let restart = match entry.service.restart {
+            // A oneshot's success is its end.
+            _ if entry.service.oneshot && success => false,
             Restart::Always => true,
             Restart::OnFailure => !success,
             Restart::Never => false,
@@ -826,6 +839,9 @@ impl Engine {
             if !success {
                 warn!(service = %service, reason, "service failed");
                 entry.set(State::Failed, Some(reason));
+            } else if entry.service.oneshot {
+                info!(service = %service, "service ready");
+                entry.set(State::Ready, None);
             } else {
                 entry.set(State::Exited, None);
             }
@@ -1338,6 +1354,75 @@ mod tests {
             State::Ready,
             "a daemon without notify"
         );
+    }
+
+    #[test]
+    fn a_oneshot_is_ready_once_it_succeeded() {
+        let mut h = Harness::new();
+        h.engine.reload(services(&[
+            (
+                "remount-root",
+                "exec = [\"/usr/bin/mount\", \"-o\", \"remount,rw\", \"/\"]\noneshot = true\n\
+                 restart = \"on-failure\"\n\
+                 exec-stop = [[\"/usr/bin/mount\", \"-o\", \"remount,ro\", \"/\"]]\n",
+            ),
+            (
+                "getty",
+                "exec = [\"/usr/bin/agetty\"]\nrequires = [\"remount-root\"]\n",
+            ),
+        ]));
+        let started = h.started();
+        assert_eq!(started.len(), 1);
+        let remount = started[0].1;
+        h.run_started("remount-root", remount);
+        assert_eq!(h.state("remount-root"), State::Running, "until it exits");
+        assert!(h.started().is_empty());
+        assert_eq!(h.state("getty"), State::Waiting);
+
+        h.run_finished("remount-root", remount, Exit::Code(1));
+        assert_eq!(
+            h.state("remount-root"),
+            State::Backoff,
+            "a failure restarts it"
+        );
+        assert_eq!(h.state("getty"), State::Waiting);
+        let token = h
+            .engine
+            .take_actions()
+            .into_iter()
+            .find_map(|action| match action {
+                Action::Schedule { token, .. } => Some(token),
+                _ => None,
+            });
+        h.event(Event::BackoffElapsed {
+            service: name("remount-root"),
+            token: token.expect("a restart is scheduled"),
+        });
+        let remount = h.started()[0].1;
+        h.run_started("remount-root", remount);
+        h.run_finished("remount-root", remount, Exit::Code(0));
+        assert_eq!(h.state("remount-root"), State::Ready, "and stays so");
+        let started = h.started();
+        assert_eq!(started[0].0, "getty");
+        let getty = started[0].1;
+        h.run_started("getty", getty);
+        assert_eq!(h.state("getty"), State::Ready);
+        assert_eq!(h.state("remount-root"), State::Ready);
+
+        // Its exec-stop runs at shutdown, once the other services stopped.
+        h.engine.shutdown();
+        let (stops, undos) = h.stops();
+        assert_eq!((stops.len(), undos), (1, vec![]), "getty");
+        h.run_finished("getty", getty, Exit::Signal(15));
+        assert!(h.engine.stopped());
+        h.engine.run_exec_stops();
+        let (_, undos) = h.stops();
+        let [(service, run)] = &undos[..] else {
+            panic!("remount-root's exec-stop: {undos:?}");
+        };
+        assert_eq!(service, "remount-root");
+        h.undone(service, *run);
+        assert!(h.engine.stopped());
     }
 
     #[test]
