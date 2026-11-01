@@ -231,7 +231,10 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
         if boot.tpm == Tpm::Cleared {
             fs::remove_dir_all(state.join("tpm"))?;
         }
-        let api_checks = || crate::smoke_api::check(&hctl, &expected_pcrs);
+        let api_checks = || {
+            let instance_id = fs::read_to_string(state.join("uuid")).context("the VM's UUID")?;
+            crate::smoke_api::check(&hctl, &expected_pcrs, instance_id.trim())
+        };
         boot_until(
             &vm,
             &image,

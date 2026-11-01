@@ -114,6 +114,8 @@ The first boot is also checked through the machine's API: the test builds hctl, 
 `build/test-pki` and adds its `[settings.hardened.api]` section to the user-data. Once the boot's
 markers are seen, hctl ([`smoke_api.rs`](../image-builder/src/smoke_api.rs)):
 
+- checks the platform and the instance ID, `qemu` and the UUID the test VM was given (SMBIOS:
+  without DMI in the kernel, machine-controller would find neither);
 - verifies the attestation: the EK pinned by the fingerprint `hctl attest ek` gives, the
   attestation key proven by credential activation, the PCRs against the image's `pcrs.json`;
 - checks that containerd is ready;

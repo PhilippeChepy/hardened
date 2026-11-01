@@ -104,13 +104,24 @@ impl Hctl {
     }
 }
 
-/// Checks the machine through its API: attestation against the image's expected PCRs, the PTP
-/// clock under KVM, the services, the machine ID, and a privileged workload's exec and read-only
-/// host root; then workload-console's exit once idle.
-pub fn check(hctl: &Hctl, expected_pcrs: &Path) -> anyhow::Result<()> {
+/// Checks the machine through its API: the platform and the instance ID qemu was given
+/// (`instance_id`), attestation against the image's expected PCRs, the PTP clock under KVM, the
+/// services, the machine ID, and a privileged workload's exec and read-only host root; then
+/// workload-console's exit once idle.
+pub fn check(hctl: &Hctl, expected_pcrs: &Path, instance_id: &str) -> anyhow::Result<()> {
     eprintln!("==> checks through the machine's API");
-    hctl.wait(&["version"], Duration::from_secs(120), |_| true)
+    let version = hctl
+        .wait(&["version"], Duration::from_secs(120), |_| true)
         .context("the API does not answer")?;
+    // From DMI (SMBIOS), which a kernel without it would leave out.
+    for (label, expected) in [("Platform:", "qemu"), ("Instance:", instance_id)] {
+        ensure!(
+            version
+                .lines()
+                .any(|line| line.strip_prefix(label).map(str::trim) == Some(expected)),
+            "hctl version does not show {label} {expected}:\n{version}"
+        );
+    }
 
     let expected = expected_pcrs.to_str().context("expected PCRs")?;
     let ek = hctl.succeed(&["attest", "ek"])?;
