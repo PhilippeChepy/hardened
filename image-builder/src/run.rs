@@ -303,7 +303,8 @@ fn latest_image(paths: &Paths, target: &TargetArg) -> anyhow::Result<PathBuf> {
 
 /// The container and script of the VM booting `image`, whose writes go to an overlay in `state`;
 /// or, with `boot_disk` (a file next to `image`), booting from that disk, read-only, with the
-/// image's attached. The TPM's state is kept in `state` too.
+/// image's attached. The TPM's state is kept in `state` too, and the SMBIOS UUID, the instance ID
+/// of qemu machines.
 fn qemu_container<'a>(
     vm: &'a Image,
     image: &Path,
@@ -330,9 +331,10 @@ fn qemu_container<'a>(
 [ -f /state/disk.qcow2 ] ||
     qemu-img create -q -f qcow2 -F raw -b /image/disk.raw /state/disk.qcow2 {size}
 [ -f /state/vars.fd ] || cp /usr/share/OVMF/OVMF_VARS_4M.fd /state/vars.fd
+[ -f /state/uuid ] || cat /proc/sys/kernel/random/uuid > /state/uuid
 {swtpm}accel=tcg; [ -w /dev/kvm ] && accel=kvm
 exec qemu-system-x86_64 -nodefaults -nographic -serial mon:stdio \
-    -machine q35,accel=$accel -cpu max -smp 2 -m {memory} \
+    -machine q35,accel=$accel -cpu max -smp 2 -m {memory} -uuid "$(cat /state/uuid)" \
     -global apic-common.vapic=off \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=/state/vars.fd \
