@@ -96,6 +96,10 @@ CONFIG_EFI_STUB=y
 CONFIG_EFI_MIXED=n
 CONFIG_EFIVAR_FS=y
 CONFIG_FW_CFG_SYSFS=y
+# SMBIOS: /sys/class/dmi/id, where machine-controller finds the platform (sys_vendor) and qemu's
+# instance ID (product_uuid). EXPERT would leave DMI out otherwise.
+CONFIG_DMI=y
+CONFIG_DMIID=y
 CONFIG_RTC_CLASS=y
 CONFIG_RTC_DRV_CMOS=y
 CONFIG_PTP_1588_CLOCK=y
