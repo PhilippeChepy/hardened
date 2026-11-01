@@ -13,10 +13,34 @@ pub struct Source {
 }
 
 impl Source {
-    /// An archive, extracted for the build (`.tar.*`, `.tgz`), rather than a file used as is.
+    /// An archive, extracted for the build (`.tar.*`, `.tgz`, or a crates.io `.crate`: a gzipped
+    /// tarball), rather than a file used as is.
     #[must_use]
     pub fn is_archive(&self) -> bool {
         let path = self.url.split(['?', '#']).next().unwrap_or_default();
-        path.contains(".tar") || path.ends_with(".tgz")
+        path.contains(".tar") || path.ends_with(".tgz") || path.ends_with(".crate")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(url: &str) -> Source {
+        Source {
+            url: url.to_owned(),
+            sha256: "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+                .parse()
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn archives() {
+        assert!(source("https://example.org/x-1.0.tar.xz").is_archive());
+        assert!(source("https://example.org/x-1.0.tgz?raw").is_archive());
+        assert!(source("https://static.crates.io/crates/x/x-1.0%2Bm.crate").is_archive());
+        assert!(!source("https://example.org/Cargo.lock").is_archive());
+        assert!(!source("https://example.org/cacert.pem").is_archive());
     }
 }

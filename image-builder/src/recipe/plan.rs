@@ -729,6 +729,38 @@ impl Build {
             .run();
     }
 
+    /// Downloads the crates pinned by the `Cargo.lock` of the workspace in `tree` (an unpacked
+    /// source; fetch phase, with network), for every platform: the build runs cargo offline.
+    pub fn cargo_fetch_tree(&mut self, tree: &Loc) {
+        self.cmd("cargo")
+            .dir(tree)
+            .env("CARGO_HTTP_CAINFO", "/etc/ssl/certs/ca-certificates.crt")
+            .args(["fetch", "--locked"])
+            .run();
+    }
+
+    /// Records for the SBOM, as `name`, the crates the default members of the workspace in `tree`
+    /// link (a source whose build runs cargo itself), and the toolchain.
+    pub fn cargo_inventory(&mut self, tree: &Loc, name: &str) {
+        let crates = self.inventory(Inventory::CargoTree, name);
+        self.cmd("cargo")
+            .dir(tree)
+            .args([
+                "tree",
+                "--offline",
+                "--locked",
+                "-e",
+                "normal",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}|{l}",
+            ])
+            .capture(&crates);
+        let toolchain = self.inventory(Inventory::RustToolchain, "rust");
+        self.cmd("rustc").arg("--version").capture(&toolchain);
+    }
+
     /// Builds binaries (`(package, install path)`, each named like its package) of the workspace
     /// in `workspace` offline, statically linked, and records the crates and toolchain for the
     /// SBOM.

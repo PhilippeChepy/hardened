@@ -10,7 +10,9 @@
 //! [`Build::go_build`]). The result is a [`super::Plan`]. A component built from this
 //! repository has `version = "workspace"` (the OS version), lists the repository paths it builds
 //! from in `local` (hashed into its cache key), and its `cargo-build` steps name their Cargo
-//! workspace's directory, `workspace`, whose crates the fetch phase downloads.
+//! workspace's directory, `workspace`, whose crates the fetch phase downloads. A
+//! downloaded source whose build runs cargo itself lists its Cargo workspaces in `cargo-fetch`
+//! (`<source>` or `<source>/<directory>`): the fetch phase downloads their locked crates.
 //!
 //! # Values
 //!
@@ -28,7 +30,7 @@
 //!
 //! Where a step expects a location, or in a command argument (`DESTDIR={dest}`): `{dest}` (the
 //! component's tree, installed at `/`: where the build systems install, unless told otherwise),
-//! `{<source>}` (each source of `[sources]`: an archive, `.tar.*` or `.tgz`, extracted in
+//! `{<source>}` (each source of `[sources]`: an archive, `.tar.*`, `.tgz` or `.crate`, extracted in
 //! `work:<source>`; any other file as is), `{work:<path>}` (scratch space), `{out:<output>}` (an
 //! output of the recipe),
 //! `{dep:<target>/<component>}` (the tree of a component of a target) and
@@ -99,6 +101,11 @@ struct File {
     /// "From scratch" container images the build fills, by name.
     #[serde(default)]
     images: BTreeMap<String, ImageFile>,
+    /// Cargo workspaces of archive sources (`<source>` or `<source>/<directory>`) whose
+    /// `Cargo.lock` crates the fetch phase downloads, for builds running cargo offline (Meson's,
+    /// a Makefile's): what `cargo-build` does for the repository's workspaces.
+    #[serde(default)]
+    cargo_fetch: Vec<String>,
     #[serde(default)]
     build: Vec<Value>,
 }
@@ -310,6 +317,8 @@ struct Declarative<'a> {
     local: Vec<RepoPath>,
     sources: BTreeMap<String, Source>,
     images: BTreeMap<String, ContainerImage>,
+    /// `cargo-fetch`: (source, directory in it).
+    cargo_fetch: Vec<(String, String)>,
     values: &'a Values,
     /// The files of the recipe's directory its steps use, by path.
     files: BTreeMap<String, String>,
@@ -907,6 +916,21 @@ impl<'a> Declarative<'a> {
             purl,
             cpe,
         };
+        let cargo_fetch = (file.cargo_fetch.iter())
+            .map(|entry| {
+                let (source, dir) = entry.split_once('/').unwrap_or((entry, ""));
+                let found = sources.get(source);
+                ensure!(
+                    found.is_some_and(Source::is_archive),
+                    "cargo-fetch {entry:?}: {source:?} is not an archive source"
+                );
+                ensure!(
+                    !dir.split('/').any(|part| part == ".."),
+                    "cargo-fetch {entry:?}: a directory in the source"
+                );
+                Ok((source.to_owned(), dir.trim_end_matches('/').to_owned()))
+            })
+            .collect::<anyhow::Result<_>>()?;
         Ok(Self {
             id: recipe.id.clone(),
             meta,
@@ -914,6 +938,7 @@ impl<'a> Declarative<'a> {
             local: file.local.clone(),
             sources,
             images,
+            cargo_fetch,
             values,
             files,
             steps: build,
@@ -947,8 +972,13 @@ impl<'a> Declarative<'a> {
     }
 
     /// Steps run with network access before the build, for lockfile-verified downloads only: the
-    /// crates of each Cargo workspace built.
+    /// crates of each Cargo workspace built, and of each `cargo-fetch` workspace (its source
+    /// unpacked apart from the build's).
     fn fetch(&self, b: &mut Build) {
+        for (source, dir) in &self.cargo_fetch {
+            let tree = b.unpack(&self.sources[source], &format!("cargo-fetch-{source}"));
+            b.cargo_fetch_tree(&subdir(&tree, dir));
+        }
         let workspaces: BTreeSet<&RepoPath> = (self.steps.iter())
             .filter_map(|step| match step {
                 StepFile::CargoBuild { workspace, .. } => Some(workspace),
@@ -961,7 +991,7 @@ impl<'a> Declarative<'a> {
     }
 
     /// The build, run without network access. It starts with its sources: archives (`.tar.*`,
-    /// `.tgz`) extracted, other files as they are.
+    /// `.tgz`, `.crate`) extracted, other files as they are.
     fn build(&self, b: &mut Build) -> anyhow::Result<()> {
         let mut scope = Scope {
             recipe: self,
@@ -975,12 +1005,26 @@ impl<'a> Declarative<'a> {
             };
             scope.locations.insert(name.clone(), loc);
         }
+        for (source, dir) in &self.cargo_fetch {
+            let tree = subdir(&scope.locations[source], dir);
+            let name = [source.as_str(), dir.as_str()].join("/");
+            b.cargo_inventory(&tree, &name.trim_end_matches('/').replace('/', "-"));
+        }
         for (i, step) in self.steps.iter().enumerate() {
             scope
                 .step(b, step)
                 .with_context(|| format!("build step {} ({step:?})", i + 1))?;
         }
         Ok(())
+    }
+}
+
+/// `dir` (a relative path, or empty: `tree` itself) in `tree`.
+fn subdir(tree: &Loc, dir: &str) -> Loc {
+    if dir.is_empty() {
+        tree.clone()
+    } else {
+        tree.join(dir)
     }
 }
 
@@ -1395,6 +1439,81 @@ mod tests {
         let mut steps = b.into_steps();
         steps.push(super::super::Step::CheckEnv(dest));
         assert_eq!(plan.build, steps);
+    }
+
+    #[test]
+    fn fetches_the_crates_of_a_source_workspace() {
+        let recipes = load_all(&[(
+            "x",
+            &format!(
+                "{HEADER}cargo-fetch = [\"src/rust\"]\n{}[[build]]\nmeson = {{}}\n",
+                source()
+            ),
+        )])
+        .unwrap();
+        let plan = &recipes["x"].plan;
+        let source = Source {
+            url: "https://example.org/x-1.0.tar.gz".to_owned(),
+            sha256: SHA.parse().unwrap(),
+        };
+
+        // Fetch: the source unpacked apart, its lock's crates downloaded.
+        let mut b = Build::default();
+        let tree = b.unpack(&source, "cargo-fetch-src");
+        b.cargo_fetch_tree(&tree.join("rust"));
+        assert_eq!(plan.fetch, b.into_steps());
+
+        // Build: the crates recorded, then the build's own steps.
+        let mut b = Build::default();
+        let src = b.unpack(&source, "src");
+        b.cargo_inventory(&src.join("rust"), "src-rust");
+        let dest = b.root("/");
+        b.meson_build(&src, &dest, Vec::new());
+        let mut steps = b.into_steps();
+        steps.push(super::super::Step::CheckEnv(dest));
+        assert_eq!(plan.build, steps);
+    }
+
+    #[test]
+    fn fetches_the_crates_of_a_whole_source() {
+        let recipes = load_all(&[(
+            "x",
+            &format!(
+                "{HEADER}cargo-fetch = [\"src\"]\n{}[[build]]\nmeson = {{}}\n",
+                source()
+            ),
+        )])
+        .unwrap();
+        let plan = &recipes["x"].plan;
+        let source = Source {
+            url: "https://example.org/x-1.0.tar.gz".to_owned(),
+            sha256: SHA.parse().unwrap(),
+        };
+        let mut b = Build::default();
+        let tree = b.unpack(&source, "cargo-fetch-src");
+        b.cargo_fetch_tree(&tree);
+        assert_eq!(plan.fetch, b.into_steps());
+        assert!(
+            (plan.build.iter()).any(|step| step.to_string().contains("sbom:src.crates")),
+            "no crates inventory"
+        );
+    }
+
+    #[test]
+    fn refuses_cargo_fetch_of_a_file_source() {
+        let Err(err) = load_all(&[(
+            "x",
+            &format!(
+                "{HEADER}cargo-fetch = [\"lock\"]\n[sources.lock]\nurl = \"https://example.org/Cargo.lock\"\n\
+                 sha256 = \"{SHA}\"\n[[build]]\nmkdir = \"{{dest}}/usr\"\n"
+            ),
+        )]) else {
+            panic!("a file source accepted for cargo-fetch");
+        };
+        assert!(
+            format!("{err:#}").contains("not an archive source"),
+            "{err:#}"
+        );
     }
 
     #[test]
