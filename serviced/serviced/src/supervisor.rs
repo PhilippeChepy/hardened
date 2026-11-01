@@ -142,26 +142,11 @@ impl Supervisor {
     /// release them or the longest delay passed.
     async fn delay_shutdown(&mut self, power: &mut mpsc::Receiver<PowerRequest>) {
         let locks = Arc::clone(&self.shutdown_locks);
-        let Some(delay) = locks.announce() else {
-            return;
-        };
-        info!(
-            delay_s = delay.as_secs(),
-            "waiting for the shutdown's delay locks"
-        );
-        let deadline = tokio::time::Instant::now() + delay;
-        let released = locks.released();
-        tokio::pin!(released);
+        let waited = locks.wait();
+        tokio::pin!(waited);
         loop {
             tokio::select! {
-                () = &mut released => {
-                    info!("delay locks released");
-                    return;
-                }
-                () = tokio::time::sleep_until(deadline) => {
-                    warn!(delay_s = delay.as_secs(), "delay locks still held, shutting down");
-                    return;
-                }
+                _ = &mut waited => return,
                 Some(event) = self.received.recv() => self.event(event).await,
                 Some(command) = self.commands.recv() => self.command(command).await,
                 Some(other) = power.recv() => info!(request = ?other, "already shutting down"),
