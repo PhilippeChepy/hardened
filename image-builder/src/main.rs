@@ -9,6 +9,7 @@
 //! cargo builder image          # build the standard target, write build/out/
 //! cargo builder run            # boot the image in qemu (OVMF + swtpm)
 //! cargo builder test           # boot it headless and check the smoke-test markers
+//! cargo builder env --target t # build target t's image, print its tag (for podman run)
 //! ```
 
 mod build;
@@ -70,6 +71,14 @@ enum Command {
     },
     /// Prints a component's environment and the steps of its build, without running anything.
     Plan { component: String },
+    /// Builds the image of a target (what its environment holds and its components) and prints
+    /// its podman tag, to run commands in it.
+    Env {
+        #[command(flatten)]
+        target: TargetArg,
+        #[command(flatten)]
+        options: build::Options,
+    },
     /// Builds a target and writes its qcow2 image and SBOM to build/out/.
     Image {
         #[command(flatten)]
@@ -122,6 +131,16 @@ fn main() -> anyhow::Result<()> {
             println!("{} {}", job.unit, job.recipe.meta.version);
             println!("environment: {}", job.environment);
             print!("{}", job.recipe.plan);
+        }
+        Command::Env { target, options } => {
+            let pipeline = pipeline::Pipeline::load(&paths)?;
+            let environment = pipeline.image(pipeline.targets.get(&target.id)?)?;
+            let order = pipeline.order(&environment.trees)?;
+            fetch::fetch_all(&paths, order.iter().map(|job| &job.recipe))?;
+            let keys = pipeline.keys_environment()?;
+            let built = build::build_all(&paths, &order, &keys, &[], options)?;
+            let image = environment::ensure(&paths, &environment, &built)?;
+            println!("{}", image.tag);
         }
         Command::Image { target, options } => {
             image::build_image(&paths, &target.id, options, image::Disks::Image)?;
