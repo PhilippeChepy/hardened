@@ -1,0 +1,147 @@
+version = "595.112.07"
+kind = "operating-system"
+summary = "NVIDIA's driver user space for compute (CUDA, NVML, OpenCL, nvidia-smi) and GSP firmware"
+license = "LicenseRef-NVIDIA-Driver"
+homepage = "https://www.nvidia.com/en-us/drivers/unix/"
+purl = "pkg:generic/nvidia-driver@{version}"
+cpe = "nvidia:gpu_driver"
+
+# NVIDIA's prebuilt user space (glibc) and firmware, of the version of the open modules: the
+# image's only files that are not built from source. CDI mounts the libraries and tools into GPU
+# containers, from the driver root `/usr/lib/nvidia/{version}/root`; on the host, nvidia-controller
+# only runs nvidia-smi, to partition the GPUs (MIG), with the driver root's glibc.
+[sources.driver]
+url = "https://us.download.nvidia.com/tesla/{version}/NVIDIA-Linux-x86_64-{version}.run"
+sha256 = "1a38ecd538a2da6232a7330184063af59e9fc946c908cca555bd07909848b9f0"
+
+[vars]
+root = "{dest}/usr/lib/nvidia/{version}/root"
+
+# A makeself archive: its own script extracts it.
+[[build]]
+run.cmd = ["sh", "{driver}", "--extract-only", "--target", "{work:driver}"]
+
+# The GSP firmware, where the kernel looks for it (nvidia/<version>/).
+[[build]]
+copy.from = "{work:driver}/firmware/*.bin"
+copy.into = "{dest}/usr/lib/firmware/nvidia/{version}"
+
+[[build]]
+copy.from = "{work:driver}/libcuda.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libcudadebugger.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-ml.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-cfg.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-opencl.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-ptxjitcompiler.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-nvvm.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-gpucomp.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-tileiras.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+[[build]]
+copy.from = "{work:driver}/libnvidia-pkcs11-openssl3.so.{version}"
+copy.into = "{vars.root}/usr/lib/x86_64-linux-gnu"
+
+# The names programs link with (sonames) and open (`dlopen`).
+[[build]]
+symlinks.dir = "{vars.root}/usr/lib/x86_64-linux-gnu"
+symlinks.links = [
+    ["libcuda.so.1", "libcuda.so.{version}"],
+    ["libcuda.so", "libcuda.so.1"],
+    ["libcudadebugger.so.1", "libcudadebugger.so.{version}"],
+    ["libcudadebugger.so", "libcudadebugger.so.1"],
+    ["libnvidia-ml.so.1", "libnvidia-ml.so.{version}"],
+    ["libnvidia-ml.so", "libnvidia-ml.so.1"],
+    ["libnvidia-cfg.so.1", "libnvidia-cfg.so.{version}"],
+    ["libnvidia-cfg.so", "libnvidia-cfg.so.1"],
+    ["libnvidia-opencl.so.1", "libnvidia-opencl.so.{version}"],
+    ["libnvidia-opencl.so", "libnvidia-opencl.so.1"],
+    ["libnvidia-ptxjitcompiler.so.1", "libnvidia-ptxjitcompiler.so.{version}"],
+    ["libnvidia-ptxjitcompiler.so", "libnvidia-ptxjitcompiler.so.1"],
+    ["libnvidia-nvvm.so.4", "libnvidia-nvvm.so.{version}"],
+    ["libnvidia-nvvm.so", "libnvidia-nvvm.so.4"],
+    ["libnvidia-gpucomp.so", "libnvidia-gpucomp.so.{version}"],
+    ["libnvidia-tileiras.so", "libnvidia-tileiras.so.{version}"],
+    ["libnvidia-pkcs11-openssl3.so", "libnvidia-pkcs11-openssl3.so.{version}"],
+]
+
+[[build]]
+install.from = "{work:driver}/nvidia-smi"
+install.to = "{vars.root}/usr/bin/nvidia-smi"
+install.mode = 0o755
+
+[[build]]
+install.from = "{work:driver}/nvidia-debugdump"
+install.to = "{vars.root}/usr/bin/nvidia-debugdump"
+install.mode = 0o755
+
+[[build]]
+install.from = "{work:driver}/nvidia-cuda-mps-control"
+install.to = "{vars.root}/usr/bin/nvidia-cuda-mps-control"
+install.mode = 0o755
+
+[[build]]
+install.from = "{work:driver}/nvidia-cuda-mps-server"
+install.to = "{vars.root}/usr/bin/nvidia-cuda-mps-server"
+install.mode = 0o755
+
+[[build]]
+install.from = "{work:driver}/nvidia-persistenced"
+install.to = "{vars.root}/usr/bin/nvidia-persistenced"
+install.mode = 0o755
+
+# glibc, for nvidia-smi on the host: nvidia-controller runs it with this loader.
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/ld-linux-x86-64.so.2"
+install.to = "{vars.root}/usr/lib64/ld-linux-x86-64.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libc.so.6"
+install.to = "{vars.root}/usr/lib64/libc.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libm.so.6"
+install.to = "{vars.root}/usr/lib64/libm.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libdl.so.2"
+install.to = "{vars.root}/usr/lib64/libdl.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libpthread.so.0"
+install.to = "{vars.root}/usr/lib64/libpthread.so.0"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/librt.so.1"
+install.to = "{vars.root}/usr/lib64/librt.so.1"
+install.mode = 0o755

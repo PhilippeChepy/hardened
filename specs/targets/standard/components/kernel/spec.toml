@@ -55,6 +55,11 @@ install.mode = 0o600
 write.to = "{src}/scripts/gen-randstruct-seed.sh"
 write.file = "gen-randstruct-seed.sh"
 
+# The symbols of out-of-tree modules (CONFIG_UNUSED_KSYMS_WHITELIST).
+[[build]]
+write.to = "{src}/hardened-ksyms-whitelist"
+write.file = "ksyms-whitelist"
+
 [[build]]
 make.args = ["{vars.make}", "-s", "bzImage", "modules"]
 make.env = ["{vars.reproducible}"]
@@ -81,7 +86,12 @@ remove = ["{dest}/usr/lib/modules/*/build", "{dest}/usr/lib/modules/*/source"]
 install.from = "{src}/arch/x86/boot/bzImage"
 install.to = "{out:bzImage}"
 
-# The final kernel configuration, for inspection.
+# The final kernel configuration, for inspection, and for out-of-tree modules.
 [[build]]
 install.from = "{src}/.config"
 install.to = "{out:config}"
+
+# The exported symbols' versions (CONFIG_MODVERSIONS), for out-of-tree modules.
+[[build]]
+install.from = "{src}/Module.symvers"
+install.to = "{out:Module.symvers}"

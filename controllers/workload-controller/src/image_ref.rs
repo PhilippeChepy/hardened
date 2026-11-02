@@ -6,6 +6,11 @@ use std::str::FromStr;
 use controllers_helpers::InvalidValue;
 use serde::{Deserialize, Serialize};
 
+/// Where the images the root filesystem ships are (image-builder's `[images.<name>]`).
+const LOCAL_IMAGES: &str = "/usr/share/hardened/images";
+/// What their references start with.
+const LOCAL_PREFIX: &str = "localhost/hardened/";
+
 /// Image reference, normalized when parsed: `nginx` becomes `docker.io/library/nginx:latest`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -16,6 +21,19 @@ impl ImageRef {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The archive of an image the root filesystem ships (`localhost/hardened/<name>:<tag>`),
+    /// which a workload imports rather than pulls.
+    #[must_use]
+    pub fn local_archive(&self) -> Option<String> {
+        let name = self
+            .0
+            .strip_prefix(LOCAL_PREFIX)?
+            .split([':', '@'])
+            .next()?;
+        let plain = !name.is_empty() && !name.contains(['/', '.']);
+        plain.then(|| format!("{LOCAL_IMAGES}/{name}.tar"))
     }
 }
 
@@ -91,6 +109,21 @@ fn normalize_reference(reference: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_of_the_root_filesystem() {
+        let local: ImageRef = "localhost/hardened/nvidia-device-plugin:0.20.1"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            local.local_archive().as_deref(),
+            Some("/usr/share/hardened/images/nvidia-device-plugin.tar")
+        );
+        for other in ["nginx", "localhost/other/x:1", "localhost/hardened/a/b:1"] {
+            let reference: ImageRef = other.parse().unwrap();
+            assert_eq!(reference.local_archive(), None, "{other}");
+        }
+    }
 
     #[test]
     fn image_references_are_normalized() {

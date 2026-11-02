@@ -1,0 +1,4 @@
+# glibc, and what clang links against it with, for the programs that load NVIDIA's libraries (built
+# against glibc): their container images hold it, never the images' root filesystems.
+environment = "tools"
+components = ["compiler-rt-gnu", "glibc"]

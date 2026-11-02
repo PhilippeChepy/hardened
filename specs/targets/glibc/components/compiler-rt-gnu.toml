@@ -1,0 +1,83 @@
+version = "{llvm.version}"
+kind = "library"
+summary = "compiler-rt builtins and C start files for glibc programs (x86_64-linux-gnu)"
+license = "Apache-2.0 WITH LLVM-exception"
+homepage = "https://compiler-rt.llvm.org"
+purl = "pkg:github/llvm/llvm-project@llvmorg-{version}"
+cpe = "llvm:compiler-rt"
+
+[exports]
+target = "x86_64-linux-gnu"
+# clang's resource directory for that target: its headers and these builtins, below `/`.
+resource-dir = "usr/lib/clang-gnu/{llvm.major}"
+
+[sources.src]
+from = "llvm"
+
+# What the builtins include of a C library: musl's headers do, as for the tools' compiler-rt.
+[sources.musl]
+from = "musl"
+
+[[build]]
+run.cmd = ["make", "ARCH=x86_64", "prefix=/usr", "install-headers", "DESTDIR={work:sysroot}"]
+run.dir = "{musl}"
+
+[[build]]
+mkdir = "{work:build}"
+
+[[build]]
+run.cmd = [
+    "cmake",
+    "-G",
+    "Unix Makefiles",
+    "-S",
+    "{src}/runtimes",
+    "-B",
+    "{work:build}",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_SYSTEM_NAME=Linux",
+    "-DCMAKE_SYSTEM_PROCESSOR=x86_64",
+    "-DCMAKE_C_COMPILER=clang",
+    "-DCMAKE_CXX_COMPILER=clang++",
+    "-DCMAKE_ASM_COMPILER=clang",
+    "-DCMAKE_C_COMPILER_TARGET={compiler-rt-gnu.target}",
+    "-DCMAKE_CXX_COMPILER_TARGET={compiler-rt-gnu.target}",
+    "-DCMAKE_ASM_COMPILER_TARGET={compiler-rt-gnu.target}",
+    "-DLLVM_DEFAULT_TARGET_TRIPLE={compiler-rt-gnu.target}",
+    "-DCMAKE_INSTALL_PREFIX=/usr",
+    "-DCMAKE_SYSROOT={work:sysroot}",
+    "-DLLVM_ENABLE_RUNTIMES=compiler-rt",
+    "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+    "-DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON",
+    "-DCOMPILER_RT_BUILD_BUILTINS=ON",
+    "-DCOMPILER_RT_BUILD_CRT=ON",
+    "-DCOMPILER_RT_BUILD_SANITIZERS=OFF",
+    "-DCOMPILER_RT_BUILD_XRAY=OFF",
+    "-DCOMPILER_RT_BUILD_LIBFUZZER=OFF",
+    "-DCOMPILER_RT_BUILD_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_MEMPROF=OFF",
+    "-DCOMPILER_RT_BUILD_ORC=OFF",
+    "-DCOMPILER_RT_BUILD_CTX_PROFILE=OFF",
+    "-DCOMPILER_RT_BUILD_GWP_ASAN=OFF",
+    "-DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=ON",
+    "-DCOMPILER_RT_INSTALL_PATH=/{compiler-rt-gnu.resource-dir}",
+]
+
+[[build]]
+make.dir = "{work:build}"
+make.install.targets = ["install"]
+
+# clang's own headers next to them: a whole resource directory.
+[[build]]
+run.cmd = ["cp", "-a", "/usr/lib/clang/{llvm.major}/include", "{dest}/{compiler-rt-gnu.resource-dir}"]
+
+# The start files under GCC's names, which glibc asks the compiler for (`-print-file-name`).
+[[build]]
+symlinks.dir = "{dest}/{compiler-rt-gnu.resource-dir}/lib/x86_64-unknown-linux-gnu"
+symlinks.links = [
+    ["crtbegin.o", "clang_rt.crtbegin.o"],
+    ["crtbeginS.o", "clang_rt.crtbegin.o"],
+    ["crtbeginT.o", "clang_rt.crtbegin.o"],
+    ["crtend.o", "clang_rt.crtend.o"],
+    ["crtendS.o", "clang_rt.crtend.o"],
+]

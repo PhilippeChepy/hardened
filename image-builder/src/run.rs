@@ -249,12 +249,10 @@ pub fn test(paths: &Paths, args: &TestArgs) -> anyhow::Result<()> {
         )
         .context(boot.name)?;
     }
-    if paths
-        .targets()
-        .join(&args.target.id)
-        .join("components/kubelet")
-        .exists()
-    {
+    let target = crate::targets::Targets::load(&paths.targets())?;
+    let ships_kubelet = (target.get(&args.target.id)?.components.iter())
+        .any(|component| component.as_str() == "kubelet");
+    if ships_kubelet {
         eprintln!("==> {}", KUBELET_BOOT.name);
         let kubelet_user_data = paths.build().join("test-user-data-kubelet.toml");
         let kubernetes = kubernetes_user_data(paths)?;

@@ -1,0 +1,10 @@
+description = "nvidia-controller: loads NVIDIA's open kernel modules, makes their device nodes, partitions GPUs"
+exec = ["/usr/bin/nvidia-controller", "--driver", "/usr/lib/nvidia/{nvidia-driver.version}"]
+notify = true
+console = true
+runtime-directories = ["/run/nvidia-controller"]
+
+[[sockets]]
+name = "api"
+path = "/run/nvidia-controller/api.sock"
+allow = ["machine-controller"]

@@ -3,7 +3,8 @@
 //! Component outputs are merged into one tree; every path must be owned by exactly one component
 //! (directories may be shared). The result is checked before it is sealed with dm-verity:
 //! - every ELF file is a static executable or a kernel module: no dynamic loader, no shared
-//!   library, so nothing to resolve or preload at run time;
+//!   library, so nothing to resolve or preload at run time; but in the target's `prebuilt`
+//!   directories, a vendor's files never run on the host;
 //! - nothing is setuid/setgid or world-writable.
 //!
 //! Executables are then stripped of their symbol tables and debug information
@@ -111,11 +112,18 @@ impl Manifest {
 }
 
 /// The executables of the root filesystem that still carry a symbol table or debug information,
-/// by path: what image assembly strips. Kernel modules (relocatable, and signed) are left alone.
-pub fn unstripped(root: &Path, manifest: &Manifest) -> anyhow::Result<Vec<String>> {
+/// by path: what image assembly strips. Kernel modules (relocatable, and signed) and the files of
+/// `prebuilt` directories are left alone.
+pub fn unstripped(
+    root: &Path,
+    manifest: &Manifest,
+    prebuilt: &[String],
+) -> anyhow::Result<Vec<String>> {
     let mut paths = Vec::new();
     for (path, entry) in &manifest.entries {
-        if let Entry::File { .. } = entry {
+        if let Entry::File { .. } = entry
+            && !is_prebuilt(path, prebuilt)
+        {
             let bytes = std::fs::read(root.join(path))?;
             if is_unstripped(&bytes).with_context(|| format!("parsing /{path}"))? {
                 paths.push(path.clone());
@@ -141,8 +149,23 @@ fn is_unstripped(bytes: &[u8]) -> anyhow::Result<bool> {
     }))
 }
 
-/// Merges the root outputs of `components` into `dest`, which is recreated.
-pub fn assemble(components: &[&Built<'_>], dest: &Path) -> anyhow::Result<Manifest> {
+/// Whether the image's `path` (relative to its root) is in one of the `prebuilt` directories.
+#[must_use]
+fn is_prebuilt(path: &str, prebuilt: &[String]) -> bool {
+    prebuilt.iter().any(|dir| {
+        let dir = dir.trim_start_matches('/');
+        path.strip_prefix(dir)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Merges the root outputs of `components` into `dest`, which is recreated; the files of
+/// `prebuilt` directories are not checked for static linking.
+pub fn assemble(
+    components: &[&Built<'_>],
+    dest: &Path,
+    prebuilt: &[String],
+) -> anyhow::Result<Manifest> {
     if dest.exists() {
         std::fs::remove_dir_all(dest)?;
     }
@@ -201,7 +224,7 @@ pub fn assemble(components: &[&Built<'_>], dest: &Path) -> anyhow::Result<Manife
     }
 
     check_permissions(&manifest)?;
-    check_static(dest, &manifest)?;
+    check_static(dest, &manifest, prebuilt)?;
     Ok(manifest)
 }
 
@@ -259,11 +282,13 @@ fn dynamic_linking(bytes: &[u8]) -> anyhow::Result<Option<String>> {
 }
 
 /// Every ELF file is a static executable or a kernel module: the image holds no dynamic loader
-/// or shared library.
-fn check_static(root: &Path, manifest: &Manifest) -> anyhow::Result<()> {
+/// or shared library, but in `prebuilt` directories.
+fn check_static(root: &Path, manifest: &Manifest, prebuilt: &[String]) -> anyhow::Result<()> {
     let mut problems = Vec::new();
     for (path, entry) in &manifest.entries {
-        if let Entry::File { .. } = entry {
+        if let Entry::File { .. } = entry
+            && !is_prebuilt(path, prebuilt)
+        {
             let bytes = std::fs::read(root.join(path))?;
             if let Some(problem) =
                 dynamic_linking(&bytes).with_context(|| format!("parsing /{path}"))?
@@ -295,6 +320,24 @@ mod tests {
                 .starts_with("dynamically linked")
         );
         assert_eq!(dynamic_linking(b"#!/bin/false\n").unwrap(), None);
+    }
+
+    #[test]
+    fn prebuilt_directories_and_what_they_hold() {
+        let prebuilt = ["/usr/lib/nvidia".to_owned()];
+        for path in [
+            "usr/lib/nvidia",
+            "usr/lib/nvidia/595/root/usr/bin/nvidia-smi",
+        ] {
+            assert!(is_prebuilt(path, &prebuilt), "{path}");
+        }
+        for path in [
+            "usr/lib/nvidia-ml",
+            "usr/lib/firmware/nvidia/gsp.bin",
+            "usr/bin/x",
+        ] {
+            assert!(!is_prebuilt(path, &prebuilt), "{path}");
+        }
     }
 
     #[test]

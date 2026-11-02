@@ -296,3 +296,17 @@ started; `PATH` is where CNI plugins and kubelet find `mount`, `iptables` and `n
 
 - **Unconfined**: it runs the node's pods. Stopping it leaves their containers, which serviced
   stops with the remaining processes at shutdown.
+
+### nvidia-controller (NVIDIA variant)
+
+When the PCI bus has NVIDIA GPUs, loads NVIDIA's open kernel modules from the driver directory
+its `--driver` names (`/usr/lib/nvidia/<version>`, signed, from the verity root) and makes their
+device nodes, which the driver does not make. Ready once done, GPUs or not; its API
+(`hardened.nvidia.v1`) gives machine-controller the GPUs and whether the driver is ready, and
+partitions them (MIG) as machine-controller's `Configure` says, with the driver root's
+`nvidia-smi`; it records each GPU's instances in its runtime directory, the GPU keeping them
+until the next boot. The plugins are workloads machine-controller declares, not services of the
+image ([the NVIDIA variant](nvidia-target.md)).
+
+- **Unconfined**: it loads kernel modules, makes device nodes in `/dev` and runs `nvidia-smi`
+  (NVIDIA's, glibc's) as root.

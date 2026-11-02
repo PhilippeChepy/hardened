@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+// nvidia-controller's API (/run/nvidia-controller/api.sock): the NVIDIA GPUs, for which it loads
+// the open kernel modules and makes the device nodes at boot, and which it partitions (MIG) as
+// machine-controller configures it.
+package hardened.nvidia.v1;
+
+import "google/protobuf/empty.proto";
+
+service NvidiaController {
+  // Partitions the GPUs, or not; returns once done. Without GPUs, it does nothing.
+  rpc Configure(Configuration) returns (google.protobuf.Empty);
+  rpc GetState(google.protobuf.Empty) returns (State);
+}
+
+message Configuration {
+  // Absent: whole GPUs, MIG mode disabled on those having it.
+  optional Mig mig = 1;
+}
+
+message State {
+  // The version of the driver the image ships (its modules and user space).
+  string driver_version = 1;
+  // The NVIDIA GPUs on the PCI bus.
+  repeated Gpu gpus = 2;
+  // Whether the modules are loaded and the device nodes made: false without GPUs.
+  bool ready = 3;
+  // Why not, when there are GPUs; or why the GPUs are not partitioned as configured.
+  optional string error = 4;
+  // A GPU's MIG mode changes only once it is reset: at the next boot.
+  bool reboot_required = 5;
+}
+
+message Gpu {
+  // Domain:bus:device.function.
+  string pci_address = 1;
+  // The PCI device ID.
+  uint32 device_id = 2;
+  // The minor of its /dev/nvidiaN, once the driver probed it.
+  optional uint32 minor = 3;
+  MigMode mig_mode = 4;
+  // The profiles of its MIG instances (GPU instances, each with one compute instance).
+  repeated string mig_instances = 5;
+}
+
+enum MigMode {
+  // Not known: the driver is not ready.
+  MIG_MODE_UNSPECIFIED = 0;
+  MIG_MODE_UNSUPPORTED = 1;
+  MIG_MODE_DISABLED = 2;
+  MIG_MODE_ENABLED = 3;
+  // Changed, until the GPU is reset.
+  MIG_MODE_PENDING = 4;
+}
+
+// settings.kubelet-device-plugins.nvidia: NVIDIA's device plugin, on a node with GPUs.
+message DevicePlugin {
+  bool enabled = 1;
+  bool pass_device_specs = 2;
+  DeviceIdStrategy device_id_strategy = 3;
+  // As written: volume-mounts and envvar stand for CDI's CRI field.
+  repeated DeviceListStrategy device_list_strategy = 4;
+  // Absent: one container per GPU.
+  optional TimeSlicing time_slicing = 5;
+  // The table of MPS, kept as written: MPS is not supported yet.
+  optional Mps mps = 6;
+  // The table of MIG, as written: the profiles when partitioning is MIG's.
+  optional Mig mig = 7;
+  DevicePartitioningStrategy device_partitioning_strategy = 8;
+}
+
+enum DevicePartitioningStrategy {
+  DEVICE_PARTITIONING_STRATEGY_UNSPECIFIED = 0;
+  DEVICE_PARTITIONING_STRATEGY_NONE = 1;
+  DEVICE_PARTITIONING_STRATEGY_MIG = 2;
+}
+
+enum DeviceIdStrategy {
+  DEVICE_ID_STRATEGY_UNSPECIFIED = 0;
+  DEVICE_ID_STRATEGY_INDEX = 1;
+  DEVICE_ID_STRATEGY_UUID = 2;
+}
+
+enum DeviceListStrategy {
+  DEVICE_LIST_STRATEGY_UNSPECIFIED = 0;
+  DEVICE_LIST_STRATEGY_VOLUME_MOUNTS = 1;
+  DEVICE_LIST_STRATEGY_ENVVAR = 2;
+  DEVICE_LIST_STRATEGY_CDI_CRI = 3;
+  DEVICE_LIST_STRATEGY_CDI_ANNOTATIONS = 4;
+}
+
+// device-sharing-strategy = "time-slicing".
+message TimeSlicing {
+  // At least 1.
+  uint32 replicas = 1;
+  bool rename_by_default = 2;
+  bool fail_requests_greater_than_one = 3;
+}
+
+message Mps {
+  optional uint32 replicas = 1;
+}
+
+message Mig {
+  // The MIG profile of each GPU model (a100.40gb: 1g.5gb), or its number of instances (7).
+  map<string, string> profile = 1;
+}
+
+// settings.hardened.nvidia-dra: NVIDIA's DRA kubelet plugin, on a node with GPUs.
+message Dra {
+  bool enabled = 1;
+}

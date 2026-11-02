@@ -461,6 +461,11 @@ pub enum Cgo {
     /// with ThinLTO. `libraries` holds other libraries' staged `/usr` tree (a dependency's output,
     /// static archives only), found through pkg-config.
     Enabled { libraries: Option<Loc> },
+    /// Links dynamically against glibc with `cc`, its compiler command (the `glibc` target's):
+    /// for programs that load a vendor's glibc libraries (NVIDIA's), which only run in container
+    /// images holding that glibc. A PIE with RELRO, binding lazily (NVML's functions are only
+    /// there once its library is loaded).
+    Glibc { cc: Arg },
 }
 
 /// The Rust target of workspace binaries (the build machine's).
@@ -692,6 +697,18 @@ impl Build {
                         ("PKG_CONFIG_SYSROOT_DIR", libraries.into()),
                     ]);
                 }
+            }
+            Cgo::Glibc { cc } => {
+                // Lazy binding: go-nvml leaves NVML's functions undefined until it loads
+                // libnvidia-ml at run time (`-z now` would fail them at startup).
+                ldflags.push_str(" -linkmode external -extldflags '-Wl,-z,relro'");
+                args.push("-buildmode=pie");
+                tags.extend(["netgo", "osusergo"]);
+                env.extend([
+                    ("CGO_ENABLED", "1".into()),
+                    ("CC", cc.clone()),
+                    ("CGO_CFLAGS", "-O2".into()),
+                ]);
             }
         }
         let tags = tags.join(" ");

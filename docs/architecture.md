@@ -25,6 +25,11 @@
 
 The `kubernetes-1-37` image adds kubelet, kubelet-controller, the pod sandbox image (`pause`),
 the CNI plugins, `mount` and the netfilter tools ([its contents](kubernetes-target.md#contents)).
+The `kubernetes-1-37-nvidia` image adds NVIDIA's open kernel modules, its driver's user space,
+nvidia-controller and the device and DRA plugins ([the NVIDIA variant](nvidia-target.md)): the
+driver's user space and firmware, NVIDIA's prebuilt glibc files, with the glibc nvidia-smi runs
+with on the host to partition GPUs (MIG), are the one exception to what follows (the target's
+`prebuilt` directories).
 
 Everything is compiled by clang (LLVM), linked by lld, against musl and compiler-rt (no GCC,
 glibc or libgcc), and every program is statically linked: the image has no dynamic loader and no
@@ -449,6 +454,11 @@ standard   FROM tools            the image: base-files, kernel, runc, containerd
                                  system-controllers...
 kubernetes-1-37                  standard's components, then pause, mount, iptables, nft, the
   FROM tools, extends standard   CNI plugins, kubelet and kubelet-controller
+glibc      FROM tools            glibc built with clang, and compiler-rt for it: for the NVIDIA
+                                 plugins' container images, never shipped as such
+kubernetes-1-37-nvidia           kubernetes-1-37's components, then NVIDIA's modules, driver,
+  FROM tools,                    nvidia-controller, CDI hook and plugin images (against glibc)
+  extends kubernetes-1-37
 ```
 
 A target's `components` build on its environment's image (bootstrap's, on the seed), each with
@@ -525,7 +535,8 @@ environments holding its target otherwise. Every tree keeps the merged-`/usr` la
 4. **Assemble:** merge the trees of the exported target's components. A path owned by two
    components is an error. The build fails on setuid/setgid or world-writable files, and on any
    ELF file that is not a static executable or a kernel module (an interpreter, `DT_NEEDED`
-   libraries, or a shared library). Then every executable that still has a symbol table or debug
+   libraries, or a shared library), but in the target's `prebuilt` directories (NVIDIA's driver
+   user space and firmware, which are neither run on the host nor stripped). Then every executable that still has a symbol table or debug
    information is stripped (`llvm-strip --strip-all`, from the environment; deterministic), once
    for all components, whatever their builds did; kernel modules are left alone, their signature
    covers them. The manifest records the stripped files.
@@ -623,6 +634,8 @@ one per line, rather than inline tables (but `{}`, a step without options).
   level is checked); kubelet settings Bottlerocket has and hardened not yet (among others
   `provider-id`, `server-tls-bootstrap`, `credential-providers`, `pod-pids-limit`,
   `container-log-*`, the CPU, memory and topology managers).
+- **NVIDIA:** MPS sharing; the driver's user space is NVIDIA's prebuilt glibc files, and MIG
+  partitioning runs its nvidia-smi on the host; nothing is tested on a GPU yet ([the NVIDIA variant](nvidia-target.md#not-yet)).
 - **State encryption:** off by default; bound to plain PCR 11, so an image update formats
   `/var`; no integrity protection, TPM parameter encryption or recovery key
   ([choices](state-encryption.md#choices)).

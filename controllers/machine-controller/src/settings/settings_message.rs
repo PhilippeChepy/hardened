@@ -66,6 +66,8 @@ impl Settings {
             }),
             storage: Some(settings.hardened.storage.into()),
             time_source: time::Source::from(settings.hardened.time.source).into(),
+            nvidia_device_plugin: Some(settings.kubelet_device_plugins.nvidia.into()),
+            nvidia_dra: Some(settings.hardened.nvidia_dra.into()),
         }
     }
 }

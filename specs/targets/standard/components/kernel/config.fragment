@@ -96,6 +96,8 @@ CONFIG_EFI_STUB=y
 CONFIG_EFI_MIXED=n
 CONFIG_EFIVAR_FS=y
 CONFIG_FW_CFG_SYSFS=y
+# Firmware from /usr/lib/firmware: the GSP firmware of NVIDIA's open modules.
+CONFIG_FW_LOADER=y
 # SMBIOS: /sys/class/dmi/id, where machine-controller finds the platform (sys_vendor) and qemu's
 # instance ID (product_uuid). EXPERT would leave DMI out otherwise.
 CONFIG_DMI=y
@@ -490,6 +492,8 @@ CONFIG_PAGE_TABLE_CHECK_ENFORCED=y
 CONFIG_STRICT_KERNEL_RWX=y
 CONFIG_STRICT_MODULE_RWX=y
 CONFIG_TRIM_UNUSED_KSYMS=y
+# What out-of-tree modules of the images use (NVIDIA's open modules), exported as well.
+CONFIG_UNUSED_KSYMS_WHITELIST="hardened-ksyms-whitelist"
 # No user-mode helper: the kernel starts no program (coredump pipes, request-key, ...).
 CONFIG_STATIC_USERMODEHELPER=y
 CONFIG_STATIC_USERMODEHELPER_PATH=""

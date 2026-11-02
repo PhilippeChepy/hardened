@@ -1,0 +1,67 @@
+version = "0.20.1"
+kind = "application"
+summary = "NVIDIA's Kubernetes device plugin: the node's GPUs for kubelet, in a glibc container image"
+license = "Apache-2.0"
+homepage = "https://github.com/NVIDIA/k8s-device-plugin"
+purl = "pkg:github/NVIDIA/k8s-device-plugin@v{version}"
+cpe = "nvidia:k8s-device-plugin"
+
+[sources.src]
+url = "https://github.com/NVIDIA/k8s-device-plugin/archive/refs/tags/v{version}.tar.gz"
+sha256 = "657371ae36f0e5d3a35c9a8658e26db4d006353225bba1ab000f62f371c4f85c"
+
+# `localhost/hardened/nvidia-device-plugin:{version}`, which machine-controller runs as a workload.
+[images.nvidia-device-plugin]
+entrypoint = "/usr/bin/nvidia-device-plugin"
+user = [0, 0]
+
+# Against glibc: it loads NVIDIA's NVML (libnvidia-ml), a glibc library, from the driver root.
+[[build]]
+go-build.commands = [["./cmd/nvidia-device-plugin", "/usr/libexec/nvidia-device-plugin"]]
+go-build.cgo.cc = "{glibc.cc} --sysroot={dep:glibc/glibc}"
+go-build.vars = [["github.com/NVIDIA/k8s-device-plugin/internal/info.version", "v{version}"]]
+
+[[build]]
+install.from = "{dest}/usr/libexec/nvidia-device-plugin"
+install.to = "{image:nvidia-device-plugin}/usr/bin/nvidia-device-plugin"
+install.mode = 0o755
+
+[[build]]
+remove = "{dest}/usr/libexec/nvidia-device-plugin"
+
+# glibc, and what NVML needs of it.
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/ld-linux-x86-64.so.2"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/ld-linux-x86-64.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libc.so.6"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/libc.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libm.so.6"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/libm.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libdl.so.2"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/libdl.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libpthread.so.0"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/libpthread.so.0"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/librt.so.1"
+install.to = "{image:nvidia-device-plugin}/usr/lib64/librt.so.1"
+install.mode = 0o755
+
+# The interpreter programs name (/lib64/ld-linux-x86-64.so.2), in the merged-/usr layout.
+[[build]]
+symlink.target = "usr/lib64"
+symlink.link = "{image:nvidia-device-plugin}/lib64"

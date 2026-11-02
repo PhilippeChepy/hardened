@@ -1,0 +1,17 @@
+extends = "kubernetes-1-37"
+components = [
+    "nvidia-open-gpu-kernel-modules",
+    "nvidia-driver",
+    "nvidia-controller",
+    "nvidia-cdi-hook",
+    "nvidia-k8s-device-plugin",
+    "nvidia-dra-kubelet-plugin",
+]
+
+# NVIDIA's prebuilt user space and GSP firmware (nvidia-driver): the user space is mounted into
+# GPU containers, and its nvidia-smi partitions GPUs on the host with the glibc beside it; the
+# firmware, loaded by the open modules.
+prebuilt = ["/usr/lib/nvidia/595.112.07/root", "/usr/lib/firmware/nvidia"]
+
+[export]
+name = "hardened-kubernetes-1-37-nvidia"

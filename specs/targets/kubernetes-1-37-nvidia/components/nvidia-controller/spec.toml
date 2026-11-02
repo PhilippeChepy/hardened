@@ -1,0 +1,22 @@
+version = "workspace"
+kind = "application"
+summary = "nvidia-controller: loads NVIDIA's open kernel modules, makes their device nodes, partitions GPUs"
+license = "Apache-2.0"
+homepage = "https://github.com/PhilippeChepy/hardened"
+purl = "pkg:github/PhilippeChepy/hardened@{version}#controllers/nvidia-controller"
+
+local = ["controllers", "serviced"]
+
+depends-on = ["rust", "ca-certificates"]
+
+[[build]]
+cargo-build.workspace = "controllers"
+cargo-build.binaries = [
+    ["nvidia-controller", "/usr/bin/nvidia-controller"],
+]
+
+# The driver's directory, of the version nvidia-driver and the modules ship.
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/nvidia-controller.toml"
+write.file = "services/nvidia-controller.toml"
+write.template = true

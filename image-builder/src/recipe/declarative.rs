@@ -213,7 +213,7 @@ enum StepFile {
     },
     /// Go commands (`[package, install path]`), built with the hardened defaults: pure Go, or
     /// with `cgo` linked statically against musl and, in `cgo.libraries`, other libraries'
-    /// installed `/usr` tree.
+    /// installed `/usr` tree; or, with `cgo.cc` (glibc's compiler), dynamically against glibc.
     GoBuild {
         commands: Vec<(String, String)>,
         cgo: Option<CgoFile>,
@@ -291,6 +291,9 @@ struct MakeInstall {
 struct CgoFile {
     /// Other libraries' installed `/usr` tree.
     libraries: Option<String>,
+    /// glibc's compiler command (`{glibc.cc} --sysroot=...`), to link dynamically against it
+    /// instead: for programs loading NVIDIA's glibc libraries, which run in container images.
+    cc: Option<String>,
 }
 
 /// What `write` writes: one of its keys.
@@ -1275,9 +1278,22 @@ impl Scope<'_> {
                 let tree = self.src()?;
                 let cgo = match cgo {
                     None => Cgo::Disabled,
-                    Some(CgoFile { libraries }) => Cgo::Enabled {
+                    Some(CgoFile {
+                        libraries,
+                        cc: None,
+                    }) => Cgo::Enabled {
                         libraries: libraries.as_deref().map(|l| self.loc(b, l)).transpose()?,
                     },
+                    Some(CgoFile {
+                        libraries: None,
+                        cc: Some(cc),
+                    }) => Cgo::Glibc {
+                        cc: self.arg(b, cc)?,
+                    },
+                    Some(CgoFile {
+                        libraries: Some(_),
+                        cc: Some(_),
+                    }) => bail!("go-build.cgo: libraries are musl's, cc is glibc's: not both"),
                 };
                 let tags = self.texts(tags)?;
                 let vars = self.pairs(vars)?;

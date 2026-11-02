@@ -624,6 +624,7 @@ dependencies = [
  "machine-apiproxy",
  "machine-controller",
  "network-controller",
+ "nvidia-controller",
  "rcgen",
  "ring",
  "rustix",
@@ -969,6 +970,7 @@ dependencies = [
  "libserviced",
  "machine-apiproxy",
  "network-controller",
+ "nvidia-controller",
  "prost",
  "prost-types",
  "protox",
@@ -1152,6 +1154,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "nvidia-controller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "controllers-helpers",
+ "libserviced",
+ "prost",
+ "protox",
+ "rustix",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+ "workload-controller",
 ]
 
 [[package]]

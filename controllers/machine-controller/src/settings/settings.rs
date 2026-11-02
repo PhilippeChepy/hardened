@@ -6,6 +6,7 @@ use controllers_helpers::{Hostname, WorkloadName};
 use kubelet_controller::KubeletConfig;
 use machine_apiproxy::ApiConfig;
 use network_controller::DnsSettings;
+use nvidia_controller::{DevicePluginSettings, DraSettings};
 use serde::{Deserialize, Serialize};
 use storage_controller::StorageSettings;
 use time_controller::TimeServer;
@@ -37,6 +38,9 @@ pub struct Settings {
     /// `[settings.container-registry]`.
     #[serde(default)]
     pub container_registry: RegistrySettings,
+    /// `[settings.kubelet-device-plugins]`.
+    #[serde(default)]
+    pub kubelet_device_plugins: KubeletDevicePlugins,
     /// `[settings.hardened]`.
     #[serde(default)]
     pub hardened: HardenedSettings,
@@ -73,10 +77,22 @@ pub struct HardenedSettings {
     /// `[settings.hardened.time]`.
     #[serde(default)]
     pub time: TimeSettings,
+    /// `[settings.hardened.nvidia-dra]`: NVIDIA's DRA kubelet plugin, on the NVIDIA variant.
+    #[serde(default)]
+    pub nvidia_dra: DraSettings,
     /// `[settings.hardened.containers.<name>]`: containers, keyed by name; the API's run next to
     /// them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub containers: BTreeMap<WorkloadName, ContainerSettings>,
+}
+
+/// `[settings.kubelet-device-plugins]`: the device plugins of the variants with accelerators.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct KubeletDevicePlugins {
+    /// `[settings.kubelet-device-plugins.nvidia]`, on the NVIDIA variant.
+    #[serde(default)]
+    pub nvidia: DevicePluginSettings,
 }
 
 /// `[settings.hardened.time]`: what the clock is synchronized with.

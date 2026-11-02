@@ -131,7 +131,7 @@ pub fn build_image(
 
     eprintln!("==> assembling root filesystem of target {}", target.id);
     let rootfs = dir.join("rootfs");
-    let mut manifest = crate::rootfs::assemble(&shipped, &rootfs)?;
+    let mut manifest = crate::rootfs::assemble(&shipped, &rootfs, &target.prebuilt)?;
     for component in &shipped {
         for image in &component.job.recipe.plan.images {
             let archive = fs::read(component.container_image(image))?;
@@ -139,7 +139,7 @@ pub fn build_image(
             manifest.add_generated(&rootfs, &path, component.job.recipe.name(), &archive)?;
         }
     }
-    strip(&assembly, &rootfs, &mut manifest)?;
+    strip(&assembly, &rootfs, &mut manifest, &target.prebuilt)?;
     let manifest_json = serde_json::to_vec_pretty(&manifest)?;
     fs::write(dir.join("manifest.json"), &manifest_json)?;
     let manifest_digest = Sha256::digest(&manifest_json);
@@ -269,9 +269,14 @@ pub fn build_image(
 /// Strips the executables of the root filesystem with the tools' `llvm-strip`, once for all: C
 /// programs keep their symbol tables unless their build strips them, and Rust's release profile
 /// keeps them too. `--strip-all` on an executable is deterministic; kernel modules are left
-/// alone (their signature covers them).
-fn strip(image: &Image, rootfs: &Path, manifest: &mut Manifest) -> anyhow::Result<()> {
-    let paths = crate::rootfs::unstripped(rootfs, manifest)?;
+/// alone (their signature covers them), and so are the vendor's files of `prebuilt`.
+fn strip(
+    image: &Image,
+    rootfs: &Path,
+    manifest: &mut Manifest,
+    prebuilt: &[String],
+) -> anyhow::Result<()> {
+    let paths = crate::rootfs::unstripped(rootfs, manifest, prebuilt)?;
     if paths.is_empty() {
         return Ok(());
     }
@@ -289,7 +294,7 @@ fn strip(image: &Image, rootfs: &Path, manifest: &mut Manifest) -> anyhow::Resul
         .mount(rootfs, "/rootfs")
         .run(&format!("llvm-strip --strip-all {}", files.join(" ")))?;
     manifest.rehash(rootfs, &paths)?;
-    let left = crate::rootfs::unstripped(rootfs, manifest)?;
+    let left = crate::rootfs::unstripped(rootfs, manifest, prebuilt)?;
     ensure!(
         left.is_empty(),
         "still unstripped after llvm-strip: {}",

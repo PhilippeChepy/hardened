@@ -20,6 +20,7 @@ kubelet-controller.workspace = true
 libserviced.workspace = true
 machine-apiproxy.workspace = true
 network-controller.workspace = true
+nvidia-controller.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 rustix.workspace = true

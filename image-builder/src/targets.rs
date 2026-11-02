@@ -33,8 +33,12 @@
 //! its `export.environment`: a target of its own, so that the tools assembling and booting images
 //! change without rebuilding what they ship.
 //!
-//! `extends = "<target>"` starts from another target: its components come first, `kernel-cmdline`
-//! and `kspp-exceptions` add to its own, the other fields replace it.
+//! `extends = "<target>"` starts from another target: its components come first, `kernel-cmdline`,
+//! `kspp-exceptions` and `prebuilt` add to its own, the other fields replace it.
+//!
+//! `prebuilt` lists the directories of the image holding a vendor's prebuilt files, the only
+//! files not built from source (NVIDIA's driver user space and firmware): they are left out of
+//! the static linking check and of stripping. Nothing of them runs on the host.
 //!
 //! `kspp-exceptions` are the recommendations of kernel-hardening-checker the image's kernel does
 //! not follow, by option name, each with its reason: any other recommendation failing on the
@@ -71,6 +75,9 @@ pub struct Target {
     pub kspp_exceptions: BTreeMap<String, String>,
     /// The file of its image listing the sysctls it sets, for the KSPP check.
     pub kspp_sysctls: Option<String>,
+    /// The directories of its image holding prebuilt vendor files, not built here: left out of
+    /// the static linking check and of stripping.
+    pub prebuilt: Vec<String>,
     /// The partitions of its image.
     pub partition: Partition,
     /// How it is exported, if it is.
@@ -161,6 +168,8 @@ struct File {
     #[serde(default)]
     kspp_exceptions: BTreeMap<String, String>,
     kspp_sysctls: Option<String>,
+    #[serde(default)]
+    prebuilt: Vec<String>,
     partition: Option<PartitionFile>,
     export: Option<ExportFile>,
 }
@@ -323,6 +332,14 @@ fn resolve(
         .kspp_sysctls
         .clone()
         .or(parent.and_then(|p| p.kspp_sysctls.clone()));
+    let mut prebuilt = parent.map(|p| p.prebuilt.clone()).unwrap_or_default();
+    for dir in &file.prebuilt {
+        ensure!(
+            dir.starts_with('/') && dir.len() > 1 && !dir.split('/').any(|part| part == ".."),
+            "prebuilt {dir:?} is not an absolute directory below /"
+        );
+        prebuilt.push(dir.trim_end_matches('/').to_owned());
+    }
     let mib = |size: Option<u64>, what: &str| -> anyhow::Result<Option<u64>> {
         ensure!(size != Some(0), "partition.{what} is empty");
         Ok(size.map(|size| size * MIB))
@@ -352,8 +369,10 @@ fn resolve(
             || (kernel_cmdline.is_empty()
                 && kspp_exceptions.is_empty()
                 && kspp_sysctls.is_none()
+                && prebuilt.is_empty()
                 && file.partition.is_none()),
-        "kernel-cmdline, kspp-exceptions, kspp-sysctls and partition are for exported targets"
+        "kernel-cmdline, kspp-exceptions, kspp-sysctls, prebuilt and partition are for exported \
+         targets"
     );
     Ok(Target {
         id: id.clone(),
@@ -363,6 +382,7 @@ fn resolve(
         kernel_cmdline,
         kspp_exceptions,
         kspp_sysctls,
+        prebuilt,
         partition,
         export,
     })

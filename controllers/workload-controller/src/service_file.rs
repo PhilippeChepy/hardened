@@ -1,6 +1,7 @@
 //! A workload as a service of serviced, in containerd's `system` namespace (Kubernetes' pods are
 //! in CRI's, `k8s.io`): `ctr images pull` for its image, with the registry hosts machine-controller
-//! writes from `settings.container-registry`, then `ctr run` in the foreground, which serviced
+//! writes from `settings.container-registry` (`ctr images import` for an image of the root
+//! filesystem, `localhost/hardened/<name>`), then `ctr run` in the foreground, which serviced
 //! supervises like any process: the container's exit code is the service's, and SIGTERM, then
 //! SIGKILL, are forwarded to the container.
 //!
@@ -64,18 +65,23 @@ fn to_service(name: &WorkloadName, workload: &ImageWorkload) -> Result<Service, 
     // Unpacked by ctr itself (`--local`), synced to disk: the transfer service's unpack does
     // not sync, and a power loss after a pull would leave a kept image with empty files. Only
     // this platform's manifests are fetched (`--skip-metadata`): registries rate-limit requests.
-    let pull = [
-        "--namespace",
-        NAMESPACE,
-        "images",
-        "pull",
-        "--local",
-        "--sync-fs",
-        "--skip-metadata",
-        "--hosts-dir",
-        HOSTS_DIR,
-        image,
-    ];
+    // An image the root filesystem ships is imported from its archive.
+    let archive = workload.image.local_archive();
+    let pull: Vec<&str> = match &archive {
+        Some(archive) => vec!["--namespace", NAMESPACE, "images", "import", archive],
+        None => vec![
+            "--namespace",
+            NAMESPACE,
+            "images",
+            "pull",
+            "--local",
+            "--sync-fs",
+            "--skip-metadata",
+            "--hosts-dir",
+            HOSTS_DIR,
+            image,
+        ],
+    };
 
     let mut run: Vec<String> = ["--namespace", NAMESPACE, "run", "--rm", "--net-host"]
         .map(String::from)
@@ -248,6 +254,28 @@ console = true
         assert_eq!(service.requires[0].as_str(), "containerd");
         assert_eq!(service.runtime_directories[0].as_str(), "/var/lib/web");
         assert!(service.console);
+    }
+
+    #[test]
+    fn images_of_the_root_filesystem_are_imported() {
+        let local = ImageWorkload {
+            image: "localhost/hardened/nvidia-device-plugin:0.20.1"
+                .parse()
+                .unwrap(),
+            ..workload()
+        };
+        let service = to_service(&"web".parse().unwrap(), &local).unwrap();
+        assert_eq!(
+            Vec::from(service.exec_pre[1].clone()),
+            [
+                "/usr/bin/ctr",
+                "--namespace",
+                "system",
+                "images",
+                "import",
+                "/usr/share/hardened/images/nvidia-device-plugin.tar",
+            ]
+        );
     }
 
     #[test]

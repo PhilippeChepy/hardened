@@ -15,6 +15,7 @@ use machine_apiproxy::apiproxy;
 use machine_controller::machine;
 use machine_controller::machine::registry_credential::Auth;
 use machine_controller::machine::{ModuleLoad, RegistryCredential};
+use nvidia_controller::nvidia;
 use storage_controller::storage::Encryption;
 use time_controller::time;
 use toml::{Table, Value};
@@ -58,6 +59,11 @@ pub fn table(settings: &machine::Settings) -> anyhow::Result<Table> {
         groups.insert("kubernetes".to_owned(), Value::Table(kubernetes));
     }
     insert_table(&mut groups, "container-registry", registry(settings));
+    if let Some(nvidia) = &settings.nvidia_device_plugin {
+        let mut plugins = Table::new();
+        insert_table(&mut plugins, "nvidia", nvidia_device_plugin(nvidia));
+        insert_table(&mut groups, "kubelet-device-plugins", plugins);
+    }
     insert_table(&mut groups, "hardened", hardened(settings)?);
     let mut root = Table::new();
     insert_table(&mut root, "settings", groups);
@@ -167,11 +173,94 @@ fn hardened(settings: &machine::Settings) -> anyhow::Result<Table> {
         insert_string(&mut time, "source", source);
         table.insert("time".to_owned(), Value::Table(time));
     }
+    if settings.nvidia_dra.is_some_and(|dra| dra.enabled) {
+        let mut dra = Table::new();
+        dra.insert("enabled".to_owned(), Value::Boolean(true));
+        table.insert("nvidia-dra".to_owned(), Value::Table(dra));
+    }
     if let Some(declared) = &settings.containers {
         let declared = containers(declared).context("settings.hardened.containers")?;
         insert_table(&mut table, "containers", declared);
     }
     Ok(table)
+}
+
+/// `[settings.kubelet-device-plugins.nvidia]`, its defaults left out.
+#[must_use]
+fn nvidia_device_plugin(plugin: &nvidia::DevicePlugin) -> Table {
+    let mut table = Table::new();
+    for (key, value, default) in [
+        ("enabled", plugin.enabled, true),
+        ("pass-device-specs", plugin.pass_device_specs, true),
+    ] {
+        if value != default {
+            table.insert(key.to_owned(), Value::Boolean(value));
+        }
+    }
+    if plugin.device_id_strategy() == nvidia::DeviceIdStrategy::Uuid {
+        insert_string(&mut table, "device-id-strategy", "uuid");
+    }
+    let strategies: Vec<&str> = (plugin.device_list_strategy())
+        .map(|strategy| match strategy {
+            nvidia::DeviceListStrategy::VolumeMounts | nvidia::DeviceListStrategy::Unspecified => {
+                "volume-mounts"
+            }
+            nvidia::DeviceListStrategy::Envvar => "envvar",
+            nvidia::DeviceListStrategy::CdiCri => "cdi-cri",
+            nvidia::DeviceListStrategy::CdiAnnotations => "cdi-annotations",
+        })
+        .collect();
+    match strategies.as_slice() {
+        [] | ["volume-mounts"] => {}
+        [strategy] => insert_string(&mut table, "device-list-strategy", strategy),
+        _ => {
+            let strategies = strategies.iter().map(|s| Value::String((*s).to_owned()));
+            table.insert(
+                "device-list-strategy".to_owned(),
+                Value::Array(strategies.collect()),
+            );
+        }
+    }
+    if let Some(slicing) = &plugin.time_slicing {
+        insert_string(&mut table, "device-sharing-strategy", "time-slicing");
+        let mut time_slicing = Table::new();
+        time_slicing.insert(
+            "replicas".to_owned(),
+            Value::Integer(slicing.replicas.into()),
+        );
+        for (key, value) in [
+            ("rename-by-default", slicing.rename_by_default),
+            (
+                "fail-requests-greater-than-one",
+                slicing.fail_requests_greater_than_one,
+            ),
+        ] {
+            if value {
+                time_slicing.insert(key.to_owned(), Value::Boolean(true));
+            }
+        }
+        table.insert("time-slicing".to_owned(), Value::Table(time_slicing));
+    }
+    if let Some(mps) = &plugin.mps {
+        let mut table_mps = Table::new();
+        if let Some(replicas) = mps.replicas {
+            table_mps.insert("replicas".to_owned(), Value::Integer(replicas.into()));
+        }
+        table.insert("mps".to_owned(), Value::Table(table_mps));
+    }
+    if plugin.device_partitioning_strategy() == nvidia::DevicePartitioningStrategy::Mig {
+        insert_string(&mut table, "device-partitioning-strategy", "mig");
+    }
+    if let Some(mig) = &plugin.mig {
+        let mut profile = Table::new();
+        for (model, value) in &mig.profile {
+            profile.insert(model.clone(), Value::String(value.clone()));
+        }
+        let mut table_mig = Table::new();
+        table_mig.insert("profile".to_owned(), Value::Table(profile));
+        table.insert("mig".to_owned(), Value::Table(table_mig));
+    }
+    table
 }
 
 /// `[settings.hardened.api]`.
@@ -303,6 +392,26 @@ mod tests {
                 encryption: Encryption::Tpm.into(),
             }),
             time_source: time::Source::Ptp.into(),
+            nvidia_device_plugin: Some(nvidia::DevicePlugin {
+                enabled: true,
+                pass_device_specs: true,
+                device_id_strategy: nvidia::DeviceIdStrategy::Uuid.into(),
+                device_list_strategy: vec![
+                    nvidia::DeviceListStrategy::VolumeMounts.into(),
+                    nvidia::DeviceListStrategy::Envvar.into(),
+                ],
+                time_slicing: Some(nvidia::TimeSlicing {
+                    replicas: 4,
+                    rename_by_default: true,
+                    fail_requests_greater_than_one: false,
+                }),
+                mps: Some(nvidia::Mps { replicas: None }),
+                mig: Some(nvidia::Mig {
+                    profile: [("a100.40gb".to_owned(), "2g.10gb".to_owned())].into(),
+                }),
+                device_partitioning_strategy: nvidia::DevicePartitioningStrategy::Mig.into(),
+            }),
+            nvidia_dra: Some(nvidia::Dra { enabled: true }),
         }
     }
 
@@ -335,6 +444,9 @@ client-ca = "Q0xJRU5UIENB"
 listen = "[::]:7443"
 private-key = "<redacted>"
 
+[settings.hardened.nvidia-dra]
+enabled = true
+
 [settings.hardened.storage]
 encryption = "tpm"
 
@@ -349,6 +461,21 @@ autoload = true
 
 [settings.kernel.sysctl]
 "net.ipv4.ip_forward" = "1"
+
+[settings.kubelet-device-plugins.nvidia]
+device-id-strategy = "uuid"
+device-list-strategy = ["volume-mounts", "envvar"]
+device-partitioning-strategy = "mig"
+device-sharing-strategy = "time-slicing"
+
+[settings.kubelet-device-plugins.nvidia.mig.profile]
+"a100.40gb" = "2g.10gb"
+
+[settings.kubelet-device-plugins.nvidia.mps]
+
+[settings.kubelet-device-plugins.nvidia.time-slicing]
+rename-by-default = true
+replicas = 4
 
 [settings.network]
 hostname = "web-1"

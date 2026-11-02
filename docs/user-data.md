@@ -335,6 +335,58 @@ take the same settings, and persist across reboots. User-data wins: the API cann
 remove its workloads, refuses their names, and an API workload whose name user-data declares later
 is deleted.
 
+## `settings.kubelet-device-plugins.nvidia`
+
+On the [NVIDIA variant](nvidia-target.md), with `settings.kubernetes` and NVIDIA GPUs: NVIDIA's
+device plugin, Bottlerocket's keys.
+
+```toml
+[settings.kubelet-device-plugins.nvidia]
+device-sharing-strategy = "time-slicing"
+time-slicing.replicas = 4
+```
+
+```toml
+[settings.kubelet-device-plugins.nvidia]
+device-partitioning-strategy = "mig"
+
+[settings.kubelet-device-plugins.nvidia.mig.profile]
+"a100.40gb" = "2g.10gb"
+"h100.80gb" = "7"
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | Whether the plugin runs |
+| `pass-device-specs` | bool | `true` | Gives containers the GPUs' device nodes in their specs |
+| `device-id-strategy` | `index`, `uuid` | `index` | How containers name their GPUs |
+| `device-list-strategy` | `volume-mounts`, `envvar`, `cdi-cri`, `cdi-annotations`, or a list of them | `volume-mounts` | How the runtime learns a container's GPUs. Always CDI here: `volume-mounts` and `envvar` (Bottlerocket's, through NVIDIA's container runtime) stand for `cdi-cri`, the containers getting the same devices and libraries |
+| `device-sharing-strategy` | `none`, `time-slicing` | `none` | How GPUs are shared (`mps` is not supported yet: an error) |
+| `time-slicing.replicas` | 1 to 65535 | `2` | How many containers share each GPU |
+| `time-slicing.rename-by-default` | bool | `false` | Advertises `nvidia.com/gpu.shared` |
+| `time-slicing.fail-requests-greater-than-one` | bool | `false` | Refuses requests of more than one shared GPU |
+| `mps.replicas` | 1 to 65535 | | Accepted as Bottlerocket accepts it, unused: MPS is not supported yet |
+| `device-partitioning-strategy` | `none`, `mig` | `none` | Whole GPUs, or [MIG instances](nvidia-target.md#mig-partitioning), advertised as `nvidia.com/gpu` (the plugin's `single` strategy). `none` disables MIG mode on GPUs having it |
+| `mig.profile.<model>` | MIG profile (`<slices>g.<memory>gb`) or number of instances (1 to 7) | `1` | For the GPUs of a model (`a100.40gb`, `a100.80gb`, `h100.80gb`, `h200.141gb`, `b200.180gb`, `b300.269gb`, `rtxpro6000.96gb`): as many instances of the profile as the GPU has room for |
+
+## `settings.hardened.nvidia-dra`
+
+On the [NVIDIA variant](nvidia-target.md), with `settings.kubernetes` and NVIDIA GPUs: NVIDIA's
+DRA driver's kubelet plugin, which publishes the node's GPUs as ResourceSlices. The cluster
+deploys the driver's controller and device classes.
+
+```toml
+[settings.hardened.nvidia-dra]
+enabled = true
+
+[settings.kubelet-device-plugins.nvidia]
+enabled = false
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Whether the kubelet plugin runs; with the device plugin, both advertise the GPUs |
+
 ## `settings.container-registry`
 
 Registry mirrors and credentials, for every image pull: workloads' (`ctr images pull`, in

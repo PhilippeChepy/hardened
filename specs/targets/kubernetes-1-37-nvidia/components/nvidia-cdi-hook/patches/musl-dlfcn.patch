@@ -1,0 +1,16 @@
+--- a/vendor/github.com/NVIDIA/go-nvml/pkg/dl/dl_linux.go
++++ b/vendor/github.com/NVIDIA/go-nvml/pkg/dl/dl_linux.go
+@@ -21,6 +21,13 @@
+ // #include <dlfcn.h>
+ // #include <stdlib.h>
+ // #include <linux/limits.h>
++// /* glibc's, which musl lacks: a static program loads no library anyway. */
++// #ifndef RTLD_DEEPBIND
++// #define RTLD_DEEPBIND 0
++// #endif
++// #ifndef RTLD_DI_ORIGIN
++// #define RTLD_DI_ORIGIN 6
++// #endif
+ import "C"
+ import (
+ 	"fmt"

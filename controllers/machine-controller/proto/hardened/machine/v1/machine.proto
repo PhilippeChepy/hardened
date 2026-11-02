@@ -9,6 +9,7 @@ import "google/protobuf/timestamp.proto";
 import "hardened/apiproxy/v1/apiproxy.proto";
 import "hardened/kubelet/v1/kubelet.proto";
 import "hardened/network/v1/network.proto";
+import "hardened/nvidia/v1/nvidia.proto";
 import "hardened/storage/v1/storage.proto";
 import "hardened/time/v1/time.proto";
 import "hardened/workloads/v1/workloads.proto";
@@ -76,6 +77,10 @@ message Settings {
   hardened.storage.v1.Configuration storage = 11;
   // settings.hardened.time.source.
   hardened.time.v1.Source time_source = 12;
+  // settings.kubelet-device-plugins.nvidia.
+  hardened.nvidia.v1.DevicePlugin nvidia_device_plugin = 13;
+  // settings.hardened.nvidia-dra.
+  hardened.nvidia.v1.Dra nvidia_dra = 14;
 }
 
 // settings.kernel.modules.<name>: the kernel never loads modules by itself.

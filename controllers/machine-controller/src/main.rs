@@ -20,6 +20,7 @@ mod machine_api;
 mod machine_id;
 mod machine_identity;
 mod metadata;
+mod nvidia_plugins;
 mod services_api;
 mod setup;
 mod state;

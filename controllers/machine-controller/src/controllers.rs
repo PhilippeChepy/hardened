@@ -15,6 +15,8 @@ pub struct Controllers {
     pub workload: Upstream,
     /// kubelet-controller, on Kubernetes targets only.
     pub kubelet: Upstream,
+    /// nvidia-controller, on the NVIDIA variant only.
+    pub nvidia: Upstream,
     /// machine-apiproxy, whose socket exists once it is enabled.
     pub apiproxy: Upstream,
     /// trust-controller, which serves `hardened.attestation.v1.Attestation`; without a TPM, its
@@ -35,6 +37,7 @@ impl Controllers {
             time: Upstream::new(time_controller::SOCKET),
             workload: Upstream::new(workload_controller::SOCKET),
             kubelet: Upstream::new(kubelet_controller::SOCKET),
+            nvidia: Upstream::new(nvidia_controller::SOCKET),
             apiproxy: Upstream::new(machine_apiproxy::SOCKET),
             trust: Upstream::new(trust_controller::SOCKET),
             serviced: Upstream::new(libserviced::SOCKET),
@@ -53,6 +56,7 @@ impl Controllers {
             time: upstream("time-controller"),
             workload: upstream("workload-controller"),
             kubelet: upstream("kubelet-controller"),
+            nvidia: upstream("nvidia-controller"),
             apiproxy: upstream("machine-apiproxy"),
             trust: upstream("trust-controller"),
             serviced: upstream("serviced"),

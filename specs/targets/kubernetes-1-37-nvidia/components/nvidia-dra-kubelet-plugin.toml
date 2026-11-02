@@ -1,0 +1,67 @@
+version = "0.5.1"
+kind = "application"
+summary = "NVIDIA's DRA driver's kubelet plugin: the node's GPUs as ResourceSlices, in a glibc container image"
+license = "Apache-2.0"
+homepage = "https://github.com/NVIDIA/k8s-dra-driver-gpu"
+purl = "pkg:github/NVIDIA/k8s-dra-driver-gpu@v{version}"
+cpe = "nvidia:k8s-dra-driver-gpu"
+
+[sources.src]
+url = "https://github.com/NVIDIA/k8s-dra-driver-gpu/archive/refs/tags/v{version}.tar.gz"
+sha256 = "891d411cbe1edfdf15b858c826c06064d4ab5b0eb320e7146056b45697242880"
+
+# `localhost/hardened/nvidia-dra-kubelet-plugin:{version}`, which machine-controller runs as a workload.
+[images.nvidia-dra-kubelet-plugin]
+entrypoint = "/usr/bin/gpu-kubelet-plugin"
+user = [0, 0]
+
+# Against glibc: it loads NVIDIA's NVML (libnvidia-ml), a glibc library, from the driver root.
+[[build]]
+go-build.commands = [["./cmd/gpu-kubelet-plugin", "/usr/libexec/gpu-kubelet-plugin"]]
+go-build.cgo.cc = "{glibc.cc} --sysroot={dep:glibc/glibc}"
+go-build.vars = [["sigs.k8s.io/dra-driver-nvidia-gpu/internal/info.version", "v{version}"]]
+
+[[build]]
+install.from = "{dest}/usr/libexec/gpu-kubelet-plugin"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/bin/gpu-kubelet-plugin"
+install.mode = 0o755
+
+[[build]]
+remove = "{dest}/usr/libexec/gpu-kubelet-plugin"
+
+# glibc, and what NVML needs of it.
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/ld-linux-x86-64.so.2"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/ld-linux-x86-64.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libc.so.6"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/libc.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libm.so.6"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/libm.so.6"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libdl.so.2"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/libdl.so.2"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/libpthread.so.0"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/libpthread.so.0"
+install.mode = 0o755
+
+[[build]]
+install.from = "{dep:glibc/glibc}/usr/lib64/librt.so.1"
+install.to = "{image:nvidia-dra-kubelet-plugin}/usr/lib64/librt.so.1"
+install.mode = 0o755
+
+# The interpreter programs name (/lib64/ld-linux-x86-64.so.2), in the merged-/usr layout.
+[[build]]
+symlink.target = "usr/lib64"
+symlink.link = "{image:nvidia-dra-kubelet-plugin}/lib64"

@@ -1,0 +1,94 @@
+version = "595.112.07"
+kind = "operating-system"
+summary = "NVIDIA's open GPU kernel modules (nvidia, nvidia-uvm), built against the image's kernel"
+license = "MIT OR GPL-2.0-only"
+homepage = "https://github.com/NVIDIA/open-gpu-kernel-modules"
+purl = "pkg:github/NVIDIA/open-gpu-kernel-modules@{version}"
+cpe = "nvidia:open-gpu-kernel-modules"
+
+# The kernel's source, prepared as its build was: its configuration, keys and seed.
+[sources.src]
+from = "kernel"
+
+[sources.nvidia]
+url = "https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/{version}.tar.gz"
+sha256 = "6bf8f19b9d7fa6ca0029100fe09f8a72d413df67e08ad4428b1b358ec10d28c0"
+
+[vars]
+# As the kernel builds: clang, lld and the LLVM tools.
+make = ["LLVM=1"]
+# What kbuild adds to the kernel's C flags for CONFIG_CFI (with CONFIG_FINEIBT_BHI) and its
+# padding (CONFIG_CALL_PADDING), the retpolines and return thunks (CONFIG_MITIGATION_RETPOLINE,
+# _RETHUNK) and CONFIG_MITIGATION_SLS: NVIDIA's core (nv-kernel.o) is built outside kbuild.
+core-cflags = "-fsanitize=kcfi -fsanitize-kcfi-arity -fpatchable-function-entry=11,11 -mretpoline-external-thunk -mindirect-branch-cs-prefix -mfunction-return=thunk-extern -mharden-sls=all"
+
+[[build]]
+install.from = "{dep:standard/kernel/config}"
+install.to = "{src}/.config"
+
+[[build]]
+install.from = "{secret:modules.pem}"
+install.to = "{src}/certs/hardened-modules.pem"
+install.mode = 0o600
+
+[[build]]
+install.from = "{secret:randstruct.seed}"
+install.to = "{src}/scripts/hardened-randstruct.seed"
+install.mode = 0o600
+
+[[build]]
+write.to = "{src}/scripts/gen-randstruct-seed.sh"
+write.file = "gen-randstruct-seed.sh"
+
+[[build]]
+make.args = ["{vars.make}", "-s", "modules_prepare"]
+
+# The certificate modules_install signs with (DER), which the kernel's build derives from the key.
+[[build]]
+run.cmd = [
+    "openssl",
+    "x509",
+    "-in",
+    "{src}/certs/hardened-modules.pem",
+    "-outform",
+    "DER",
+    "-out",
+    "{src}/certs/signing_key.x509",
+]
+
+# The exported symbols' versions, which modpost checks the modules' against.
+[[build]]
+install.from = "{dep:standard/kernel/Module.symvers}"
+install.to = "{src}/Module.symvers"
+
+[[build]]
+make.dir = "{nvidia}"
+make.args = [
+    "SYSSRC={src}",
+    "CC=clang",
+    "NV_KERNEL_MODULES=nvidia nvidia-uvm",
+    # Without ThinLTO, whose relocatable link of nvidia-uvm.o crashes ld.lld; kCFI needs none.
+    "CC_FLAGS_LTO=",
+    "modules",
+]
+make.env = [
+    ["LLVM", "1"],
+    ["CFLAGS", "{vars.core-cflags}"],
+]
+
+# modules_install signs them (CONFIG_MODULE_SIG_ALL).
+[[build]]
+make.dir = "{src}"
+make.args = [
+    "{vars.make}",
+    "M={nvidia}/kernel-open",
+    "INSTALL_MOD_PATH={work:modules}",
+    "INSTALL_MOD_DIR=nvidia",
+    "INSTALL_MOD_STRIP=1",
+    "DEPMOD=true",
+    "modules_install",
+]
+
+[[build]]
+copy.from = "{work:modules}/lib/modules/*/nvidia/*.ko"
+copy.into = "{dest}/usr/lib/nvidia/{version}/modules"

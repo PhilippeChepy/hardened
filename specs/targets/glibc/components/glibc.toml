@@ -1,0 +1,66 @@
+version = "2.44"
+kind = "library"
+summary = "GNU C library, for the programs loading NVIDIA's libraries, built with clang"
+license = "LGPL-2.1-or-later"
+homepage = "https://www.gnu.org/software/libc/"
+cpe = "gnu:glibc"
+
+depends-on = ["compiler-rt-gnu"]
+
+[exports]
+# How clang compiles and links against it (with `--sysroot=` its tree): compiler-rt's builtins,
+# and no unwinder (there is no libgcc_s; Go unwinds its own stacks).
+cc = "clang --target={compiler-rt-gnu.target} -resource-dir={dep:glibc/compiler-rt-gnu}/{compiler-rt-gnu.resource-dir} -rtlib=compiler-rt --unwindlib=none -fuse-ld=lld -Wno-unused-command-line-argument"
+
+[sources.src]
+url = "https://ftp.gnu.org/gnu/glibc/glibc-{version}.tar.xz"
+sha256 = "37f600f2bef3c5e8300147059568b2a2e40a7ad6ccc65ce942556d49429cc667"
+
+# The kernel's UAPI headers, which glibc's include.
+[[build]]
+copy.from = "{dep:bootstrap/linux-headers/include}/*"
+copy.into = "{work:headers}"
+
+# clang's support is experimental (since 2.43): compiler-rt replaces libgcc, and there is no
+# libgcc_s, which only pthread cancellation and backtraces would load.
+[[build]]
+mkdir = "{work:build}"
+
+# The merged-/usr layout: the libraries and the dynamic loader in /usr/lib64 (programs then name
+# /usr/lib64/ld-linux-x86-64.so.2 as their interpreter), ldconfig in /usr/sbin.
+[[build]]
+write.to = "{work:build}/configparms"
+write.contents = """
+slibdir=/usr/lib64
+rtlddir=/usr/lib64
+rootsbindir=/usr/sbin
+"""
+
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--with-headers={work:headers}",
+    "--enable-kernel=5.15",
+    "--enable-stack-protector=strong",
+    "--enable-bind-now",
+    "--disable-werror",
+    "--disable-nscd",
+    "--disable-crypt",
+    "--disable-profile",
+    "--without-selinux",
+    "CC={glibc.cc}",
+    "CXX=no",
+    "BUILD_CC=cc",
+    "CFLAGS=-O2",
+]
+run.dir = "{work:build}"
+
+[[build]]
+make.dir = "{work:build}"
+make.install.targets = ["install"]
+
+# The kernel's UAPI headers next to glibc's, which include them: the tree is a whole sysroot.
+[[build]]
+copy.from = "{work:headers}/*"
+copy.into = "{dest}/usr/include"

@@ -34,6 +34,7 @@ use workload_controller::workload;
 use workload_controller::workload::workload_controller_client::WorkloadControllerClient;
 
 use crate::controllers::Controllers;
+use crate::nvidia_plugins;
 use crate::time_servers;
 
 /// machine-apiproxy's service, which its image file leaves disabled.
@@ -75,8 +76,14 @@ pub async fn configure(
     )
     .await;
 
-    // Whether kubelet runs or not: workloads are in their own containerd namespace.
-    let workloads = workload::Configuration::from(settings.hardened.containers.clone());
+    // Whether kubelet runs or not: workloads are in their own containerd namespace. NVIDIA's
+    // plugins are workloads too, unless user-data declares one of their names.
+    let mut containers = settings.hardened.containers.clone();
+    for (name, plugin) in nvidia_plugins::workloads(controllers, settings, hostname.as_str()).await
+    {
+        containers.entry(name).or_insert(plugin);
+    }
+    let workloads = workload::Configuration::from(containers);
     let configured = WorkloadControllerClient::new(controllers.workload.channel())
         .configure(workloads)
         .await;

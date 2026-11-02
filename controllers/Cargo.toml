@@ -7,6 +7,7 @@ members = [
     "machine-apiproxy",
     "machine-controller",
     "network-controller",
+    "nvidia-controller",
     "storage-controller",
     "time-controller",
     "trust-controller",
@@ -30,6 +31,7 @@ libserviced = { path = "../serviced/libserviced" }
 machine-apiproxy = { path = "machine-apiproxy" }
 machine-controller = { path = "machine-controller" }
 network-controller = { path = "network-controller" }
+nvidia-controller = { path = "nvidia-controller" }
 storage-controller = { path = "storage-controller" }
 time-controller = { path = "time-controller" }
 trust-controller = { path = "trust-controller" }

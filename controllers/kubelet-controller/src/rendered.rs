@@ -15,6 +15,7 @@ use std::path::Path;
 
 use controllers_helpers::Hostname;
 use controllers_helpers::atomic_file;
+use controllers_helpers::base64_text;
 use kubelet_controller::CloudProvider;
 use kubelet_controller::Duration;
 use kubelet_controller::ImageAges;
@@ -140,11 +141,12 @@ pub fn render(config: &KubeletConfig, node_name: &Hostname) -> Rendered {
     let rotated =
         json!({"client-certificate": ROTATED_CERTIFICATE, "client-key": ROTATED_CERTIFICATE});
     let token = json!({"token": config.bootstrap_token.expose()});
+    let ca = config.cluster_certificate.pem();
     let mut files = vec![
         RenderedFile::public(CLUSTER_CA, config.cluster_certificate.pem().to_owned()),
         RenderedFile::public(CONFIG, kubelet_configuration(config)),
-        RenderedFile::secret(KUBECONFIG, kubeconfig(server, rotated)),
-        RenderedFile::secret(BOOTSTRAP_KUBECONFIG, kubeconfig(server, token)),
+        RenderedFile::secret(KUBECONFIG, kubeconfig(server, ca, rotated)),
+        RenderedFile::secret(BOOTSTRAP_KUBECONFIG, kubeconfig(server, ca, token)),
     ];
     let mut args = vec![
         format!("--config={CONFIG}"),
@@ -264,15 +266,21 @@ fn kubelet_configuration(config: &KubeletConfig) -> String {
     pretty(&configuration)
 }
 
-/// A kubeconfig with one cluster, the API server trusted through the cluster CA, and `user`.
+/// A kubeconfig with one cluster, the API server trusted through the cluster CA `ca` (PEM), and
+/// `user`. The CA is embedded, as kubelet copies it into the kubeconfig it writes after
+/// bootstrapping: programs reading kubelet's credentials from elsewhere (NVIDIA's DRA kubelet
+/// plugin, a workload with the host's root at `/host`) find it too.
 #[must_use]
-fn kubeconfig(server: &str, user: Value) -> String {
+fn kubeconfig(server: &str, ca: &str, user: Value) -> String {
     pretty(&json!({
         "apiVersion": "v1",
         "kind": "Config",
         "clusters": [{
             "name": "kubernetes",
-            "cluster": {"server": server, "certificate-authority": CLUSTER_CA},
+            "cluster": {
+                "server": server,
+                "certificate-authority-data": base64_text::encode(ca),
+            },
         }],
         "users": [{"name": "kubelet", "user": user}],
         "contexts": [{
@@ -357,8 +365,8 @@ pub(crate) mod tests {
             "https://k8s.example.com:6443"
         );
         assert_eq!(
-            bootstrap["clusters"][0]["cluster"]["certificate-authority"],
-            CLUSTER_CA
+            bootstrap["clusters"][0]["cluster"]["certificate-authority-data"],
+            base64_text::encode(file(&rendered, CLUSTER_CA).0)
         );
         let (kubeconfig, secret) = file(&rendered, KUBECONFIG);
         assert!(secret);
