@@ -1,0 +1,38 @@
+version = "1.3.8"
+kind = "library"
+summary = "Transport-independent RPC library (Sun RPC), against glibc, statically linked into nvidia-persistenced"
+license = "BSD-3-Clause"
+homepage = "https://sourceforge.net/projects/libtirpc/"
+purl = "pkg:generic/libtirpc@{version}"
+cpe = "libtirpc_project:libtirpc"
+
+depends-on = ["glibc"]
+
+[sources.src]
+url = "https://downloads.sourceforge.net/project/libtirpc/libtirpc/{version}/libtirpc-{version}.tar.bz2"
+sha256 = "8839959bfcc7a0f4c609d8e4f53f1c67ae33de23775ec35beb39ff15adf11920"
+
+[[build]]
+mkdir = "{work:build}"
+
+# glibc's programs do not run here (the build environment has musl's loader only): a cross build.
+[[build]]
+run.cmd = [
+    "{src}/configure",
+    "--prefix=/usr",
+    "--build=x86_64-pc-linux-musl",
+    "--host=x86_64-pc-linux-gnu",
+    "--disable-shared",
+    "--disable-gssapi",
+    "CC={glibc.cc} --sysroot={dep:glibc/glibc}",
+    "CFLAGS=-O2 -fPIE",
+]
+run.dir = "{work:build}"
+
+# Headers (`usr/include/tirpc`) and the static library.
+[[build]]
+make.dir = "{work:build}"
+make.install.targets = ["install"]
+
+[[build]]
+remove = "{dest}/usr/lib/*.la"

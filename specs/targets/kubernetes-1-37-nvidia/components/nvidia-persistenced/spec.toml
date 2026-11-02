@@ -1,0 +1,45 @@
+version = "{nvidia-driver.version}"
+kind = "application"
+summary = "NVIDIA's persistence daemon: keeps the GPUs initialized while no program uses them"
+license = "MIT"
+homepage = "https://github.com/NVIDIA/nvidia-persistenced"
+purl = "pkg:github/NVIDIA/nvidia-persistenced@{version}"
+cpe = "nvidia:nvidia-persistenced"
+
+[sources.src]
+url = "https://github.com/NVIDIA/nvidia-persistenced/archive/refs/tags/{version}.tar.gz"
+sha256 = "3333e30da22916e3e9271cb99ed8cc8f9f9576deeb4fa61822fc871736a5cd3d"
+
+[vars]
+root = "/usr/lib/nvidia/{version}/root"
+
+# In the foreground under serviced, its messages on stderr; its socket in /run; a numeric user,
+# which the image's user database does not have.
+[[build]]
+patch.files = ["patches/foreground.patch"]
+
+# Against glibc: it loads the driver's libnvidia-cfg. libtirpc is linked in; glibc's loader, from
+# the driver root, runs it.
+[[build]]
+make.args = [
+    "_out/Linux_x86_64/nvidia-persistenced",
+    "CC={glibc.cc} --sysroot={dep:glibc/glibc}",
+    "HAS_TIRPC=1",
+    "TIRPC_CFLAGS=-I{dep:glibc/libtirpc}/usr/include/tirpc",
+    "TIRPC_LDFLAGS={dep:glibc/libtirpc}/usr/lib/libtirpc.a",
+    "EXTRA_CFLAGS=-fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2",
+    "EXTRA_LDFLAGS=-pie -Wl,-z,relro,-z,now",
+    "STRIP_CMD=llvm-strip",
+    "TARGET_ARCH=x86_64",
+]
+
+# In the driver root, where CDI finds it for GPU containers too.
+[[build]]
+install.from = "{src}/_out/Linux_x86_64/nvidia-persistenced"
+install.to = "{dest}{vars.root}/usr/bin/nvidia-persistenced"
+install.mode = 0o755
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/nvidia-persistenced.toml"
+write.file = "services/nvidia-persistenced.toml"
+write.template = true

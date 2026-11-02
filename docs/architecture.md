@@ -27,9 +27,9 @@ The `kubernetes-1-37` image adds kubelet, kubelet-controller, the pod sandbox im
 the CNI plugins, `mount` and the netfilter tools ([its contents](kubernetes-target.md#contents)).
 The `kubernetes-1-37-nvidia` image adds NVIDIA's open kernel modules, its driver's user space,
 nvidia-controller and the device and DRA plugins ([the NVIDIA variant](nvidia-target.md)): the
-driver's user space and firmware, NVIDIA's prebuilt glibc files, with the glibc nvidia-smi runs
-with on the host to partition GPUs (MIG), are the one exception to what follows (the target's
-`prebuilt` directories).
+driver's user space and firmware, NVIDIA's prebuilt glibc files, with the glibc that runs
+nvidia-smi (MIG partitioning) and nvidia-persistenced (built here) on the host, are the one
+exception to what follows (the target's `prebuilt` directories).
 
 Everything is compiled by clang (LLVM), linked by lld, against musl and compiler-rt (no GCC,
 glibc or libgcc), and every program is statically linked: the image has no dynamic loader and no
@@ -454,11 +454,11 @@ standard   FROM tools            the image: base-files, kernel, runc, containerd
                                  system-controllers...
 kubernetes-1-37                  standard's components, then pause, mount, iptables, nft, the
   FROM tools, extends standard   CNI plugins, kubelet and kubelet-controller
-glibc      FROM tools            glibc built with clang, and compiler-rt for it: for the NVIDIA
-                                 plugins' container images, never shipped as such
+glibc      FROM tools            glibc built with clang, compiler-rt and libtirpc for it: for
+                                 the NVIDIA plugins' images and driver root, not an image
 kubernetes-1-37-nvidia           kubernetes-1-37's components, then NVIDIA's modules, driver,
-  FROM tools,                    nvidia-controller, CDI hook and plugin images (against glibc)
-  extends kubernetes-1-37
+  FROM tools,                    nvidia-controller, nvidia-persistenced, CDI hook and plugin
+  extends kubernetes-1-37        images (against glibc)
 ```
 
 A target's `components` build on its environment's image (bootstrap's, on the seed), each with

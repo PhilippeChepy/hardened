@@ -1,0 +1,133 @@
+--- a/nvidia-persistenced.c
++++ b/nvidia-persistenced.c
+@@ -835,49 +835,19 @@
+     pipe_read_fd = init_pipe_fds[0];
+     pipe_write_fd = init_pipe_fds[1];
+ 
+-    pid = fork();
+-    if (pid < 0) {
+-        fprintf(stderr, "Failed to fork() daemon: %s", strerror(errno));
+-        goto shutdown;
+-    }
+-    else if (pid > 0) {
+-        NvPdStatus init_status;
+-
+-        /*
+-         * Close the write end of the pipe so we don't block if the child dies
+-         * or otherwise closes its write fd before it sends the init message.
+-         */
+-        close(pipe_write_fd);
+-
+-        /*
+-         * Watch the init pipe for the child process to init, then exit the
+-         * parent process.
+-         */
+-        init_status = wait_for_init_complete(pipe_read_fd);
+-        exit((init_status == NVPD_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE);
+-    }
++    /*
++     * In the foreground, under a supervisor: no fork, no new session, the
++     * standard file descriptors kept. The read end of the init pipe stays
++     * open, unread, so that the init message does not raise SIGPIPE.
++     */
++    (void)pipe_read_fd;
++    (void)wait_for_init_complete;
+ 
+     /* Reset default file permissions */
+     umask(0);
+ 
+-    /* Create a new session for the daemon */
+-    if (setsid() < 0) {
+-        fprintf(stderr, "Failed to create new daemon session: %s",
+-                strerror(errno));
+-        goto shutdown;
+-    }
+-
+-    /* Save off the new pid for logging */
+     pid = getpid();
+ 
+-    /* Close the standard file descriptors */
+-    close(STDIN_FILENO);
+-    close(STDOUT_FILENO);
+-    close(STDERR_FILENO);
+-
+-    /* Close the read end of the init pipe */
+-    close(pipe_read_fd);
+-
+     if (verbose) {
+         log_mask = LOG_UPTO(LOG_DEBUG);
+     } else {
+@@ -887,7 +857,7 @@
+     setlogmask(log_mask);
+ 
+     /* Setup syslog connection */
+-    openlog(NVPD_DAEMON_NAME, 0, LOG_DAEMON);
++    openlog(NVPD_DAEMON_NAME, LOG_PERROR, LOG_DAEMON);
+     SYSLOG_VERBOSE(LOG_INFO, "Verbose syslog connection opened");
+ 
+     /* Go somewhere that we won't be unmounted */
+--- a/nvpd_defs.h
++++ b/nvpd_defs.h
+@@ -32,7 +32,7 @@
+ 
+ #define NVPD_DAEMON_NAME            "nvidia-persistenced"
+ 
+-#define NVPD_VAR_RUNTIME_DATA_PATH  "/var/run/" NVPD_DAEMON_NAME
++#define NVPD_VAR_RUNTIME_DATA_PATH  "/run/" NVPD_DAEMON_NAME
+ #define NVPD_SOCKET_NAME            "socket"
+ #define NVPD_SOCKET_PATH            NVPD_VAR_RUNTIME_DATA_PATH "/" \
+                                     NVPD_SOCKET_NAME
+--- a/options.c
++++ b/options.c
+@@ -109,6 +109,27 @@
+  * parse_options() - fill in an NvPdOptions structure with any pertinent data
+  * from the commandline arguments.
+  */
++/*
++ * numeric_id() - Parses a user or group ID written in decimal digits, for
++ * systems without a user database entry for the daemon.
++ */
++static int numeric_id(const char *str, unsigned int *id)
++{
++    char *end;
++    unsigned long value;
++
++    if (str[0] < '0' || str[0] > '9') {
++        return 0;
++    }
++    errno = 0;
++    value = strtoul(str, &end, 10);
++    if (errno != 0 || *end != '\0' || value > 0xfffffffeUL) {
++        return 0;
++    }
++    *id = (unsigned int)value;
++    return 1;
++}
++
+ void parse_options(int argc, char *argv[], NvPdOptions *options)
+ {
+     int short_name;
+@@ -145,6 +166,12 @@
+                 options->verbose = 1;
+                 break;
+             case 'u':
++                if (numeric_id(strval, &options->uid)) {
++                    if (!group_specified) {
++                        options->gid = options->uid;
++                    }
++                    break;
++                }
+                 pw_entry = getpwnam(strval);
+                 if (pw_entry == NULL) {
+                     nv_error_msg("Failed to find user ID of user '%s': %s",
+@@ -157,6 +184,10 @@
+                 }
+                 break;
+             case 'g':
++                if (numeric_id(strval, &options->gid)) {
++                    group_specified = 1;
++                    break;
++                }
+                 gr_entry = getgrnam(strval);
+                 if (gr_entry == NULL) {
+                     nv_error_msg("Failed to find group ID of group '%s': %s",

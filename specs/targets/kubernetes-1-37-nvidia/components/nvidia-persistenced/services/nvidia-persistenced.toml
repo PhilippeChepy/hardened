@@ -1,0 +1,15 @@
+description = "nvidia-persistenced: keeps the NVIDIA GPUs initialized while no program uses them"
+exec = [
+    "{vars.root}/usr/lib64/ld-linux-x86-64.so.2",
+    "--library-path",
+    "{vars.root}/usr/lib64:{vars.root}/usr/lib/x86_64-linux-gnu",
+    "{vars.root}/usr/bin/nvidia-persistenced",
+    "--user",
+    "65532",
+    "--group",
+    "65532",
+]
+requires = ["nvidia-controller"]
+condition.path-exists = "/dev/nvidiactl"
+console = true
+runtime-directories = ["/run/nvidia-persistenced"]

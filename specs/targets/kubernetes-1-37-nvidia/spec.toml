@@ -3,6 +3,7 @@ components = [
     "nvidia-open-gpu-kernel-modules",
     "nvidia-driver",
     "nvidia-controller",
+    "nvidia-persistenced",
     "nvidia-cdi-hook",
     "nvidia-k8s-device-plugin",
     "nvidia-dra-kubelet-plugin",

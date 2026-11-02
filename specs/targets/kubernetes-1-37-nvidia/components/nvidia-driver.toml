@@ -109,12 +109,8 @@ install.from = "{work:driver}/nvidia-cuda-mps-server"
 install.to = "{vars.root}/usr/bin/nvidia-cuda-mps-server"
 install.mode = 0o755
 
-[[build]]
-install.from = "{work:driver}/nvidia-persistenced"
-install.to = "{vars.root}/usr/bin/nvidia-persistenced"
-install.mode = 0o755
-
-# glibc, for nvidia-smi on the host: nvidia-controller runs it with this loader.
+# glibc, for nvidia-smi and nvidia-persistenced (built here) on the host: they run with this
+# loader.
 
 [[build]]
 install.from = "{dep:glibc/glibc}/usr/lib64/ld-linux-x86-64.so.2"

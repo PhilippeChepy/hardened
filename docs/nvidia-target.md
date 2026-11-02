@@ -16,6 +16,7 @@ It extends [`kubernetes-1-37`](kubernetes-target.md) and targets data-center GPU
 | `nvidia-open-gpu-kernel-modules` | 595.112.07 | `/usr/lib/nvidia/<version>/modules/nvidia.ko`, `nvidia-uvm.ko` | from source, with clang and kCFI, signed with the module key |
 | `nvidia-driver` | 595.112.07 | `/usr/lib/nvidia/<version>/root` (the driver root), `/usr/lib/firmware/nvidia/<version>` | NVIDIA's prebuilt user space and GSP firmware, glibc for nvidia-smi |
 | `nvidia-controller` | the OS's | `/usr/bin/nvidia-controller` | Rust, static |
+| `nvidia-persistenced` | 595.112.07 | the driver root's `usr/bin/nvidia-persistenced`, its service | C, against glibc, libtirpc linked in |
 | `nvidia-cdi-hook` | 1.20.1 | `/usr/bin/nvidia-cdi-hook`, containerd's CDI drop-in | Go, static (musl) |
 | `nvidia-k8s-device-plugin` | 0.20.1 | image `localhost/hardened/nvidia-device-plugin` | Go, against glibc |
 | `nvidia-dra-kubelet-plugin` | 0.5.1 | image `localhost/hardened/nvidia-dra-kubelet-plugin` | Go, against glibc |
@@ -32,17 +33,18 @@ version may need others: modpost names them.
 
 **The driver's user space** is the only part of an image not built from source: NVIDIA's
 compute and utility libraries (CUDA, NVML, OpenCL, the JIT and NVVM compilers, PKCS#11 for
-confidential computing), `nvidia-smi`, `nvidia-debugdump`, MPS and `nvidia-persistenced`, from the
-driver package of the modules' version (pinned and checked). They are glibc programs and
-libraries, laid out as a driver root (`root/usr/lib/x86_64-linux-gnu`, `root/usr/bin`): CDI specs
-mount them into GPU containers; the host only runs `nvidia-smi`, for [MIG](#mig-partitioning).
+confidential computing), `nvidia-smi`, `nvidia-debugdump` and MPS, from the driver package of
+the modules' version (pinned and checked). They are glibc programs and libraries, laid out as a
+driver root (`root/usr/lib/x86_64-linux-gnu`, `root/usr/bin`): CDI specs mount them into GPU
+containers; the host only runs `nvidia-smi`, for [MIG](#mig-partitioning).
+`nvidia-persistenced`, NVIDIA's open source, is built here instead (below).
 With the GSP firmware, they are the target's `prebuilt` directories, which the image's static
 linking check leaves out.
 
 **glibc** (2.44, built with clang and compiler-rt in the `glibc` target) is for the plugins: they
 load NVML, a glibc library. Their container images hold it with them. The driver root holds it
-too (`root/usr/lib64`), for `nvidia-smi`: nvidia-controller runs it with that glibc's loader
-(`ld-linux-x86-64.so.2 --library-path ...`), the host having none of its own.
+too (`root/usr/lib64`), for `nvidia-smi` and `nvidia-persistenced`: they run with that glibc's
+loader (`ld-linux-x86-64.so.2 --library-path ...`), the host having none of its own.
 
 ## At boot
 
@@ -54,6 +56,18 @@ capabilities, `/dev/nvidia-caps/nvidia-cap<N>` (managing and monitoring MIG for 
 instance's access for all, NVIDIA's defaults). Its API (`hardened.nvidia.v1`) gives
 machine-controller the GPUs and whether the driver is ready, and partitions them as
 machine-controller configures it, before the plugins run.
+
+**nvidia-persistenced** then starts (its service requires nvidia-controller and
+`/dev/nvidiactl`: without GPUs, it stays inactive). It keeps the GPUs initialized while no
+program has them open: otherwise the driver shuts a GPU down when its last user closes it, and
+its next user waits for it to start again, booting its GSP firmware (seconds), and loses what
+`nvidia-smi` set on it. It is NVIDIA's source (the tag of the driver's version) built against the
+`glibc` target's glibc, with its libtirpc linked in (glibc no longer has Sun RPC), and patched
+for serviced: in the foreground, its messages on stderr rather than syslog, its socket and PID
+file in `/run/nvidia-persistenced`, and a numeric `--user` (65532), to which it switches before
+opening the GPUs, as NVIDIA intends. serviced does not sandbox it: its system calls and NVIDIA's
+ioctls have to be traced on a GPU first. Its socket answers `nvidia-smi -pm` on the host; the
+plugins' CDI specs do not mount it into containers (they look for it below the driver root).
 
 When kubelet runs (`settings.kubernetes`) and the driver is ready, machine-controller declares
 the plugins as workloads, next to user-data's (a workload of user-data with one of their names

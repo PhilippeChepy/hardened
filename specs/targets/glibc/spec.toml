@@ -1,4 +1,5 @@
 # glibc, and what clang links against it with, for the programs that load NVIDIA's libraries (built
-# against glibc): their container images hold it, never the images' root filesystems.
+# against glibc): their container images hold it, and the NVIDIA driver root (its prebuilt
+# tools, nvidia-persistenced).
 environment = "tools"
-components = ["compiler-rt-gnu", "glibc"]
+components = ["compiler-rt-gnu", "glibc", "libtirpc"]

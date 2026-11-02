@@ -310,3 +310,15 @@ image ([the NVIDIA variant](nvidia-target.md)).
 
 - **Unconfined**: it loads kernel modules, makes device nodes in `/dev` and runs `nvidia-smi`
   (NVIDIA's, glibc's) as root.
+
+### nvidia-persistenced (NVIDIA variant)
+
+NVIDIA's persistence daemon, built from source against glibc, run by the driver root's glibc
+loader: it keeps the GPUs initialized while no program has them open. It requires
+nvidia-controller and starts once `/dev/nvidiactl` exists (`condition.path-exists`): on a machine
+without NVIDIA GPUs, it stays inactive. Its socket and PID file are in its runtime directory,
+`/run/nvidia-persistenced`.
+
+- **Unconfined, then uid 65532**: it starts as root, takes its runtime directory and switches to
+  uid and gid 65532 itself (`--user`, `--group`) before opening the GPUs. No `[sandbox]` yet: its
+  system calls and NVIDIA's ioctls are to be traced on a GPU.
