@@ -12,6 +12,9 @@ depends-on = ["glibc"]
 url = "https://downloads.sourceforge.net/project/libtirpc/libtirpc/{version}/libtirpc-{version}.tar.bz2"
 sha256 = "8839959bfcc7a0f4c609d8e4f53f1c67ae33de23775ec35beb39ff15adf11920"
 
+[update]
+listing = "https://sourceforge.net/projects/libtirpc/rss?path=/libtirpc"
+
 [[build]]
 mkdir = "{work:build}"
 

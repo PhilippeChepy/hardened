@@ -16,6 +16,11 @@ libnftnl = "{dep:kubernetes-1-37/libnftnl/dev}/usr"
 url = "https://www.netfilter.org/projects/nftables/files/nftables-{version}.tar.xz"
 sha256 = "a6fbf060d8d4fff001517a2b94f356bb4366bfbf0ba366366f9d27cc38caa58f"
 
+[update]
+listing = "https://www.netfilter.org/projects/nftables/downloads.html"
+signature = "{url}.sig"
+key = "netfilter"
+
 # CNI plugins with the nftables backend (and knftables users) run `nft`. No interactive CLI, JSON
 # or man pages; mini-gmp instead of GMP. libnftnl's link line carries libmnl after it, as static
 # linking needs.

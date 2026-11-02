@@ -1,4 +1,4 @@
-version = "595.112.07"
+version = "{nvidia-driver.version}"
 kind = "operating-system"
 summary = "NVIDIA's open GPU kernel modules (nvidia, nvidia-uvm), built against the image's kernel"
 license = "MIT OR GPL-2.0-only"

@@ -108,6 +108,10 @@ struct File {
     cargo_fetch: Vec<String>,
     #[serde(default)]
     build: Vec<Value>,
+    /// How `cargo builder update` finds its new versions: read by the update, not by builds.
+    #[serde(default)]
+    #[expect(dead_code, reason = "read by the update from the recipe file")]
+    update: Option<toml::Table>,
 }
 
 #[derive(Deserialize)]

@@ -86,6 +86,42 @@ pub fn build_all<'a>(
     force: &[Unit],
     options: Options,
 ) -> anyhow::Result<BTreeMap<Unit, Built<'a>>> {
+    let mut outcome = build_each(paths, order, keys, force, options)?;
+    match outcome.failed.len() {
+        0 => Ok(outcome.built),
+        1 => Err(outcome.failed.remove(0).1),
+        _ => {
+            let failed: Vec<String> = (outcome.failed.iter())
+                .map(|(unit, _)| unit.to_string())
+                .collect();
+            anyhow::bail!(
+                "{} components failed: {} (logs in {})",
+                failed.len(),
+                failed.join(", "),
+                paths.logs().display()
+            )
+        }
+    }
+}
+
+/// What [`build_each`] built, and what failed (not what was skipped as depending on a failure).
+pub struct Outcome<'a> {
+    pub built: BTreeMap<Unit, Built<'a>>,
+    pub failed: Vec<(Unit, anyhow::Error)>,
+}
+
+/// Builds `order` as [`build_all`] does, returning each failure rather than failing.
+///
+/// # Errors
+///
+/// When the signing keys cannot be generated.
+pub fn build_each<'a>(
+    paths: &Paths,
+    order: &[&'a Job],
+    keys: &Environment,
+    force: &[Unit],
+    options: Options,
+) -> anyhow::Result<Outcome<'a>> {
     std::fs::create_dir_all(paths.logs())?;
     let scheduler = Scheduler {
         paths,
@@ -115,27 +151,14 @@ pub fn build_all<'a>(
         finished.store(true, Ordering::Relaxed);
     });
     scheduler.progress.clear();
-    let mut state = scheduler
+    let state = scheduler
         .state
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner);
-    match state.failed.len() {
-        0 => Ok(state.built),
-        1 => Err(state.failed.remove(0).1),
-        _ => {
-            let failed: Vec<String> = state
-                .failed
-                .iter()
-                .map(|(unit, _)| unit.to_string())
-                .collect();
-            anyhow::bail!(
-                "{} components failed: {} (logs in {})",
-                failed.len(),
-                failed.join(", "),
-                paths.logs().display()
-            )
-        }
-    }
+    Ok(Outcome {
+        built: state.built,
+        failed: state.failed,
+    })
 }
 
 struct Scheduler<'a, 'j> {

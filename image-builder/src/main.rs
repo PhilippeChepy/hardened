@@ -16,6 +16,7 @@ mod build;
 mod environment;
 mod exec;
 mod fetch;
+mod http_agent;
 mod image;
 mod keys;
 mod kspp;
@@ -37,6 +38,7 @@ mod smoke_api;
 mod specs;
 mod target_arg;
 mod targets;
+mod update;
 
 use clap::{Parser, Subcommand};
 
@@ -90,6 +92,10 @@ enum Command {
     Run(run::RunArgs),
     /// Builds the image, boots it headless and waits for the smoke-test markers.
     Test(run::TestArgs),
+    /// Finds the recipes' new releases, downloads and checks them (signatures, published
+    /// checksums), rewrites the recipes' versions and checksums, then builds what changed,
+    /// putting back the updates that break a build.
+    Update(update::Args),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -147,6 +153,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Run(args) => run::run(&paths, &args)?,
         Command::Test(args) => run::test(&paths, &args)?,
+        Command::Update(args) => update::run(&paths, &args)?,
     }
     Ok(())
 }

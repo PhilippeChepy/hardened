@@ -15,6 +15,7 @@ fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc
 goblin = { version = "0.10.7", default-features = false, features = ["std", "elf32", "elf64", "endian_fd"] }
 gpt.workspace = true
 hex.workspace = true
+pgp = { version = "0.21.0", default-features = false, features = ["large-rsa"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

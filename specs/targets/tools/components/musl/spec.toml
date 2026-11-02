@@ -29,6 +29,11 @@ sha256 = "d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a"
 url = "https://github.com/microsoft/mimalloc/archive/refs/tags/v3.6.0.tar.gz"
 sha256 = "c663101ba193b5b823c8541c1b719ab67e3ebf9976e425a02359a5cad5e52990"
 
+[update]
+listing = "https://musl.libc.org/releases.html"
+signature = "{url}.asc"
+key = "musl"
+
 [[build]]
 copy.from = "{mimalloc}/*"
 copy.into = "{src}/mimalloc"

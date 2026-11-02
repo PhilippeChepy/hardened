@@ -44,3 +44,9 @@ jobs:
         with:
           name: hardened-image
           path: build/out/
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
+          if-no-files-found: ignore

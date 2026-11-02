@@ -11,6 +11,10 @@ depends-on = ["llvm"]
 url = "https://www.cpan.org/src/5.0/perl-{version}.tar.xz"
 sha256 = "505cf43912e9480495c344c70260452e32aa2a73c546a026b3f100053b23ce91"
 
+# Odd minor releases are development ones.
+[update]
+track = "5.44"
+
 [[build]]
 run.cmd = [
     "sh",

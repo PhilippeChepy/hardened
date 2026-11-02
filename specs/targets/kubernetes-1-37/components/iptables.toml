@@ -16,6 +16,11 @@ libnftnl = "{dep:kubernetes-1-37/libnftnl/dev}/usr"
 url = "https://www.netfilter.org/projects/iptables/files/iptables-{version}.tar.xz"
 sha256 = "1afcd33da9e8f913ace6a2126788162e207e26f5d5e29c6573c0e581ffc58b99"
 
+[update]
+listing = "https://www.netfilter.org/projects/iptables/downloads.html"
+signature = "{url}.sig"
+key = "netfilter"
+
 # CNI plugins (portmap, bridge with ipMasq, Calico's, flannel's) run `iptables` on the host. The
 # extensions are built into the program (`--disable-shared`), so nothing is loaded at run time.
 # Only the nf_tables variant ships: the legacy one is always built, but stays in scratch space

@@ -44,6 +44,9 @@ options = [
 url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-{version}/llvm-project-{version}.src.tar.xz"
 sha256 = "819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2"
 
+[update]
+track = "23"
+
 [[build]]
 mkdir = "{work:build}"
 

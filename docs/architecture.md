@@ -502,6 +502,12 @@ generated Containerfile (in `build/environments/`) copying the components' trees
 seed and its components' cache keys. Components build in parallel (`--parallel`, 4 by default)
 as soon as what they need is built; their output goes to `build/logs/<target>/<component>.log`.
 
+`cargo builder update` moves the recipes to their upstreams' new releases: it finds them,
+downloads and checks them (OpenPGP signatures against keys pinned in `specs/keys/`, published
+checksums), rewrites the recipes' versions and checksums, and builds what changed, putting back
+the updates that break a build ([updating the recipes](updates.md)). Downloads time out on a
+stalled server (60 s without data) and are tried again.
+
 Go is built from source with StageX's Go (in `bootstrap`); it is static, so it runs anywhere.
 Rust is built against our LLVM (`llvm-config`), bootstrapped from the pinned release binaries
 for musl its source names (stage0), as upstream does; the toolchain links with clang and lld,

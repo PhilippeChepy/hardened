@@ -20,6 +20,9 @@ sha256 = "14a3fe21ab5f8e62937a2b453e76f3b94b0d3c7c04c3d09bc37195f54c1695ea"
 entrypoint = "/pause"
 user = [65535, 65535]
 
+[update]
+manual = "its Kubernetes release, kubelet's too, is the target's"
+
 # Static, as upstream builds it: the image holds nothing else.
 [[build]]
 run.cmd = [

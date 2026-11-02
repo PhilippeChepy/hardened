@@ -15,6 +15,11 @@ libmnl = "{dep:kubernetes-1-37/libmnl/dev}/usr"
 url = "https://www.netfilter.org/projects/libnftnl/files/libnftnl-{version}.tar.xz"
 sha256 = "c97abc3409f8fa396b4462b2bb7f147a3a47a4ddc97cfa0b2f18890c9cfde8b0"
 
+[update]
+listing = "https://www.netfilter.org/projects/libnftnl/downloads.html"
+signature = "{url}.sig"
+key = "netfilter"
+
 # Like libmnl: static, into an output. libmnl is given directly rather than through pkg-config,
 # whose sysroot could only name one output (and as a command, since configure's arguments take no
 # locations).

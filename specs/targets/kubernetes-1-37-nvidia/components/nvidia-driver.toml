@@ -17,6 +17,13 @@ sha256 = "1a38ecd538a2da6232a7330184063af59e9fc946c908cca555bd07909848b9f0"
 [vars]
 root = "{dest}/usr/lib/nvidia/{version}/root"
 
+# The production branch. NVIDIA's download site has no index: the open modules' tags name its
+# releases, which nvidia-open-gpu-kernel-modules and nvidia-persistenced follow.
+[update]
+track = "595"
+repository = "https://github.com/NVIDIA/open-gpu-kernel-modules"
+tag = "{version}"
+
 # A makeself archive: its own script extracts it.
 [[build]]
 run.cmd = ["sh", "{driver}", "--extract-only", "--target", "{work:driver}"]

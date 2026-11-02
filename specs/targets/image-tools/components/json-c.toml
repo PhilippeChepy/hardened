@@ -11,5 +11,8 @@ depends-on = ["llvm", "cmake"]
 url = "https://s3.amazonaws.com/json-c_releases/releases/json-c-{version}.tar.gz"
 sha256 = "37ad0249902e301bd9052bf712e511fcc6acff4ecaad4b5900aad9ce564e26de"
 
+[update]
+listing = "https://s3.amazonaws.com/json-c_releases?prefix=releases/"
+
 [[build]]
 cmake.args = ["-DBUILD_STATIC_LIBS=OFF", "-DDISABLE_WERROR=ON"]
