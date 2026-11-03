@@ -1,7 +1,7 @@
 syntax = "proto3";
 
-// network-controller's API (/run/network-controller/api.sock): the resolver, and what DHCP
-// offered.
+// network-controller's API (/run/network-controller/api.sock): the resolver, what DHCP offered,
+// and each physical Ethernet interface's configuration.
 package hardened.network.v1;
 
 import "google/protobuf/empty.proto";
@@ -12,6 +12,14 @@ service NetworkController {
   rpc GetState(google.protobuf.Empty) returns (State);
   // The state, then the state again whenever it changes.
   rpc WatchState(google.protobuf.Empty) returns (stream State);
+  // The physical Ethernet interfaces present and those configured, by name: each one's
+  // configuration and what it has now.
+  rpc ListInterfaces(google.protobuf.Empty) returns (InterfaceList);
+  // Applies an interface's configuration and keeps it; the previous one is restored when it
+  // cannot be applied (ABORTED). Applied when the interface appears if it is not present.
+  rpc SetInterfaceConfig(SetInterfaceConfigRequest) returns (Interface);
+  // Back to the default configuration (enabled, DHCP), applied the same way.
+  rpc ResetInterfaceConfig(InterfaceRef) returns (Interface);
 }
 
 // settings.dns: each list, when not empty, replaces what DHCP gives.
@@ -28,4 +36,85 @@ message State {
   optional string dhcp_hostname = 1;
   // The NTP servers DHCP offered (option 42; IPv4 addresses), the primary interface's first.
   repeated string ntp_servers = 2;
+}
+
+// An interface, by its kernel name.
+message InterfaceRef {
+  string name = 1;
+}
+
+message SetInterfaceConfigRequest {
+  // The interface's kernel name (e.g. eth0).
+  string name = 1;
+  InterfaceConfig config = 2;
+}
+
+// How an interface is configured. The default message is the default configuration: enabled,
+// DHCP, the DNS servers DHCP gives, the MTU left as it is (DHCP's, under DHCP).
+message InterfaceConfig {
+  // A disabled interface is set down, without addresses.
+  bool disabled = 1;
+  // How it gets its IPv4 address; DHCP when absent. IPv6 is the kernel's SLAAC either way.
+  oneof ipv4 {
+    google.protobuf.Empty dhcp = 2;
+    StaticIpv4 static_ipv4 = 3;
+  }
+  // This interface's resolver: each list, when not empty, replaces what DHCP gives on it (a
+  // statically configured interface has nothing else). settings.dns (Configure) replaces them
+  // all. At most 3 name servers and 6 search domains.
+  Configuration dns = 4;
+  // From 1280 (IPv6's minimum) to 9216; overrides DHCP's (option 26).
+  optional uint32 mtu = 5;
+}
+
+// Addresses configured statically.
+message StaticIpv4 {
+  // At least one, all different; the first is the default route's source.
+  repeated Ipv4Address addresses = 1;
+  // The default route's next hop, within the subnet of one of the addresses; no default route
+  // without it.
+  optional string gateway = 2;
+}
+
+// An IPv4 address on an interface, and the length of its subnet's prefix.
+message Ipv4Address {
+  string address = 1;
+  // 1 to 32.
+  uint32 prefix_length = 2;
+}
+
+message InterfaceList {
+  // Sorted by name.
+  repeated Interface interfaces = 1;
+}
+
+message Interface {
+  string name = 1;
+  InterfaceConfig config = 2;
+  // Whether config was set (SetInterfaceConfig), rather than the default.
+  bool configured = 3;
+  InterfaceStatus status = 4;
+}
+
+// What an interface has now.
+message InterfaceStatus {
+  // Whether the interface exists: a configured one may not (unplugged, renamed).
+  bool present = 1;
+  // Administratively up (IFF_UP).
+  bool up = 2;
+  // It has a carrier (IFF_LOWER_UP).
+  bool carrier = 3;
+  // Its Ethernet address, as aa:bb:cc:dd:ee:ff.
+  optional string mac = 4;
+  optional uint32 mtu = 5;
+  // Its IPv4 addresses, whoever configured them.
+  repeated Ipv4Address addresses = 6;
+  // The gateway of its default route, if it has one.
+  optional string gateway = 7;
+  // Whether DHCP holds a lease on it.
+  bool leased = 8;
+  // The name servers it contributes to resolv.conf (its configuration's or its lease's).
+  repeated string name_servers = 9;
+  // Why its configuration could not be applied when it appeared, if it could not.
+  optional string error = 10;
 }

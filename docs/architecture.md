@@ -173,8 +173,8 @@ alone reads metadata and user-data, and gives each controller its part through i
   and the machine boots without them (no time synchronization, no workloads, no kubelet, no API).
 - **Restarts.** A controller keeps what it was configured with, and what it did, in
   `/run/<controller>/state.json`, and reapplies it when it restarts, without being configured
-  again: network-controller its DNS override (DHCP runs again), storage-controller what backs
-  `/var` (it adopts a `/var` already mounted), time-controller its servers (it polls them again
+  again: network-controller its DNS override and the interfaces' configurations (DHCP runs
+  again), storage-controller what backs `/var` (it adopts a `/var` already mounted), time-controller its servers (it polls them again
   at once), workload-controller user-data's workloads, kubelet-controller kubelet's files,
   machine-apiproxy its configuration. machine-controller keeps the machine's identity and
   user-data as fetched, so a restart neither fetches metadata again nor reconfigures the

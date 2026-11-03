@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
@@ -127,14 +128,88 @@ impl Netlink {
 
     /// Brings the interface `name` up.
     pub async fn set_up(&self, name: &str) -> anyhow::Result<()> {
+        self.set_admin_state(name, true).await
+    }
+
+    /// Sets the interface `name` down: the kernel removes its routes, and its IPv6 addresses.
+    pub async fn set_down(&self, name: &str) -> anyhow::Result<()> {
+        self.set_admin_state(name, false).await
+    }
+
+    async fn set_admin_state(&self, name: &str, up: bool) -> anyhow::Result<()> {
         let mut msg = LinkMessage::default();
-        msg.header.flags = LinkFlags::Up;
+        msg.header.flags = if up {
+            LinkFlags::Up
+        } else {
+            LinkFlags::empty()
+        };
         msg.header.change_mask = LinkFlags::Up;
         msg.attributes.push(LinkAttribute::IfName(name.to_owned()));
         self.request(RouteNetlinkMessage::SetLink(msg), 0)
             .await
-            .with_context(|| format!("bringing {name} up"))?;
+            .with_context(|| format!("setting {name} {}", if up { "up" } else { "down" }))?;
         Ok(())
+    }
+
+    /// The links' kernel descriptions, every link.
+    pub async fn link_messages(&self) -> io::Result<Vec<LinkMessage>> {
+        let request = RouteNetlinkMessage::GetLink(LinkMessage::default());
+        Ok(self
+            .request(request, NLM_F_DUMP)
+            .await?
+            .into_iter()
+            .filter_map(|reply| match reply {
+                RouteNetlinkMessage::NewLink(msg) => Some(msg),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The MTU of the interface `name`.
+    pub async fn mtu(&self, name: &str) -> anyhow::Result<u32> {
+        let msg = self.link_message(name).await?;
+        mtu_of(&msg).with_context(|| format!("no MTU for {name}"))
+    }
+
+    /// Every IPv4 address, with its interface's index.
+    pub async fn ipv4_addresses(&self) -> io::Result<Vec<InterfaceAddress>> {
+        let mut request = AddressMessage::default();
+        request.header.family = AddressFamily::Inet;
+        Ok(self
+            .request(RouteNetlinkMessage::GetAddress(request), NLM_F_DUMP)
+            .await?
+            .iter()
+            .filter_map(|reply| match reply {
+                RouteNetlinkMessage::NewAddress(msg) => InterfaceAddress::from_message(msg),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The gateways of the IPv4 default routes of the main table, with their interface's index,
+    /// lowest metric first.
+    pub async fn default_gateways(&self) -> io::Result<Vec<(u32, Ipv4Addr)>> {
+        let mut request = RouteMessage::default();
+        request.header.address_family = AddressFamily::Inet;
+        let mut gateways: Vec<(u32, u32, Ipv4Addr)> = self
+            .request(RouteNetlinkMessage::GetRoute(request), NLM_F_DUMP)
+            .await?
+            .iter()
+            .filter_map(|reply| match reply {
+                RouteNetlinkMessage::NewRoute(msg)
+                    if msg.header.destination_prefix_length == 0
+                        && msg.header.table == RouteHeader::RT_TABLE_MAIN =>
+                {
+                    default_gateway_of(msg)
+                }
+                _ => None,
+            })
+            .collect();
+        gateways.sort_by_key(|&(_, metric, _)| metric);
+        Ok(gateways
+            .into_iter()
+            .map(|(index, _, gateway)| (index, gateway))
+            .collect())
     }
 
     /// Waits up to `timeout` for the carrier (`IFF_LOWER_UP`) of `link`; returns whether it came
@@ -223,6 +298,25 @@ impl Netlink {
         Ok(())
     }
 
+    /// Adds `address` to `link` for good (no lifetime), with `metric` on its prefix route.
+    pub async fn replace_static_address(
+        &self,
+        link: &Link,
+        address: Ipv4Addr,
+        prefix_len: PrefixLen,
+        metric: u32,
+    ) -> anyhow::Result<()> {
+        let mut msg = address_message(link.index, address, prefix_len);
+        msg.attributes.push(AddressAttribute::RoutePriority(metric));
+        self.request(
+            RouteNetlinkMessage::NewAddress(msg),
+            NLM_F_CREATE | NLM_F_REPLACE,
+        )
+        .await
+        .with_context(|| format!("adding {address}/{prefix_len} to {}", link.name))?;
+        Ok(())
+    }
+
     /// Removes an address from `link`, if it has it.
     pub async fn delete_address(
         &self,
@@ -235,15 +329,16 @@ impl Netlink {
             .with_context(|| format!("removing {address}/{prefix_len} from {}", link.name))
     }
 
-    /// Adds or replaces `route` through `link`, from `source`.
+    /// Adds or replaces `route` through `link`, from `source`, set up by `protocol`.
     pub async fn replace_route(
         &self,
         link: &Link,
         route: &Route,
         source: Ipv4Addr,
         metric: u32,
+        protocol: RouteProtocol,
     ) -> anyhow::Result<()> {
-        let msg = route_message(link.index, route, Some(source), metric);
+        let msg = route_message(link.index, route, Some(source), metric, protocol);
         self.request(
             RouteNetlinkMessage::NewRoute(msg),
             NLM_F_CREATE | NLM_F_REPLACE,
@@ -253,14 +348,15 @@ impl Netlink {
         Ok(())
     }
 
-    /// Removes `route` through `link`, if present.
+    /// Removes `route` through `link`, set up by `protocol`, if present.
     pub async fn delete_route(
         &self,
         link: &Link,
         route: &Route,
         metric: u32,
+        protocol: RouteProtocol,
     ) -> anyhow::Result<()> {
-        let msg = route_message(link.index, route, None, metric);
+        let msg = route_message(link.index, route, None, metric, protocol);
         ignore_missing(self.request(RouteNetlinkMessage::DelRoute(msg), 0).await)
             .with_context(|| format!("removing route {route} from {}", link.name))
     }
@@ -283,13 +379,19 @@ pub fn address_message(index: u32, address: Ipv4Addr, prefix_len: PrefixLen) -> 
     msg
 }
 
-/// The kernel route for `route` through interface `index`.
+/// The kernel route for `route` through interface `index`, set up by `protocol`.
 #[must_use]
-fn route_message(index: u32, route: &Route, source: Option<Ipv4Addr>, metric: u32) -> RouteMessage {
+fn route_message(
+    index: u32,
+    route: &Route,
+    source: Option<Ipv4Addr>,
+    metric: u32,
+    protocol: RouteProtocol,
+) -> RouteMessage {
     let mut msg = RouteMessage::default();
     msg.header.address_family = AddressFamily::Inet;
     msg.header.table = RouteHeader::RT_TABLE_MAIN;
-    msg.header.protocol = RouteProtocol::Dhcp;
+    msg.header.protocol = protocol;
     msg.header.kind = RouteType::Unicast;
     msg.header.destination_prefix_length = route.prefix_len.get();
     msg.header.scope = match route.gateway {
@@ -309,6 +411,65 @@ fn route_message(index: u32, route: &Route, source: Option<Ipv4Addr>, metric: u3
         attributes.push(RouteAttribute::PrefSource(RouteAddress::Inet(source)));
     }
     msg
+}
+
+/// An IPv4 address of an interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceAddress {
+    /// The interface's index.
+    pub index: u32,
+    /// The address.
+    pub address: Ipv4Addr,
+    /// The length of its subnet's prefix.
+    pub prefix_len: u8,
+}
+
+impl InterfaceAddress {
+    /// The address `msg` describes, if an IPv4 one.
+    #[must_use]
+    fn from_message(msg: &AddressMessage) -> Option<Self> {
+        let address = msg.attributes.iter().find_map(|attribute| match attribute {
+            AddressAttribute::Local(IpAddr::V4(address)) => Some(*address),
+            _ => None,
+        });
+        let address = address.or_else(|| {
+            msg.attributes.iter().find_map(|attribute| match attribute {
+                AddressAttribute::Address(IpAddr::V4(address)) => Some(*address),
+                _ => None,
+            })
+        })?;
+        Some(Self {
+            index: msg.header.index,
+            address,
+            prefix_len: msg.header.prefix_len,
+        })
+    }
+}
+
+/// The MTU in `msg`.
+#[must_use]
+pub fn mtu_of(msg: &LinkMessage) -> Option<u32> {
+    msg.attributes.iter().find_map(|attribute| match attribute {
+        LinkAttribute::Mtu(mtu) => Some(*mtu),
+        _ => None,
+    })
+}
+
+/// The output interface, metric and gateway of the default route `msg`, if it has a gateway.
+#[must_use]
+fn default_gateway_of(msg: &RouteMessage) -> Option<(u32, u32, Ipv4Addr)> {
+    let mut index = None;
+    let mut gateway = None;
+    let mut metric = 0;
+    for attribute in &msg.attributes {
+        match attribute {
+            RouteAttribute::Oif(oif) => index = Some(*oif),
+            RouteAttribute::Gateway(RouteAddress::Inet(address)) => gateway = Some(*address),
+            RouteAttribute::Priority(priority) => metric = *priority,
+            _ => {}
+        }
+    }
+    Some((index?, metric, gateway?))
 }
 
 /// Treats "no such address/route" as success, for idempotent removals.
@@ -375,7 +536,13 @@ mod tests {
             prefix_len: PrefixLen::ZERO,
             gateway: Some(gateway),
         };
-        let msg = route_message(3, &default, Some(Ipv4Addr::new(10, 0, 0, 5)), 1024);
+        let msg = route_message(
+            3,
+            &default,
+            Some(Ipv4Addr::new(10, 0, 0, 5)),
+            1024,
+            RouteProtocol::Dhcp,
+        );
         assert_eq!(msg.header.destination_prefix_length, 0);
         assert_eq!(msg.header.scope, RouteScope::Universe);
         assert_eq!(msg.header.protocol, RouteProtocol::Dhcp);
@@ -391,8 +558,9 @@ mod tests {
             prefix_len: PrefixLen::HOST,
             gateway: None,
         };
-        let msg = route_message(3, &on_link, None, 1024);
+        let msg = route_message(3, &on_link, None, 1024, RouteProtocol::Static);
         assert_eq!(msg.header.scope, RouteScope::Link);
+        assert_eq!(msg.header.protocol, RouteProtocol::Static);
         assert_eq!(msg.header.destination_prefix_length, 32);
         assert_eq!(msg.header.table, RouteHeader::RT_TABLE_MAIN);
         assert!(

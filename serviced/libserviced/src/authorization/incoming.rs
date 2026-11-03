@@ -172,5 +172,5 @@ async fn identify(stream: &UnixStream, gate: &Gate) -> Result<Caller, Unidentifi
     })?
     .into_inner();
     let service = service.name.parse().map_err(Unidentified::InvalidName)?;
-    Ok(Caller::new(service, pid))
+    Ok(Caller::new(service, pid, credentials.uid()))
 }

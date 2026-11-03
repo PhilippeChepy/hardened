@@ -11,10 +11,13 @@ use libserviced::activation::ActivatedSocket;
 use libserviced::api::serviced_client::ServicedClient;
 use libserviced::notify;
 use network_controller::network::network_controller_server::NetworkControllerServer;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tonic::transport::Channel;
 use tonic::transport::Server;
 
+use crate::command::Command;
+use crate::command::Commands;
 use crate::interfaces::Interfaces;
 use crate::link;
 use crate::link::Netlink;
@@ -23,6 +26,7 @@ use crate::link_events::LinkEvents;
 use crate::link_events::LinkState;
 use crate::network_service::NetworkService;
 use crate::options::Options;
+use crate::persisted_interfaces;
 use crate::persisted_state;
 use crate::shared::Shared;
 
@@ -42,7 +46,9 @@ pub async fn run(
         Ok(dns) => shared.set_dns_override(dns),
         Err(error) => tracing::error!(error = format!("{error:#}"), "ignoring the persisted state"),
     }
-    let service = NetworkService::new(Arc::clone(&shared));
+    // Requests wait there until the interfaces are followed, after the first ones appeared.
+    let (sender, commands) = mpsc::channel(4);
+    let service = NetworkService::new(Arc::clone(&shared), Commands::new(sender));
     let router = Server::builder().add_service(NetworkControllerServer::new(service));
     let serving = async {
         libserviced::authorization::serve(router, api, serviced, future::pending())
@@ -51,7 +57,7 @@ pub async fn run(
         Err(anyhow::anyhow!("the API stopped serving"))
     };
     let configuring = async {
-        configure(&options, &shared).await?;
+        configure(&options, &shared, commands).await?;
         shared.log();
         notify::ready().context("notifying serviced of the readiness")?;
         future::pending().await
@@ -62,10 +68,14 @@ pub async fn run(
     }
 }
 
-/// Brings up the network. Returns once at least one interface got a lease or all attempts timed
-/// out; leases keep being renewed and new interfaces configured by background tasks, which
-/// share `shared`.
-async fn configure(options: &Options, shared: &Arc<Shared>) -> anyhow::Result<()> {
+/// Brings up the network. Returns once at least one interface got a lease or a static
+/// configuration, or all attempts timed out; leases keep being renewed, new interfaces configured
+/// and `commands` answered by background tasks, which share `shared`.
+async fn configure(
+    options: &Options,
+    shared: &Arc<Shared>,
+    commands: mpsc::Receiver<Command>,
+) -> anyhow::Result<()> {
     let netlink = Netlink::connect()?;
     netlink.set_up("lo").await?;
 
@@ -86,10 +96,23 @@ async fn configure(options: &Options, shared: &Arc<Shared>) -> anyhow::Result<()
             Vec::new()
         }
     };
-    let mut interfaces = Interfaces::new(Arc::clone(shared), options.sysfs_net.clone());
+    let configurations =
+        persisted_interfaces::load(&options.interfaces_file).unwrap_or_else(|error| {
+            tracing::error!(
+                error = format!("{error:#}"),
+                "ignoring the interfaces' persisted configurations"
+            );
+            persisted_interfaces::Configurations::new()
+        });
+    let mut interfaces = Interfaces::new(
+        Arc::clone(shared),
+        options.sysfs_net.clone(),
+        options.interfaces_file.clone(),
+        configurations,
+    );
     let changes = interfaces.reconcile(&links);
     interfaces.apply(&netlink, changes).await;
-    tokio::spawn(watch_interfaces(interfaces, netlink, events));
+    tokio::spawn(watch_interfaces(interfaces, netlink, events, commands));
 
     let mut bound = shared.bound.subscribe();
     let deadline = started + options.lease_timeout;
@@ -98,7 +121,7 @@ async fn configure(options: &Options, shared: &Arc<Shared>) -> anyhow::Result<()
         .is_err()
     {
         tracing::warn!(
-            "no DHCP lease after {:?}, continuing without network",
+            "no DHCP lease or static configuration after {:?}, continuing without network",
             options.lease_timeout
         );
     }
@@ -155,12 +178,24 @@ async fn physical_links(netlink: &Netlink, sysfs: &Path) -> Vec<LinkState> {
     }
 }
 
-/// Keeps DHCP running on the physical Ethernet interfaces after the initial configuration:
-/// starts it on those appearing (late driver probe, hot-plug, re-plug), stops it on those
-/// removed.
-async fn watch_interfaces(mut interfaces: Interfaces, netlink: Netlink, mut events: LinkEvents) {
+/// Keeps the physical Ethernet interfaces configured after the initial configuration:
+/// configures those appearing (late driver probe, hot-plug, re-plug), forgets those removed, and
+/// answers the API's `commands`, one at a time.
+async fn watch_interfaces(
+    mut interfaces: Interfaces,
+    netlink: Netlink,
+    mut events: LinkEvents,
+    mut commands: mpsc::Receiver<Command>,
+) {
     loop {
-        let changes = match events.next().await {
+        let event = tokio::select! {
+            event = events.next() => event,
+            Some(command) = commands.recv() => {
+                interfaces.handle(&netlink, command).await;
+                continue;
+            }
+        };
+        let changes = match event {
             Ok(LinkEvent::Lost) => match netlink.links().await {
                 Ok(links) => interfaces.reconcile(&links),
                 Err(err) => {
@@ -203,6 +238,7 @@ mod tests {
         use netlink_packet_route::link::InfoData;
         use netlink_packet_route::link::InfoKind;
         use netlink_packet_route::link::InfoVeth;
+        use netlink_packet_route::link::InfoVlan;
         use netlink_packet_route::link::LinkAttribute;
         use netlink_packet_route::link::LinkInfo;
         use netlink_packet_route::link::LinkMessage;
@@ -212,6 +248,10 @@ mod tests {
         use netlink_packet_route::route::RouteProtocol;
         use netlink_packet_route::route::RouteScope;
         use network_controller::DnsSettings;
+        use network_controller::InterfaceName;
+        use network_controller::InterfaceSettings;
+        use network_controller::Ipv4Method;
+        use network_controller::StaticIpv4;
         use tokio::runtime::Runtime;
         use tracing::Level;
         use tracing_subscriber::filter::Targets;
@@ -530,6 +570,7 @@ mod tests {
             let options = Options {
                 resolv_conf: run.path().join("resolv.conf"),
                 state_file: run.path().join("state.json"),
+                interfaces_file: run.path().join("interfaces.json"),
                 sysfs_net,
                 link_timeout: Duration::from_secs(1),
                 lease_timeout: Duration::from_secs(20),
@@ -544,7 +585,9 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 add_veth(&netlink, "dhcp0", "srv0", servers.0.id()).await;
             };
-            let (configured, ()) = tokio::join!(configure(&options, &shared), plug);
+            let (sender, receiver) = mpsc::channel(4);
+            let commands = Commands::new(sender);
+            let (configured, ()) = tokio::join!(configure(&options, &shared, receiver), plug);
             configured.unwrap();
             assert_eq!(shared.primary().as_deref(), Some("dhcp0"));
             let primary = "dhcp0";
@@ -640,6 +683,284 @@ mod tests {
                     format!("default via 10.43.0.1 metric {metric}"),
                 ]
             );
+
+            // Configured statically: the lease is given up, its addresses and routes removed,
+            // the static ones added with the same rank's metric.
+            let settings = static_settings(&["10.43.0.77/24"], "10.43.0.1", &["10.43.0.53"]);
+            let eth = commands
+                .configure(name("dhcp1"), Some(settings))
+                .await
+                .unwrap();
+            let status = eth.status.unwrap();
+            assert_eq!(addresses(&netlink, "dhcp1").await, ["10.43.0.77/24"]);
+            assert!(
+                routes(&netlink, "dhcp1").await.is_empty(),
+                "the lease's routes"
+            );
+            assert_eq!(
+                static_routes(&netlink, "dhcp1").await,
+                [format!("default via 10.43.0.1 metric {metric}")]
+            );
+            assert!(!status.leased);
+            assert_eq!(status.gateway.as_deref(), Some("10.43.0.1"));
+            assert_eq!(status.name_servers, ["10.43.0.53"]);
+            assert_eq!(
+                *shared.bound.borrow(),
+                2,
+                "a lease and a static configuration"
+            );
+            assert!(
+                fs::read_to_string(&options.interfaces_file)
+                    .unwrap()
+                    .contains("10.43.0.77/24")
+            );
+
+            // Back to DHCP: the static configuration removed, a lease again, same rank.
+            let eth = commands.configure(name("dhcp1"), None).await.unwrap();
+            assert!(!eth.configured);
+            assert!(static_routes(&netlink, "dhcp1").await.is_empty());
+            let mut leased = false;
+            for _ in 0..100 {
+                if addresses(&netlink, "dhcp1").await == ["10.43.0.10/32"] {
+                    leased = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            assert!(leased, "{:?}", addresses(&netlink, "dhcp1").await);
+            let mut gcp_routes = routes(&netlink, "dhcp1").await;
+            gcp_routes.sort();
+            assert_eq!(gcp_routes.len(), 2, "{gcp_routes:?}");
+            assert_eq!(
+                fs::read_to_string(&options.interfaces_file).unwrap(),
+                "{}",
+                "no configuration kept"
+            );
+        }
+
+        fn name(name: &str) -> InterfaceName {
+            name.parse().unwrap()
+        }
+
+        /// Addresses configured statically, with `gateway` and `name_servers`.
+        fn static_settings(
+            addresses: &[&str],
+            gateway: &str,
+            name_servers: &[&str],
+        ) -> InterfaceSettings {
+            let addresses = addresses.iter().map(|a| a.parse().unwrap()).collect();
+            let addresses = StaticIpv4::new(addresses, Some(gateway.parse().unwrap())).unwrap();
+            let dns = DnsSettings {
+                name_servers: name_servers.iter().map(|s| s.parse().unwrap()).collect(),
+                ..DnsSettings::default()
+            };
+            InterfaceSettings::new(true, Ipv4Method::Static(addresses), dns, None).unwrap()
+        }
+
+        /// Static routes of `ifname`, formatted like `ip route`.
+        async fn static_routes(netlink: &Netlink, ifname: &str) -> Vec<String> {
+            let index = index(netlink, ifname).await;
+            let mut request = RouteMessage::default();
+            request.header.address_family = AddressFamily::Inet;
+            let mut lines = Vec::new();
+            for reply in dump(netlink, RouteNetlinkMessage::GetRoute(request)).await {
+                let RouteNetlinkMessage::NewRoute(msg) = reply else {
+                    continue;
+                };
+                if msg.header.protocol == RouteProtocol::Static
+                    && msg.attributes.contains(&RouteAttribute::Oif(index))
+                {
+                    lines.push(route_line(&msg));
+                }
+            }
+            lines
+        }
+
+        const STATIC_TEST: &str = "run::tests::netns::static_end_to_end";
+
+        /// Static configurations, without DHCP servers: applied when the controller starts,
+        /// changed, refused when conflicting, rolled back when the kernel refuses them,
+        /// disabled and reset.
+        #[test]
+        #[ignore = "needs unprivileged user namespaces (unshare -rn) and VLANs"]
+        fn static_end_to_end() {
+            if env::var(ROLE).as_deref() == Ok("static") {
+                Runtime::new().unwrap().block_on(static_client());
+                return;
+            }
+            let status = Command::new("unshare")
+                .args(["--user", "--map-root-user", "--net", "--"])
+                .arg(env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "--nocapture", STATIC_TEST])
+                .env(ROLE, "static")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "test inside the namespace failed: {status}"
+            );
+        }
+
+        /// Creates the VLAN `name` of `id` on `parent`, whose MTU bounds its own.
+        async fn add_vlan(netlink: &Netlink, name: &str, parent: &str, id: u16) {
+            let mut vlan = LinkMessage::default();
+            vlan.attributes.push(LinkAttribute::IfName(name.into()));
+            vlan.attributes
+                .push(LinkAttribute::Link(index(netlink, parent).await));
+            vlan.attributes.push(LinkAttribute::LinkInfo(vec![
+                LinkInfo::Kind(InfoKind::Vlan),
+                LinkInfo::Data(InfoData::Vlan(vec![InfoVlan::Id(id)])),
+            ]));
+            netlink
+                .request(
+                    RouteNetlinkMessage::NewLink(vlan),
+                    NLM_F_CREATE | NLM_F_EXCL,
+                )
+                .await
+                .unwrap();
+        }
+
+        async fn static_client() {
+            let netlink = Netlink::connect().unwrap();
+            let mut peer = LinkMessage::default();
+            peer.attributes.push(LinkAttribute::IfName("peer0".into()));
+            let mut veth = LinkMessage::default();
+            veth.attributes.push(LinkAttribute::IfName("stat0".into()));
+            veth.attributes.push(LinkAttribute::LinkInfo(vec![
+                LinkInfo::Kind(InfoKind::Veth),
+                LinkInfo::Data(InfoData::Veth(InfoVeth::Peer(peer))),
+            ]));
+            netlink
+                .request(
+                    RouteNetlinkMessage::NewLink(veth),
+                    NLM_F_CREATE | NLM_F_EXCL,
+                )
+                .await
+                .unwrap();
+            netlink.set_up("peer0").await.unwrap();
+            add_vlan(&netlink, "vlan0", "peer0", 5).await;
+
+            let run = tempfile::tempdir().unwrap();
+            let sysfs_net = run.path().join("sys/class/net");
+            for name in ["stat0", "vlan0"] {
+                fs::create_dir_all(sysfs_net.join(name).join("device")).unwrap();
+                fs::write(sysfs_net.join(name).join("type"), "1\n").unwrap();
+            }
+            // peer0 exists, and is not physical.
+            fs::create_dir_all(sysfs_net.join("peer0")).unwrap();
+            let options = Options {
+                resolv_conf: run.path().join("resolv.conf"),
+                state_file: run.path().join("state.json"),
+                interfaces_file: run.path().join("interfaces.json"),
+                sysfs_net,
+                link_timeout: Duration::from_secs(1),
+                lease_timeout: Duration::from_secs(5),
+            };
+            let configured = persisted_interfaces::Configurations::from([(
+                name("stat0"),
+                static_settings(&["192.0.2.10/24"], "192.0.2.1", &["192.0.2.53"]),
+            )]);
+            persisted_interfaces::save(&options.interfaces_file, &configured).unwrap();
+            let shared = Arc::new(Shared::new(
+                options.resolv_conf.clone(),
+                options.state_file.clone(),
+            ));
+            let (sender, receiver) = mpsc::channel(4);
+            let commands = Commands::new(sender);
+            let started = Instant::now();
+            configure(&options, &shared, receiver).await.unwrap();
+            assert!(
+                started.elapsed() < Duration::from_secs(4),
+                "a static configuration is ready at once"
+            );
+
+            // The persisted configuration, applied as stat0 appeared; vlan0 runs DHCP.
+            let interfaces = commands.list().await.unwrap();
+            let names: Vec<&str> = interfaces.iter().map(|i| i.name.as_str()).collect();
+            assert_eq!(names, ["stat0", "vlan0"]);
+            let stat0 = interfaces[0].status.clone().unwrap();
+            assert!(interfaces[0].configured && stat0.present && stat0.up);
+            assert_eq!(addresses(&netlink, "stat0").await, ["192.0.2.10/24"]);
+            assert_eq!(
+                static_routes(&netlink, "stat0").await,
+                ["default via 192.0.2.1 metric 1024"]
+            );
+            assert_eq!(stat0.gateway.as_deref(), Some("192.0.2.1"));
+            assert_eq!(stat0.name_servers, ["192.0.2.53"]);
+            let resolv_conf = || fs::read_to_string(&options.resolv_conf).unwrap();
+            assert_eq!(
+                resolv_conf(),
+                "# Generated by network-controller.\nnameserver 192.0.2.53\n"
+            );
+            assert!(!interfaces[1].configured);
+
+            // Changed: the old address and route go, the new ones come, same metric.
+            let settings = static_settings(&["198.51.100.7/24"], "198.51.100.1", &[]);
+            commands
+                .configure(name("stat0"), Some(settings))
+                .await
+                .unwrap();
+            assert_eq!(addresses(&netlink, "stat0").await, ["198.51.100.7/24"]);
+            assert_eq!(
+                static_routes(&netlink, "stat0").await,
+                ["default via 198.51.100.1 metric 1024"]
+            );
+            assert_eq!(resolv_conf(), "# Generated by network-controller.\n");
+
+            // Another interface's address, or a link network-controller does not configure.
+            let taken = static_settings(&["198.51.100.7/24"], "198.51.100.1", &[]);
+            let status = commands
+                .configure(name("vlan0"), Some(taken))
+                .await
+                .unwrap_err();
+            assert_eq!(status.code(), tonic::Code::FailedPrecondition, "{status:?}");
+            assert!(status.message().contains("stat0"), "{status:?}");
+            let status = commands.configure(name("peer0"), None).await.unwrap_err();
+            assert_eq!(status.code(), tonic::Code::NotFound, "{status:?}");
+
+            // The kernel refuses the MTU (a VLAN's is at most its parent's): rolled back.
+            let vlan_mtu = mtu(&netlink, "vlan0").await;
+            let jumbo_addresses =
+                StaticIpv4::new(vec!["203.0.113.5/24".parse().unwrap()], None).unwrap();
+            let jumbo = InterfaceSettings::new(
+                true,
+                Ipv4Method::Static(jumbo_addresses),
+                DnsSettings::default(),
+                Some(9000.try_into().unwrap()),
+            )
+            .unwrap();
+            let before = fs::read_to_string(&options.interfaces_file).unwrap();
+            let status = commands
+                .configure(name("vlan0"), Some(jumbo))
+                .await
+                .unwrap_err();
+            assert_eq!(status.code(), tonic::Code::Aborted, "{status:?}");
+            assert!(status.message().contains("restored"), "{status:?}");
+            assert!(addresses(&netlink, "vlan0").await.is_empty());
+            assert_eq!(mtu(&netlink, "vlan0").await, vlan_mtu);
+            assert_eq!(
+                fs::read_to_string(&options.interfaces_file).unwrap(),
+                before
+            );
+            let vlan0 = commands.list().await.unwrap().remove(1);
+            assert!(!vlan0.configured);
+            assert!(vlan0.status.unwrap().up, "DHCP again");
+
+            // Disabled: down, without its addresses. Reset: DHCP, nothing kept.
+            let disabled =
+                InterfaceSettings::new(false, Ipv4Method::Dhcp, DnsSettings::default(), None)
+                    .unwrap();
+            let stat0 = commands
+                .configure(name("stat0"), Some(disabled))
+                .await
+                .unwrap();
+            assert!(!stat0.status.unwrap().up);
+            assert!(addresses(&netlink, "stat0").await.is_empty());
+            assert!(static_routes(&netlink, "stat0").await.is_empty());
+            assert_eq!(*shared.bound.borrow(), 0);
+            let stat0 = commands.configure(name("stat0"), None).await.unwrap();
+            assert!(stat0.status.unwrap().up);
+            assert_eq!(fs::read_to_string(&options.interfaces_file).unwrap(), "{}");
         }
     }
 }

@@ -155,6 +155,21 @@ DHCPv4 on every physical Ethernet interface, and `resolv.conf`. Ready after the 
 once the attempts timed out: machine-controller then fetches metadata. Interfaces are followed by
 index: one removed loses its DHCP client and lease, one plugged in (again) gets a new client.
 
+Its API also configures each interface by name (`ListInterfaces`, `SetInterfaceConfig`,
+`ResetInterfaceConfig`): enabled or set down, DHCP or static IPv4 addresses and gateway, its own
+name servers and search domains (which `settings.dns` still replaces), its MTU. A configuration
+is validated (prefixes, a gateway in a configured subnet, no address another interface has, at
+most 3 name servers), applied at once (the DHCP client stopped and its lease's addresses and
+routes removed, or the static ones; static routes are of protocol `static`), and kept in
+`interfaces.json`; if the kernel refuses it, or it cannot be kept, the previous configuration
+and MTU are brought back and the call fails (`ABORTED`, `INTERNAL`). The file is in the runtime
+directory, or in `/var/lib/network-controller` when the sandbox has it: a system whose `/var` is
+mounted before network-controller starts binds it (`optional`) to keep the configurations across
+reboots. Changing methods (`Configure` and these) are root's alone: the socket's allow-list names
+services, and a service whose processes run as several users (a login service's sessions, in its
+cgroup) may only have its root processes change the network, as `api-users` does for serviced's
+API.
+
 - **Sandbox**: root without capabilities but the network's, so it owns the files it writes in
   `/run`: `NET_ADMIN` configures links, addresses and routes (rtnetlink), `NET_RAW` opens the
   packet sockets DHCP uses before an interface has an address, `NET_BIND_SERVICE` binds UDP port
@@ -167,7 +182,7 @@ index: one removed loses its DHCP client and lease, one plugged in (again) gets 
   and carrier changes come as netlink notifications (`RTNLGRP_LINK`), not polling.
 - **Binds**: `/sys` (whether a new link is a physical Ethernet one: its `type` and `device` in
   `/sys/class/net`, which links into `/sys/devices`); `/run/hardened`, where `/etc/resolv.conf`
-  links to; its runtime directory, for its state.
+  links to; its runtime directory, for its state and the interfaces' configurations.
 
 ### machine-controller
 

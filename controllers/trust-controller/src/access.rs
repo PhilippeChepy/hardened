@@ -23,6 +23,6 @@ pub fn from<T>(service: &str, message: T) -> Request<T> {
     let mut request = Request::new(message);
     request
         .extensions_mut()
-        .insert(Caller::new(service.parse().unwrap(), 1));
+        .insert(Caller::new(service.parse().unwrap(), 1, 0));
     request
 }

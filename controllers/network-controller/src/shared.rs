@@ -1,5 +1,5 @@
-//! State shared by the DHCP clients of all interfaces and the API: `resolv.conf` is rewritten
-//! whenever what they say changes.
+//! State shared by the DHCP clients of all interfaces, the static configurations and the API:
+//! `resolv.conf` is rewritten whenever what they say changes.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -11,8 +11,10 @@ use std::sync::PoisonError;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
+use controllers_helpers::DomainName;
 use controllers_helpers::atomic_file;
 use network_controller::DnsSettings;
+use network_controller::StaticIpv4;
 use network_controller::network;
 use tokio::sync::watch;
 
@@ -29,7 +31,7 @@ pub struct Shared {
     state_file: PathBuf,
     next_rank: AtomicU32,
     state: Mutex<State>,
-    /// Number of interfaces currently holding a lease.
+    /// Number of interfaces currently holding a lease or configured statically.
     pub bound: watch::Sender<usize>,
     /// What DHCP offered, as the API serves it.
     pub offered: watch::Sender<network::State>,
@@ -62,13 +64,72 @@ impl Shared {
         });
     }
 
-    /// Forgets the interface of `index` and its lease, as if it had lost it: the interface is
-    /// gone, and the kernel removed its addresses and routes with it.
+    /// Forgets the interface of `index`, its lease or static configuration and its resolver, as
+    /// if it had lost them: the interface is gone, and the kernel removed its addresses and
+    /// routes with it.
     pub fn remove_interface(&self, index: u32) {
         self.update(|state| {
             state.interfaces.remove(&index);
             state.by_rank.retain(|_, bound| bound.index != index);
+            state
+                .statics
+                .retain(|_, configured| configured.index != index);
+            state.interface_dns.remove(&index);
         });
+    }
+
+    /// Forgets that DHCP runs on the interface of `index`: its client stopped, having given up
+    /// its lease.
+    pub fn remove_dhcp_interface(&self, index: u32) {
+        self.update(|state| {
+            state.interfaces.remove(&index);
+        });
+    }
+
+    /// Sets the resolver configuration of the interface of `index`: each list, when not empty,
+    /// replaces what its lease gives.
+    pub fn set_interface_dns(&self, index: u32, dns: DnsSettings) {
+        self.update(|state| {
+            if dns == DnsSettings::default() {
+                state.interface_dns.remove(&index);
+            } else {
+                state.interface_dns.insert(index, dns);
+            }
+        });
+    }
+
+    /// Records the static configuration of the interface `name` of `index`, of `rank`.
+    pub fn bind_static(&self, rank: u32, index: u32, name: &str, addresses: StaticIpv4) {
+        self.update(|state| {
+            let configured = Configured {
+                index,
+                interface: name.to_owned(),
+                addresses,
+            };
+            state.statics.insert(rank, configured);
+        });
+    }
+
+    /// Forgets the static configuration of `rank`.
+    pub fn unbind_static(&self, rank: u32) {
+        self.update(|state| {
+            state.statics.remove(&rank);
+        });
+    }
+
+    /// Whether the interface of `index` holds a lease, and the name servers it gives
+    /// `resolv.conf` (before `settings.dns`).
+    #[must_use]
+    pub fn interface_status(&self, index: u32) -> (bool, Vec<IpAddr>) {
+        let state = self.state_lock();
+        let leased = state.by_rank.values().any(|bound| bound.index == index);
+        let name_servers = state
+            .sources()
+            .into_iter()
+            .filter(|source| source.index == index)
+            .flat_map(|source| source.name_servers)
+            .collect();
+        (leased, name_servers)
     }
 
     /// The rank of the next interface to get a lease: 0 for the first one. The lowest rank
@@ -131,7 +192,11 @@ impl Shared {
             if state.written.as_ref() != Some(&resolv_conf) {
                 state.written = self.write(&resolv_conf).then_some(resolv_conf);
             }
-            (result, state.by_rank.len(), state.offered())
+            (
+                result,
+                state.by_rank.len() + state.statics.len(),
+                state.offered(),
+            )
         };
         self.bound.send_replace(count);
         self.offered.send_if_modified(|current| {
@@ -182,6 +247,19 @@ impl Shared {
                 "network interface"
             );
         }
+        for Configured {
+            interface,
+            addresses,
+            ..
+        } in state.statics.values()
+        {
+            tracing::info!(
+                interface,
+                addresses = ?addresses.addresses().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                gateway = ?addresses.gateway(),
+                "network interface configured statically"
+            );
+        }
         for name in state.unbound() {
             tracing::warn!(interface = name, "network interface without a lease");
         }
@@ -195,6 +273,10 @@ struct State {
     interfaces: BTreeMap<u32, String>,
     /// Current leases by rank (bind order): the first entry is the primary interface.
     by_rank: BTreeMap<u32, Bound>,
+    /// Static configurations by rank, which they share with leases.
+    statics: BTreeMap<u32, Configured>,
+    /// The interfaces' own resolver configurations, by index.
+    interface_dns: BTreeMap<u32, DnsSettings>,
     /// Replaces the leased nameservers and search domains (each list when not empty).
     dns_override: DnsSettings,
     /// The `resolv.conf` last written, not to rewrite it needlessly.
@@ -206,6 +288,38 @@ struct Bound {
     index: u32,
     interface: String,
     lease: Lease,
+}
+
+/// An interface configured statically.
+struct Configured {
+    index: u32,
+    interface: String,
+    addresses: StaticIpv4,
+}
+
+/// What an interface gives `resolv.conf`, before `settings.dns`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Source {
+    index: u32,
+    name_servers: Vec<IpAddr>,
+    search_list: Vec<DomainName>,
+}
+
+impl Source {
+    /// What `lease`, of the interface of `index`, gives: its search list, or its domain name.
+    #[must_use]
+    fn leased(index: u32, lease: &Lease) -> Self {
+        let search_list = if lease.search.is_empty() {
+            lease.domain_name.iter().cloned().collect()
+        } else {
+            lease.search.clone()
+        };
+        Self {
+            index,
+            name_servers: lease.nameservers.iter().copied().map(IpAddr::V4).collect(),
+            search_list,
+        }
+    }
 }
 
 impl State {
@@ -247,8 +361,38 @@ impl State {
 
     /// What goes into `resolv.conf`.
     fn resolver(&self) -> DnsSettings {
-        let leases: Vec<&Lease> = self.by_rank.values().map(|bound| &bound.lease).collect();
-        resolver_config(&self.dns_override, &leases)
+        resolver_config(&self.dns_override, &self.sources())
+    }
+
+    /// What each configured interface gives `resolv.conf`, by rank: its own resolver
+    /// configuration's lists, or its lease's.
+    fn sources(&self) -> Vec<Source> {
+        let leased = (self.by_rank.iter())
+            .map(|(rank, bound)| (*rank, Source::leased(bound.index, &bound.lease)));
+        let configured = self.statics.iter().map(|(rank, configured)| {
+            let source = Source {
+                index: configured.index,
+                name_servers: Vec::new(),
+                search_list: Vec::new(),
+            };
+            (*rank, source)
+        });
+        let mut sources: Vec<(u32, Source)> = leased.chain(configured).collect();
+        sources.sort_by_key(|(rank, _)| *rank);
+        sources
+            .into_iter()
+            .map(|(_, mut source)| {
+                if let Some(dns) = self.interface_dns.get(&source.index) {
+                    if !dns.name_servers.is_empty() {
+                        source.name_servers.clone_from(&dns.name_servers);
+                    }
+                    if !dns.search_list.is_empty() {
+                        source.search_list.clone_from(&dns.search_list);
+                    }
+                }
+                source
+            })
+            .collect()
     }
 
     /// Interfaces DHCP runs on without a lease.
@@ -269,25 +413,20 @@ fn default_gateway(lease: &Lease) -> Option<Ipv4Addr> {
         .and_then(|route| route.gateway)
 }
 
-/// Nameservers and search domains from `leases` (primary first); each configured list replaces
-/// the leased one.
-fn resolver_config(configured: &DnsSettings, leases: &[&Lease]) -> DnsSettings {
+/// Nameservers and search domains from the interfaces' `sources` (primary first); each
+/// configured list replaces theirs.
+fn resolver_config(configured: &DnsSettings, sources: &[Source]) -> DnsSettings {
     let mut resolver = configured.clone();
     if resolver.name_servers.is_empty() {
-        for lease in leases {
-            let servers = lease.nameservers.iter().map(|&server| IpAddr::V4(server));
-            resolver.name_servers.extend(servers);
+        for source in sources {
+            resolver
+                .name_servers
+                .extend_from_slice(&source.name_servers);
         }
     }
     if resolver.search_list.is_empty() {
-        for lease in leases {
-            if lease.search.is_empty() {
-                resolver
-                    .search_list
-                    .extend(lease.domain_name.iter().cloned());
-            } else {
-                resolver.search_list.extend_from_slice(&lease.search);
-            }
+        for source in sources {
+            resolver.search_list.extend_from_slice(&source.search_list);
         }
     }
     resolver
@@ -339,7 +478,8 @@ pub(crate) mod tests {
             Some("ignored.internal"),
             &["b.internal", "c.internal"],
         );
-        let resolver = resolver_config(&DnsSettings::default(), &[&primary, &secondary]);
+        let sources = [Source::leased(2, &primary), Source::leased(3, &secondary)];
+        let resolver = resolver_config(&DnsSettings::default(), &sources);
         assert_eq!(
             resolver.name_servers,
             [address("10.0.0.2"), address("10.1.0.2")]
@@ -353,7 +493,7 @@ pub(crate) mod tests {
             name_servers: vec![address("1.1.1.1")],
             ..DnsSettings::default()
         };
-        let resolver = resolver_config(&configured, &[&primary]);
+        let resolver = resolver_config(&configured, &sources[..1]);
         assert_eq!(resolver.name_servers, configured.name_servers);
         assert_eq!(
             resolver.search_list,
@@ -365,7 +505,7 @@ pub(crate) mod tests {
             search_list: vec!["corp.example".parse().unwrap()],
             ..DnsSettings::default()
         };
-        let resolver = resolver_config(&configured, &[&primary]);
+        let resolver = resolver_config(&configured, &sources[..1]);
         assert_eq!(
             resolver.name_servers,
             [address("10.0.0.2")],
@@ -502,5 +642,75 @@ pub(crate) mod tests {
             "# Generated by network-controller.\nnameserver 10.0.0.3\nsearch a.internal\n",
             "back to DHCP"
         );
+    }
+
+    #[test]
+    fn static_configurations_and_interface_resolvers() {
+        let dir = tempfile::tempdir().unwrap();
+        let resolv_conf = || fs::read_to_string(dir.path().join("resolv.conf")).unwrap();
+        let shared = shared(dir.path());
+        shared.add_interface(2, "eth0");
+        shared.bind(
+            0,
+            2,
+            "eth0",
+            lease(&[[10, 0, 0, 2]], Some("a.internal"), &[]),
+        );
+        let addresses = StaticIpv4::new(vec!["192.0.2.10/24".parse().unwrap()], None).unwrap();
+        shared.bind_static(1, 3, "eth1", addresses);
+        assert_eq!(*shared.bound.borrow(), 2);
+        assert_eq!(
+            resolv_conf(),
+            "# Generated by network-controller.\nnameserver 10.0.0.2\nsearch a.internal\n",
+            "a static configuration without a resolver adds nothing"
+        );
+
+        // Each interface's own lists replace its lease's; resolv.conf drops duplicates.
+        shared.set_interface_dns(
+            3,
+            DnsSettings {
+                name_servers: vec![address("192.0.2.53"), address("10.0.0.2")],
+                search_list: vec!["corp.example".parse().unwrap()],
+            },
+        );
+        shared.set_interface_dns(
+            2,
+            DnsSettings {
+                name_servers: vec![address("10.0.0.3")],
+                ..DnsSettings::default()
+            },
+        );
+        assert_eq!(
+            resolv_conf(),
+            "# Generated by network-controller.\nnameserver 10.0.0.3\nnameserver 192.0.2.53\n\
+             nameserver 10.0.0.2\nsearch a.internal corp.example\n"
+        );
+        assert_eq!(
+            shared.interface_status(3),
+            (false, vec![address("192.0.2.53"), address("10.0.0.2")])
+        );
+        assert_eq!(
+            shared.interface_status(2),
+            (true, vec![address("10.0.0.3")])
+        );
+
+        // settings.dns replaces them all.
+        shared.set_dns_override(DnsSettings {
+            name_servers: vec![address("1.1.1.1")],
+            ..DnsSettings::default()
+        });
+        assert!(
+            resolv_conf().contains("nameserver 1.1.1.1\nsearch"),
+            "{}",
+            resolv_conf()
+        );
+
+        shared.unbind_static(1);
+        assert_eq!(*shared.bound.borrow(), 1);
+        shared.remove_interface(3);
+        assert_eq!(shared.interface_status(3), (false, Vec::new()));
+        shared.remove_dhcp_interface(2);
+        shared.unbind(0);
+        assert_eq!(*shared.bound.borrow(), 0);
     }
 }

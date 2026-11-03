@@ -6,13 +6,14 @@ use crate::definition::ServiceName;
 pub struct Caller {
     service: ServiceName,
     pid: u32,
+    uid: u32,
 }
 
 impl Caller {
-    /// A caller of `service`, connected from process `pid`.
+    /// A caller of `service`, connected from process `pid` running as user `uid`.
     #[must_use]
-    pub fn new(service: ServiceName, pid: u32) -> Self {
-        Self { service, pid }
+    pub fn new(service: ServiceName, pid: u32, uid: u32) -> Self {
+        Self { service, pid, uid }
     }
 
     /// The calling service of `request`; `None` when it was not served by
@@ -26,6 +27,13 @@ impl Caller {
     #[must_use]
     pub fn service(&self) -> &ServiceName {
         &self.service
+    }
+
+    /// The user the connecting process ran as (`SO_PEERCRED`): a service's processes may run as
+    /// several, such as a login service's sessions as their users.
+    #[must_use]
+    pub fn uid(&self) -> u32 {
+        self.uid
     }
 
     /// The process that connected.

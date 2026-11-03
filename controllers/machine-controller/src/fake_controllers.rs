@@ -217,6 +217,27 @@ impl NetworkController for Fake {
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
+
+    async fn list_interfaces(
+        &self,
+        _: Request<()>,
+    ) -> Result<Response<network::InterfaceList>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
+
+    async fn set_interface_config(
+        &self,
+        _: Request<network::SetInterfaceConfigRequest>,
+    ) -> Result<Response<network::Interface>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
+
+    async fn reset_interface_config(
+        &self,
+        _: Request<network::InterfaceRef>,
+    ) -> Result<Response<network::Interface>, Status> {
+        Err(Status::unimplemented("fake"))
+    }
 }
 
 #[tonic::async_trait]

@@ -1,5 +1,6 @@
 //! What [`run`](crate::run::run) configures, and where it keeps its files.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,6 +11,9 @@ pub struct Options {
     pub resolv_conf: PathBuf,
     /// Where the DNS override is kept across restarts.
     pub state_file: PathBuf,
+    /// Where the interfaces' configurations are kept: across reboots in [`PERSISTENT_DIR`] when
+    /// the sandbox has it, across restarts in the runtime directory otherwise.
+    pub interfaces_file: PathBuf,
     /// `/sys/class/net`: DHCP runs on its physical Ethernet interfaces, including ones appearing
     /// later.
     pub sysfs_net: PathBuf,
@@ -19,11 +23,24 @@ pub struct Options {
     pub lease_timeout: Duration,
 }
 
+/// The directory keeping the interfaces' configurations across reboots, when the service file
+/// binds it: a system whose `/var` is mounted before network-controller starts (hardened's is
+/// not: storage-controller mounts it later, configured by machine-controller, which reapplies
+/// user-data at every boot).
+pub const PERSISTENT_DIR: &str = "/var/lib/network-controller";
+
 impl Default for Options {
     fn default() -> Self {
+        let persistent = Path::new(PERSISTENT_DIR);
+        let interfaces_dir = if persistent.is_dir() {
+            persistent
+        } else {
+            Path::new("/run/network-controller")
+        };
         Self {
             resolv_conf: "/run/hardened/resolv.conf".into(),
             state_file: "/run/network-controller/state.json".into(),
+            interfaces_file: interfaces_dir.join("interfaces.json"),
             sysfs_net: "/sys/class/net".into(),
             link_timeout: Duration::from_secs(10),
             lease_timeout: Duration::from_secs(30),

@@ -1,11 +1,14 @@
-//! network-controller: DHCPv4 on every physical Ethernet interface (with lease renewal), IPv6
-//! SLAAC left to the kernel, and the resolver configuration. A sandboxed service of serviced.
+//! network-controller: DHCPv4 on every physical Ethernet interface (with lease renewal), or the
+//! static configuration set through its API, IPv6 SLAAC left to the kernel, and the resolver
+//! configuration. A sandboxed service of serviced.
 //!
 //! It writes `/run/hardened/resolv.conf`, which `/etc/resolv.conf` on the read-only root links
 //! to, and serves `hardened.network.v1.NetworkController`: machine-controller configures the DNS
-//! override through it and reads what DHCP offered. It reports its readiness to serviced (notify
-//! protocol) once an interface got a lease, or the attempts timed out.
+//! override through it and reads what DHCP offered; an administrator's tool lists and configures
+//! the interfaces. It reports its readiness to serviced (notify protocol) once an interface got a
+//! lease or a static configuration, or the attempts timed out.
 
+mod command;
 mod dhcp;
 mod dhcp_message;
 mod dhcp_option;
@@ -17,12 +20,14 @@ mod link_events;
 mod netlink_socket;
 mod network_service;
 mod options;
+mod persisted_interfaces;
 mod persisted_state;
 mod prefix_len;
 mod raw_socket;
 mod resolv_conf;
 mod run;
 mod shared;
+mod static_addresses;
 
 use std::env;
 use std::io;
