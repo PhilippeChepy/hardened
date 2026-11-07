@@ -43,8 +43,9 @@ use crate::prefix_len::PrefixLen;
 const ARPHRD_ETHER: u32 = 1;
 
 /// Whether the interface `name` of `sysfs_net` (`/sys/class/net`) is a physical Ethernet one:
-/// backed by a device (virtual ones live under `/sys/devices/virtual`), of type `ARPHRD_ETHER`
-/// and not wireless.
+/// of type `ARPHRD_ETHER`, backed by a device (virtual ones live under `/sys/devices/virtual`)
+/// or a Wi-Fi radio's (`phy80211`, `wireless`), which has a carrier once associated (by
+/// wpa_supplicant: wifi-controller's).
 #[must_use]
 pub fn is_physical_ethernet(sysfs_net: &Path, name: &str) -> bool {
     // The kernel's names are path components already; checked all the same.
@@ -56,7 +57,7 @@ pub fn is_physical_ethernet(sysfs_net: &Path, name: &str) -> bool {
         .is_ok_and(|t| t.trim().parse::<u32>().is_ok_and(|t| t == ARPHRD_ETHER));
     let physical = dir.join("device").exists();
     let wireless = dir.join("wireless").exists() || dir.join("phy80211").exists();
-    is_ether && physical && !wireless
+    is_ether && (physical || wireless)
 }
 
 /// An interface, as needed to run DHCP on it.
@@ -513,13 +514,16 @@ mod tests {
         add("lo", 772, /* physical */ false);
         add("docker0", 1, /* physical */ false);
         fs::create_dir(add("wlan0", 1, /* physical */ true).join("phy80211")).unwrap();
+        // A virtual radio's (mac80211_hwsim's).
+        fs::create_dir(add("wlan1", 1, /* physical */ false).join("phy80211")).unwrap();
         for (name, expected) in [
             ("ens4", true),
             ("eth0", true),
             ("ib0", false),
             ("lo", false),
             ("docker0", false),
-            ("wlan0", false),
+            ("wlan0", true),
+            ("wlan1", true),
             ("missing", false),
             ("..", false),
             ("", false),

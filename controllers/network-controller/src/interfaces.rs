@@ -49,6 +49,8 @@ pub enum Change {
     Start(LinkState),
     /// Forget the managed interface of this index: it is gone.
     Stop(u32),
+    /// The carrier of this managed link came (`lower_up`) or went.
+    Carrier(LinkState),
 }
 
 /// The interfaces network-controller configures, their configurations, and their DHCP clients.
@@ -119,12 +121,16 @@ impl Interfaces {
             LinkEvent::Removed(link) if self.managed.contains_key(&link.index) => {
                 vec![Change::Stop(link.index)]
             }
+            LinkEvent::Changed(link) if self.carrier_changed(link) => {
+                vec![Change::Carrier(link.clone())]
+            }
             LinkEvent::Changed(_) | LinkEvent::Removed(_) | LinkEvent::Lost => Vec::new(),
         }
     }
 
     /// The changes that make the managed interfaces those of `links`, every link there is: the
-    /// managed ones gone are stopped, the new physical Ethernet ones started.
+    /// managed ones gone are stopped, the new physical Ethernet ones started, the carriers that
+    /// came or went told.
     #[must_use]
     pub fn reconcile(&self, links: &[LinkState]) -> Vec<Change> {
         let gone = self
@@ -136,10 +142,15 @@ impl Interfaces {
             .iter()
             .filter(|link| self.is_new_physical(link))
             .map(|link| Change::Start(link.clone()));
-        gone.chain(new).collect()
+        let carriers = links
+            .iter()
+            .filter(|link| self.carrier_changed(link))
+            .map(|link| Change::Carrier(link.clone()));
+        gone.chain(new).chain(carriers).collect()
     }
 
-    /// Applies `changes`: configures the new interfaces, forgets those gone.
+    /// Applies `changes`: configures the new interfaces, forgets those gone, tells the DHCP
+    /// clients of the carriers that came back.
     pub async fn apply(&mut self, netlink: &Netlink, changes: Vec<Change>) {
         for change in changes {
             match change {
@@ -148,8 +159,34 @@ impl Interfaces {
                     self.start(netlink, link).await;
                 }
                 Change::Stop(index) => self.stop(index).await,
+                Change::Carrier(link) => self.carrier(link),
             }
         }
+    }
+
+    /// Records the carrier of the managed `link`; come back, its DHCP client checks its lease
+    /// (a static configuration is the network's own, whichever it is).
+    fn carrier(&mut self, link: LinkState) {
+        let Some(managed) = self.managed.get_mut(&link.index) else {
+            return;
+        };
+        let regained = link.lower_up && !managed.link.lower_up;
+        tracing::info!(
+            interface = %link.name,
+            "carrier {}",
+            if link.lower_up { "up" } else { "down" }
+        );
+        managed.link.lower_up = link.lower_up;
+        if regained && let Mode::Dhcp(task) = &managed.mode {
+            task.carrier_regained();
+        }
+    }
+
+    /// Whether `link` is managed with another carrier state than it had.
+    fn carrier_changed(&self, link: &LinkState) -> bool {
+        self.managed
+            .get(&link.index)
+            .is_some_and(|managed| managed.link.lower_up != link.lower_up)
     }
 
     /// Answers `command`.
@@ -663,8 +700,68 @@ mod tests {
                     interfaces.insert(link, settings, None, Mode::Dhcp(task));
                 }
                 Change::Stop(index) => interfaces.stop(index).await,
+                Change::Carrier(link) => interfaces.carrier(link),
             }
         }
+    }
+
+    /// The times the DHCP client of `index` was told its carrier came back.
+    fn regained(interfaces: &Interfaces, index: u32) -> u64 {
+        match &interfaces.managed[&index].mode {
+            Mode::Dhcp(task) => task.carrier_regained_count(),
+            Mode::Static { .. } | Mode::Down => panic!("not DHCP"),
+        }
+    }
+
+    #[tokio::test]
+    async fn carrier_regained_restarts_dhcp() {
+        let dir = tempfile::tempdir().unwrap();
+        let sysfs_net = dir.path().join("sys/class/net");
+        physical(&sysfs_net, "wlan0");
+        let shared = Arc::new(shared(dir.path()));
+        let mut interfaces = Interfaces::new(
+            Arc::clone(&shared),
+            sysfs_net,
+            dir.path().join("interfaces.json"),
+            Configurations::new(),
+        );
+        let up = link(2, "wlan0");
+        let down = LinkState {
+            lower_up: false,
+            ..up.clone()
+        };
+        // Appeared without carrier (a station not associated yet).
+        let changes = interfaces.changes(&LinkEvent::Changed(down.clone()));
+        apply(&mut interfaces, changes).await;
+        assert!(
+            interfaces
+                .changes(&LinkEvent::Changed(down.clone()))
+                .is_empty(),
+            "no change"
+        );
+
+        // Associated: the client is told.
+        let changes = interfaces.changes(&LinkEvent::Changed(up.clone()));
+        assert_eq!(changes, [Change::Carrier(up.clone())]);
+        apply(&mut interfaces, changes).await;
+        assert_eq!(regained(&interfaces, 2), 1);
+        assert!(
+            interfaces
+                .changes(&LinkEvent::Changed(up.clone()))
+                .is_empty()
+        );
+
+        // Lost (left the network): recorded, the client keeps its lease.
+        let changes = interfaces.changes(&LinkEvent::Changed(down.clone()));
+        assert_eq!(changes, [Change::Carrier(down.clone())]);
+        apply(&mut interfaces, changes).await;
+        assert_eq!(regained(&interfaces, 2), 1);
+
+        // Back, maybe elsewhere, seen by listing the links again: told again.
+        let changes = interfaces.reconcile(&[link(1, "lo"), up.clone()]);
+        assert_eq!(changes, [Change::Carrier(up)]);
+        apply(&mut interfaces, changes).await;
+        assert_eq!(regained(&interfaces, 2), 2);
     }
 
     #[tokio::test]

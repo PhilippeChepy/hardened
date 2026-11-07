@@ -69,6 +69,10 @@ const MIN_PACKET_LEN: usize = 300;
 /// Retransmissions of a REQUEST answering an OFFER before restarting discovery.
 const REQUEST_ATTEMPTS: u32 = 4;
 
+/// Transmissions of the INIT-REBOOT REQUEST before falling back to discovery: about 12 s, a
+/// server of another network staying silent (RFC 2131 §4.3.2) rather than refusing.
+const REBOOT_ATTEMPTS: u32 = 2;
+
 /// Shortest wait between retransmissions while renewing or rebinding (RFC 2131 §4.4.5).
 const MIN_EXTEND_RETRANSMIT: Duration = Duration::from_secs(60);
 
@@ -598,6 +602,49 @@ impl Client {
         msg.broadcast = false;
         msg.ciaddr = lease.address;
         msg
+    }
+
+    /// REQUEST in the INIT-REBOOT state: `lease`'s address asked for again, broadcast, with no
+    /// server identifier nor `ciaddr` (RFC 2131 §4.3.2).
+    #[must_use]
+    fn request_reboot(&self, xid: u32, secs: u16, lease: &Lease) -> Message {
+        let mut msg = self.message(xid, secs, MessageType::Request);
+        msg.options
+            .insert(DhcpOption::RequestedIpAddress(lease.address));
+        msg
+    }
+
+    /// INIT-REBOOT → REBOOTING over `link` (a transport that works without an address): whether
+    /// `lease`, from before the carrier was lost, still holds on the network the link is on now.
+    /// Confirmed (maybe with new parameters) it is [`Outcome::Renewed`], refused
+    /// [`Outcome::Nak`]; without an answer `None`, for discovery to start over (RFC 2131 §3.2).
+    #[must_use]
+    pub async fn reboot(&self, link: &impl Transport, lease: &Lease) -> Option<Outcome> {
+        let started = Instant::now();
+        let xid = random_u32();
+        let broadcast = SocketAddrV4::new(Ipv4Addr::BROADCAST, SERVER_PORT);
+        tracing::debug!(
+            interface = %self.ifname,
+            xid,
+            "DHCPREQUEST (INIT-REBOOT) of {}",
+            lease.address
+        );
+        for attempt in 0..REBOOT_ATTEMPTS {
+            let secs = u16::try_from(started.elapsed().as_secs()).unwrap_or(u16::MAX);
+            let msg = self.request_reboot(xid, secs, lease);
+            let wait = retransmit_delay(attempt, random_u32());
+            let ack_or_nak = |r: &Reply| matches!(r, Reply::Ack(_) | Reply::Nak(_));
+            match self.transact(link, &msg, broadcast, wait, ack_or_nak).await {
+                Ok(Some(Reply::Ack(lease))) => return Some(Outcome::Renewed(lease)),
+                Ok(Some(Reply::Nak(nak))) => return Some(Outcome::Nak(nak)),
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(interface = %self.ifname, "DHCP: sending REQUEST: {err}");
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     /// INIT → SELECTING → REQUESTING → BOUND over `link` (a transport that works without an
@@ -1318,6 +1365,54 @@ pub(crate) mod tests {
         });
         let lease = client().acquire(&server).await;
         assert_eq!(lease.server, SERVER);
+    }
+
+    #[tokio::test]
+    async fn reboot_confirms_refuses_or_gives_up() {
+        let lease = ack(basic_options());
+
+        let server = FakeServer::new(|msg| {
+            let Some(DhcpOption::RequestedIpAddress(address)) =
+                msg.options.get(OptionCode::RequestedIpAddress)
+            else {
+                return vec![];
+            };
+            vec![reply_to(msg, MessageType::Ack, *address, basic_options())]
+        });
+        let Some(Outcome::Renewed(renewed)) = client().reboot(&server, &lease).await else {
+            panic!("not confirmed")
+        };
+        assert_eq!(renewed.address, lease.address);
+        {
+            let sent = server.sent.lock().unwrap();
+            let request = &sent[0].message;
+            assert_eq!(
+                sent[0].target,
+                SocketAddrV4::new(Ipv4Addr::BROADCAST, SERVER_PORT)
+            );
+            assert_eq!(request.options.message_type(), Some(MessageType::Request));
+            assert_eq!(request.ciaddr, Ipv4Addr::UNSPECIFIED);
+            assert!(request.broadcast, "no address to receive unicast on");
+            assert_eq!(request.options.get(OptionCode::ServerIdentifier), None);
+        }
+
+        let server = FakeServer::new(|msg| {
+            vec![reply_to(
+                msg,
+                MessageType::Nak,
+                Ipv4Addr::UNSPECIFIED,
+                vec![],
+            )]
+        });
+        assert!(matches!(
+            client().reboot(&server, &lease).await,
+            Some(Outcome::Nak(_))
+        ));
+
+        // Another network's server stays silent: discovery starts over (after about 12 s).
+        let server = FakeServer::new(|_| vec![]);
+        assert!(client().reboot(&server, &lease).await.is_none());
+        assert_eq!(server.sent.lock().unwrap().len(), REBOOT_ATTEMPTS as usize);
     }
 
     #[tokio::test]

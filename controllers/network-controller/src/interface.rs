@@ -1,6 +1,7 @@
 //! DHCP on one interface: its client runs until stopped, and each lease it gets or loses is
 //! applied to the interface and to the [`Shared`] state.
 
+use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use anyhow::Context as _;
 use netlink_packet_route::route::RouteProtocol;
 use network_controller::Mtu;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinError;
 use tokio::task::JoinHandle;
 
@@ -40,9 +42,20 @@ pub fn metric(rank: u32) -> u32 {
 pub struct DhcpTask {
     task: JoinHandle<Option<u32>>,
     stop: oneshot::Sender<()>,
+    /// Counts the times the carrier came back.
+    carrier: watch::Sender<u64>,
 }
 
 impl DhcpTask {
+    /// Tells the client the link's carrier came back: the link may be on another network now (a
+    /// Wi-Fi station associated elsewhere, a cable plugged elsewhere). Bound, it checks its lease
+    /// (INIT-REBOOT); still discovering, it starts over at once rather than at its next
+    /// retransmission.
+    pub fn carrier_regained(&self) {
+        self.carrier
+            .send_modify(|count| *count = count.wrapping_add(1));
+    }
+
     /// Stops the client: it gives its lease's addresses and routes up, then ends. Returns the
     /// interface's rank, if it got one, for a later configuration to keep it.
     pub async fn stop(self) -> Result<Option<u32>, JoinError> {
@@ -62,11 +75,23 @@ impl DhcpTask {
         }
     }
 
+    /// How many times the client was told the carrier came back.
+    #[cfg(test)]
+    #[must_use]
+    pub fn carrier_regained_count(&self) -> u64 {
+        *self.carrier.borrow()
+    }
+
     /// A client already started, as `task`, told to stop through `stop`.
     #[cfg(test)]
     #[must_use]
     pub fn from_parts(task: JoinHandle<Option<u32>>, stop: oneshot::Sender<()>) -> Self {
-        Self { task, stop }
+        let (carrier, _) = watch::channel(0);
+        Self {
+            task,
+            stop,
+            carrier,
+        }
     }
 }
 
@@ -100,14 +125,20 @@ pub async fn start(
         netlink.set_mtu(&link, mtu.get()).await?;
     }
     let (stop, stopped) = oneshot::channel();
+    let (carrier, regained) = watch::channel(0);
     let task = tokio::spawn(run_dhcp(
         Arc::clone(shared),
         netlink.clone(),
         link,
         options,
         stopped,
+        regained,
     ));
-    Ok(DhcpTask { task, stop })
+    Ok(DhcpTask {
+        task,
+        stop,
+        carrier,
+    })
 }
 
 /// `future`'s output, or `None` once `stop` fires (or its sender is gone) first.
@@ -121,16 +152,32 @@ async fn unless_stopped<T>(
     }
 }
 
+/// Returns when the carrier comes back (as [`DhcpTask::carrier_regained`] tells); never once
+/// the task is gone.
+async fn carrier_regained(carrier: &mut watch::Receiver<u64>) {
+    if carrier.changed().await.is_err() {
+        future::pending::<()>().await;
+    }
+}
+
+/// What ended a bound lease's wait.
+enum Bound {
+    Maintained(Outcome),
+    CarrierRegained,
+}
+
 /// Runs DHCP on `link` until stopped, applying leases as they come and go; stopped, removes its
 /// lease from the interface and returns its rank. Only waits are interrupted: a lease is never
 /// applied halfway. Aborted when the link disappears, which takes its addresses and routes with
-/// it.
+/// it. When the carrier comes back, a lease is checked again (INIT-REBOOT, then discovery if no
+/// server answers), and a discovery in progress starts over.
 async fn run_dhcp(
     shared: Arc<Shared>,
     netlink: Netlink,
     link: Link,
     options: DhcpOptions,
     mut stop: oneshot::Receiver<()>,
+    mut regained: watch::Receiver<u64>,
 ) -> Option<u32> {
     let mut rank = options.rank;
     let carrier = netlink.wait_for_carrier(&link, CARRIER_TIMEOUT);
@@ -142,6 +189,8 @@ async fn run_dhcp(
         ),
         None => return rank,
     }
+    // The carrier that came while waiting for it is the one DHCP starts with.
+    regained.borrow_and_update();
     let socket = loop {
         match dhcp::bind(&link.name, dhcp::CLIENT_PORT) {
             Ok(socket) => break socket,
@@ -155,7 +204,8 @@ async fn run_dhcp(
     let client = Client::new(link.mac, link.name.clone());
     let overridden_mtu = options.mtu.is_some();
     loop {
-        let Some(mut lease) = unless_stopped(&mut stop, acquire(&client, &link)).await else {
+        let acquired = unless_stopped(&mut stop, acquire(&client, &link, &mut regained)).await;
+        let Some(mut lease) = acquired else {
             return rank;
         };
         let rank = *rank.get_or_insert_with(|| shared.next_rank());
@@ -171,8 +221,36 @@ async fn run_dhcp(
         apply_lease(&netlink, &link, None, &lease, metric, overridden_mtu).await;
         shared.bind(rank, link.index, &link.name, lease.clone());
         loop {
-            let Some(outcome) = unless_stopped(&mut stop, client.maintain(&socket, &lease)).await
-            else {
+            let bound = async {
+                tokio::select! {
+                    outcome = client.maintain(&socket, &lease) => Bound::Maintained(outcome),
+                    () = carrier_regained(&mut regained) => Bound::CarrierRegained,
+                }
+            };
+            let outcome = match unless_stopped(&mut stop, bound).await {
+                Some(Bound::Maintained(outcome)) => Some(outcome),
+                Some(Bound::CarrierRegained) => {
+                    tracing::info!(
+                        interface = %link.name,
+                        "DHCP: carrier regained, checking the lease of {}",
+                        lease.address
+                    );
+                    match unless_stopped(&mut stop, reboot(&client, &link, &lease)).await {
+                        Some(Some(outcome)) => Some(outcome),
+                        Some(None) => {
+                            tracing::info!(
+                                interface = %link.name,
+                                "DHCP: no answer about the lease of {}, discovering",
+                                lease.address
+                            );
+                            break;
+                        }
+                        None => None,
+                    }
+                }
+                None => None,
+            };
+            let Some(outcome) = outcome else {
                 tracing::info!(
                     interface = %link.name,
                     "DHCP: stopped, giving up the lease of {}",
@@ -225,15 +303,36 @@ async fn run_dhcp(
     }
 }
 
-/// Acquires a lease over a packet socket, opened only for that long.
-async fn acquire(client: &Client, link: &Link) -> Lease {
+/// Acquires a lease over a packet socket, opened only for that long; starts over when the
+/// carrier comes back.
+async fn acquire(client: &Client, link: &Link, carrier: &mut watch::Receiver<u64>) -> Lease {
     loop {
         match RawSocket::open(link.index) {
-            Ok(socket) => return client.acquire(&socket).await,
+            Ok(socket) => {
+                tokio::select! {
+                    lease = client.acquire(&socket) => return lease,
+                    () = carrier_regained(carrier) => {
+                        tracing::debug!(interface = %link.name, "DHCP: carrier regained, discovering");
+                    }
+                }
+            }
             Err(err) => {
                 tracing::error!(interface = %link.name, error = %err, "DHCP packet socket");
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
+        }
+    }
+}
+
+/// Checks `lease` after the carrier came back (INIT-REBOOT) over a packet socket, opened only
+/// for that long: the link may have no address of the network it is on now. `None` if no server
+/// answered (or the socket cannot be opened), for discovery to start over.
+async fn reboot(client: &Client, link: &Link, lease: &Lease) -> Option<Outcome> {
+    match RawSocket::open(link.index) {
+        Ok(socket) => client.reboot(&socket, lease).await,
+        Err(err) => {
+            tracing::error!(interface = %link.name, error = %err, "DHCP packet socket");
+            None
         }
     }
 }
