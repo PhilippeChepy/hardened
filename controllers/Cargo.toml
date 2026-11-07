@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "controllers-helpers",
+    "firewall-controller",
     "hctl",
     "kubelet-controller",
     "machine-apiproxy",
@@ -26,6 +27,7 @@ publish = false
 [workspace.dependencies]
 # In-tree crates
 controllers-helpers = { path = "controllers-helpers" }
+firewall-controller = { path = "firewall-controller" }
 kubelet-controller = { path = "kubelet-controller" }
 libserviced = { path = "../serviced/libserviced" }
 machine-apiproxy = { path = "machine-apiproxy" }

@@ -1,0 +1,5 @@
+table inet firewall-controller {
+	chain input {
+		type filter hook input priority filter; policy accept;
+	}
+}

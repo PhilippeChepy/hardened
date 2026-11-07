@@ -8,6 +8,7 @@ use tonic::transport::Channel;
 /// The controllers' APIs, machine-apiproxy's and serviced's, and where serviced's layers are.
 #[derive(Debug)]
 pub struct Controllers {
+    pub firewall: Upstream,
     pub network: Upstream,
     pub storage: Upstream,
     pub time: Upstream,
@@ -32,6 +33,7 @@ impl Controllers {
     #[must_use]
     pub fn system() -> Self {
         Self {
+            firewall: Upstream::new(firewall_controller::SOCKET),
             network: Upstream::new(network_controller::SOCKET),
             storage: Upstream::new(storage_controller::SOCKET),
             time: Upstream::new(time_controller::SOCKET),
@@ -51,6 +53,7 @@ impl Controllers {
     pub fn in_dir(dir: &Path) -> Self {
         let upstream = |name: &str| Upstream::new(dir.join(format!("{name}.sock")));
         Self {
+            firewall: upstream("firewall-controller"),
             network: upstream("network-controller"),
             storage: upstream("storage-controller"),
             time: upstream("time-controller"),

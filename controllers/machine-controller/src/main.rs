@@ -13,6 +13,7 @@ mod daemon;
 mod dhcp_watch;
 #[cfg(test)]
 mod fake_controllers;
+mod firewall_api_port;
 mod hostnames;
 mod hosts;
 mod kmod;

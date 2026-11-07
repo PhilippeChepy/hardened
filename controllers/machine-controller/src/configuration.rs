@@ -1,13 +1,18 @@
 //! Configuring the controllers through their APIs, from the settings.
 //!
-//! In order: network-controller (the resolver), storage-controller (`/var` is set up when the
-//! call returns, so containerd can start), time-controller, workload-controller, then
-//! kubelet-controller on Kubernetes targets. network-controller and storage-controller are
-//! essential: the machine is of no use without them. machine-apiproxy is configured apart, once
-//! the machine's API serves ([`configure_api_proxy`]).
+//! In order: firewall-controller (when the settings have a firewall, which always lets the
+//! machine's API in: the system's default applies until then, and without it),
+//! network-controller (the resolver), storage-controller (`/var` is set up when the call returns,
+//! so containerd can start), time-controller, workload-controller, then kubelet-controller on
+//! Kubernetes targets. firewall-controller, network-controller and storage-controller are
+//! essential: the machine is of no use without them, nor exposed beyond what its firewall's
+//! settings allow. machine-apiproxy is configured apart, once the machine's API serves
+//! ([`configure_api_proxy`]).
 
 use anyhow::Context;
 use controllers_helpers::Hostname;
+use firewall_controller::firewall;
+use firewall_controller::firewall::firewall_controller_client::FirewallControllerClient;
 use kubelet_controller::kubelet;
 use kubelet_controller::kubelet::kubelet_controller_client::KubeletControllerClient;
 use libserviced::api::serviced_client::ServicedClient;
@@ -34,6 +39,7 @@ use workload_controller::workload;
 use workload_controller::workload::workload_controller_client::WorkloadControllerClient;
 
 use crate::controllers::Controllers;
+use crate::firewall_api_port;
 use crate::nvidia_plugins;
 use crate::time_servers;
 
@@ -46,14 +52,28 @@ const API_PROXY: ServiceName = ServiceName::from_static(API_PROXY_SERVICE);
 ///
 /// # Errors
 ///
-/// When network-controller or storage-controller cannot be configured; the others' failures are
-/// logged.
+/// When firewall-controller (with a firewall in the settings), network-controller or
+/// storage-controller cannot be configured; the others' failures are logged.
 pub async fn configure(
     controllers: &Controllers,
     settings: &Settings,
     hostname: &Hostname,
     dhcp_time_servers: &[String],
 ) -> anyhow::Result<()> {
+    if let Some(config) = &settings.hardened.firewall {
+        let config = firewall_api_port::with_api_allowed(config, settings.hardened.api.as_ref())?;
+        let mut firewall = FirewallControllerClient::new(controllers.firewall.channel());
+        firewall
+            .set_config(firewall::Config::from(&config))
+            .await
+            .context("configuring firewall-controller")?;
+        info!(
+            enabled = config.enabled,
+            inbound = %config.inbound,
+            "firewall-controller configured"
+        );
+    }
+
     let mut network = NetworkControllerClient::new(controllers.network.channel());
     network
         .configure(network::Configuration::from(settings.dns.clone()))
@@ -208,6 +228,24 @@ mod tests {
                 "kubelet-controller Configure kubelet=false node_name=node-1",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn configures_the_firewall_first() {
+        let fakes = FakeControllers::start().await;
+        let settings = settings(
+            "[settings.hardened.firewall]\nenabled = true\n\
+             inbound = \"drop\"\noutbound = \"accept\"\nallowed-inbound = [\"10250/tcp\"]\n",
+        );
+        configure(&fakes.controllers, &settings, &hostname(), &[])
+            .await
+            .unwrap();
+        let calls = fakes.calls();
+        assert_eq!(
+            calls[0],
+            "firewall-controller SetConfig enabled=true inbound=Drop"
+        );
+        assert!(calls[1].starts_with("network-controller Configure"));
     }
 
     #[tokio::test]

@@ -1,14 +1,16 @@
 //! `hctl settings`' output: the settings `Machine.GetSettings` returns, as user-data TOML.
 //!
 //! The keys and value formats are user-data's (`machine-controller`): PEM in base64, defaults
-//! left out. `[settings.kubernetes]` and the containers are written by their controllers' own
-//! types, as user-data reads them. Secrets, which the server leaves empty, show as `<redacted>`.
+//! left out. `[settings.kubernetes]`, the containers and the firewall are written by their
+//! controllers' own types, as user-data reads them. Secrets, which the server leaves empty, show
+//! as `<redacted>`.
 
 use std::collections::HashMap;
 
 use anyhow::Context as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use firewall_controller::FirewallConfig;
 use kubelet_controller::KubeletConfig;
 use kubelet_controller::kubelet;
 use machine_apiproxy::apiproxy;
@@ -155,6 +157,14 @@ fn hardened(settings: &machine::Settings) -> anyhow::Result<Table> {
     let mut table = Table::new();
     if let Some(api) = &settings.api {
         table.insert("api".to_owned(), Value::Table(api_table(api)));
+    }
+    if let Some(firewall) = &settings.firewall {
+        let config = FirewallConfig::try_from(firewall.clone())
+            .map_err(|error| anyhow::anyhow!("settings.hardened.firewall: {error}"))?;
+        table.insert(
+            "firewall".to_owned(),
+            Value::Table(Table::try_from(&config)?),
+        );
     }
     if let Some(storage) = &settings.storage
         && storage.encryption() == Encryption::Tpm
@@ -412,6 +422,18 @@ mod tests {
                 device_partitioning_strategy: nvidia::DevicePartitioningStrategy::Mig.into(),
             }),
             nvidia_dra: Some(nvidia::Dra { enabled: true }),
+            firewall: Some(firewall_controller::firewall::Config::from(
+                &firewall_config(),
+            )),
+        }
+    }
+
+    /// The firewall of [`full_settings`]: on, letting kubelet's API in.
+    fn firewall_config() -> FirewallConfig {
+        FirewallConfig {
+            allowed_inbound: vec!["10250/tcp".parse().unwrap()].try_into().unwrap(),
+            ping: true,
+            ..FirewallConfig::default()
         }
     }
 
@@ -443,6 +465,15 @@ certificate = "Q0VSVA=="
 client-ca = "Q0xJRU5UIENB"
 listen = "[::]:7443"
 private-key = "<redacted>"
+
+[settings.hardened.firewall]
+allowed-inbound = ["10250/tcp"]
+allowed-outbound = []
+enabled = true
+inbound = "drop"
+log-drops = true
+outbound = "accept"
+ping = true
 
 [settings.hardened.nvidia-dra]
 enabled = true

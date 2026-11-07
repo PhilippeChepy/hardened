@@ -476,6 +476,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
+name = "firewall-controller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "controllers-helpers",
+ "libserviced",
+ "prost",
+ "prost-types",
+ "protox",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -618,6 +641,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "clap",
+ "firewall-controller",
  "hex",
  "kubelet-controller",
  "libserviced",
@@ -961,6 +985,7 @@ dependencies = [
  "anyhow",
  "clap",
  "controllers-helpers",
+ "firewall-controller",
  "flate2",
  "http",
  "http-body-util",

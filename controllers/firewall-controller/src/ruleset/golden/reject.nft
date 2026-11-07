@@ -1,0 +1,19 @@
+table inet firewall-controller {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept comment "loopback"
+		ct state established,related counter accept comment "established"
+		ct state invalid counter drop comment "invalid"
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, mld-listener-query, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept comment "icmpv6"
+		icmp type { destination-unreachable, time-exceeded, parameter-problem } accept comment "icmp"
+		udp sport 67 udp dport 68 accept comment "dhcp"
+		udp sport 547 udp dport 546 accept comment "dhcpv6"
+		icmp type echo-request counter accept comment "ping"
+		icmpv6 type echo-request counter accept comment "ping"
+		tcp dport 22 counter accept comment "ssh"
+		udp dport 6000-6010 counter accept comment "6000-6010/udp"
+		limit rate 5/second burst 10 packets counter log prefix "firewall-controller in: " level info comment "log"
+		meta l4proto tcp counter reject with tcp reset comment "reject"
+		counter reject comment "reject"
+	}
+}

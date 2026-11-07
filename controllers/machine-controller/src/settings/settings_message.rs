@@ -1,5 +1,6 @@
 //! The settings as `hardened.machine.v1.Settings`, the answer of `Machine.GetSettings`.
 
+use firewall_controller::firewall;
 use kubelet_controller::kubelet;
 use machine_apiproxy::apiproxy;
 use time_controller::time;
@@ -68,6 +69,11 @@ impl Settings {
             time_source: time::Source::from(settings.hardened.time.source).into(),
             nvidia_device_plugin: Some(settings.kubelet_device_plugins.nvidia.into()),
             nvidia_dra: Some(settings.hardened.nvidia_dra.into()),
+            firewall: settings
+                .hardened
+                .firewall
+                .as_ref()
+                .map(firewall::Config::from),
         }
     }
 }
@@ -159,6 +165,12 @@ private-key = "{key}"
 [hardened.storage]
 encryption = "tpm"
 
+[hardened.firewall]
+enabled = true
+inbound = "drop"
+outbound = "accept"
+allowed-inbound = ["10250/tcp", "ssh"]
+
 [hardened.containers.web]
 image = "nginx:1.29"
 
@@ -227,6 +239,9 @@ image = "nginx:1.29"
             message.storage.unwrap().encryption,
             i32::from(storage_controller::storage::Encryption::Tpm)
         );
+        let firewall = message.firewall.unwrap();
+        assert!(firewall.enabled);
+        assert_eq!(firewall.allowed_inbound.len(), 2);
     }
 
     #[test]
@@ -249,5 +264,6 @@ image = "nginx:1.29"
         assert_eq!(message.containers.unwrap().workloads, []);
         assert_eq!(message.api, None);
         assert_eq!(message.hostname, None);
+        assert_eq!(message.firewall, None);
     }
 }

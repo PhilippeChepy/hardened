@@ -4,7 +4,12 @@
 //! from their crates, and their generated types used from there rather than generated again.
 
 /// The packages the machine's API imports, each with its proto directory and its Rust module.
-const IMPORTED: [(&str, &str, &str); 9] = [
+const IMPORTED: [(&str, &str, &str); 10] = [
+    (
+        ".hardened.firewall.v1",
+        "../firewall-controller/proto",
+        "::firewall_controller::firewall",
+    ),
     (
         ".hardened.apiproxy.v1",
         "../machine-apiproxy/proto",

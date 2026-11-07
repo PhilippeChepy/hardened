@@ -1,0 +1,34 @@
+table inet firewall-controller {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept comment "loopback"
+		ct state established,related counter accept comment "established"
+		ct state invalid counter drop comment "invalid"
+		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, mld-listener-query, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept comment "icmpv6"
+		icmp type { destination-unreachable, time-exceeded, parameter-problem } accept comment "icmp"
+		udp sport 67 udp dport 68 accept comment "dhcp"
+		udp sport 547 udp dport 546 accept comment "dhcpv6"
+		icmp type echo-request counter accept comment "ping"
+		icmpv6 type echo-request counter accept comment "ping"
+		limit rate 5/second burst 10 packets counter log prefix "firewall-controller in: " level info comment "log"
+		counter drop comment "drop"
+	}
+
+	chain output {
+		type filter hook output priority filter; policy drop;
+		oifname "lo" accept comment "loopback"
+		ct state established,related counter accept comment "established"
+		ct state invalid counter drop comment "invalid"
+		icmpv6 type { mld-listener-report, nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept comment "icmpv6"
+		udp sport 68 udp dport 67 accept comment "dhcp"
+		udp sport 546 udp dport 547 accept comment "dhcpv6"
+		tcp dport 53 counter accept comment "dns"
+		udp dport 53 counter accept comment "dns"
+		tcp dport 443 counter accept comment "https"
+		udp dport 443 counter accept comment "https"
+		tcp dport 80 counter accept comment "http"
+		udp dport 123 counter accept comment "ntp"
+		limit rate 5/second burst 10 packets counter log prefix "firewall-controller out: " level info comment "log"
+		counter drop comment "drop"
+	}
+}

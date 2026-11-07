@@ -11,6 +11,7 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 controllers-helpers.workspace = true
+firewall-controller.workspace = true
 flate2.workspace = true
 http.workspace = true
 http-body-util.workspace = true

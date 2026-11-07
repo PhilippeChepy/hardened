@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 
+use firewall_controller::firewall;
 use machine_controller::machine::LogsRequest;
 use machine_controller::machine::machine_client::MachineClient;
 use storage_controller::storage;
@@ -196,6 +197,112 @@ fn time_lines(time: &time::Status) -> Vec<String> {
     lines
 }
 
+/// `hctl firewall`.
+pub async fn firewall(channel: Channel) -> anyhow::Result<()> {
+    let status = MachineClient::new(channel)
+        .firewall(())
+        .await
+        .into_result()?;
+    let mut out = io::stdout().lock();
+    for line in firewall_lines(&status) {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// `hctl firewall`'s output.
+#[must_use]
+fn firewall_lines(status: &firewall::Status) -> Vec<String> {
+    let state = match status.state() {
+        firewall::State::Off => "off".to_owned(),
+        firewall::State::Active => "active".to_owned(),
+        firewall::State::NotApplied => "not applied".to_owned(),
+        firewall::State::Unavailable => "unavailable: the kernel has no nf_tables".to_owned(),
+        firewall::State::Unspecified => "unknown".to_owned(),
+    };
+    let mut lines = vec![format!("State:         {state}")];
+    if let Some(error) = &status.error {
+        lines.push(format!("Error:         {error}"));
+    }
+    let allowed = |items: &[firewall::Allowed]| {
+        let items: Vec<_> = items.iter().map(allowed_text).collect();
+        if items.is_empty() {
+            "nothing".to_owned()
+        } else {
+            items.join(", ")
+        }
+    };
+    if let Some(config) = &status.config {
+        let inbound = match config.inbound() {
+            firewall::Inbound::Drop => "drop",
+            firewall::Inbound::Reject => "reject",
+            firewall::Inbound::Accept => "accept",
+            firewall::Inbound::Unspecified => "unknown",
+        };
+        let outbound = match config.outbound() {
+            firewall::Outbound::Accept => "accept",
+            firewall::Outbound::Drop => "drop",
+            firewall::Outbound::Unspecified => "unknown",
+        };
+        lines.push(format!(
+            "Inbound:       {inbound}, allowed: {}",
+            allowed(&config.allowed_inbound)
+        ));
+        let mut out = format!("Outbound:      {outbound}");
+        if config.outbound() == firewall::Outbound::Drop {
+            out.push_str(&format!(", allowed: {}", allowed(&config.allowed_outbound)));
+        }
+        lines.push(out);
+        let on = |on: bool| if on { "yes" } else { "no" };
+        lines.push(format!(
+            "Pings:         {}, logging what is blocked: {}",
+            on(config.ping),
+            on(config.log_drops)
+        ));
+    }
+    if status.state() == firewall::State::Active {
+        lines.push(format!(
+            "Blocked:       {} packets ({} rules, generation {})",
+            status.blocked_packets,
+            status.rules.len(),
+            status.generation
+        ));
+    }
+    for blocked in &status.recent_blocked {
+        let port = blocked
+            .port
+            .map(|port| format!(" port {port}"))
+            .unwrap_or_default();
+        let direction = if blocked.outbound { "out" } else { "in" };
+        lines.push(format!(
+            "Recently:      {direction} {} {} {} -> {}{port}, {} times",
+            blocked.interface, blocked.protocol, blocked.source, blocked.destination, blocked.count
+        ));
+    }
+    lines
+}
+
+/// A service's name, or ports: `ssh`, `8080/tcp`, `6000-6010/udp`.
+#[must_use]
+fn allowed_text(allowed: &firewall::Allowed) -> String {
+    match &allowed.what {
+        Some(firewall::allowed::What::Service(name)) => name.clone(),
+        Some(firewall::allowed::What::Ports(ports)) => {
+            let protocol = match ports.protocol() {
+                firewall::Protocol::Tcp => "tcp",
+                firewall::Protocol::Udp => "udp",
+                firewall::Protocol::Unspecified => "unknown",
+            };
+            if ports.first == ports.last {
+                format!("{}/{protocol}", ports.first)
+            } else {
+                format!("{}-{}/{protocol}", ports.first, ports.last)
+            }
+        }
+        None => "unknown".to_owned(),
+    }
+}
+
 /// `hctl reboot`.
 pub async fn reboot(channel: Channel) -> anyhow::Result<()> {
     MachineClient::new(channel).reboot(()).await.into_result()?;
@@ -331,5 +438,69 @@ mod tests {
         let lines = time_lines(&ptp);
         assert_eq!(lines[1], "Source:        PTP clock");
         assert_eq!(lines[4], "PTP clock:     /dev/ptp0 (KVM virtual PTP)");
+    }
+
+    #[test]
+    fn shows_the_firewall() {
+        let allowed = |what| firewall::Allowed { what: Some(what) };
+        let status = firewall::Status {
+            config: Some(firewall::Config {
+                enabled: true,
+                inbound: firewall::Inbound::Drop.into(),
+                allowed_inbound: vec![
+                    allowed(firewall::allowed::What::Service("ssh".into())),
+                    allowed(firewall::allowed::What::Ports(firewall::Ports {
+                        protocol: firewall::Protocol::Tcp.into(),
+                        first: 10250,
+                        last: 10250,
+                    })),
+                    allowed(firewall::allowed::What::Ports(firewall::Ports {
+                        protocol: firewall::Protocol::Udp.into(),
+                        first: 30000,
+                        last: 32767,
+                    })),
+                ],
+                outbound: firewall::Outbound::Accept.into(),
+                ping: true,
+                log_drops: true,
+                ..firewall::Config::default()
+            }),
+            state: firewall::State::Active.into(),
+            blocked_packets: 3,
+            recent_blocked: vec![firewall::Blocked {
+                interface: "eth0".into(),
+                protocol: "tcp".into(),
+                source: "192.0.2.1".into(),
+                destination: "192.0.2.10".into(),
+                port: Some(23),
+                count: 3,
+                ..firewall::Blocked::default()
+            }],
+            generation: 7,
+            ..firewall::Status::default()
+        };
+        assert_eq!(
+            firewall_lines(&status),
+            [
+                "State:         active",
+                "Inbound:       drop, allowed: ssh, 10250/tcp, 30000-32767/udp",
+                "Outbound:      accept",
+                "Pings:         yes, logging what is blocked: yes",
+                "Blocked:       3 packets (0 rules, generation 7)",
+                "Recently:      in eth0 tcp 192.0.2.1 -> 192.0.2.10 port 23, 3 times",
+            ]
+        );
+        let unavailable = firewall::Status {
+            state: firewall::State::Unavailable.into(),
+            error: Some("no NETLINK_NETFILTER".into()),
+            ..firewall::Status::default()
+        };
+        assert_eq!(
+            firewall_lines(&unavailable),
+            [
+                "State:         unavailable: the kernel has no nf_tables",
+                "Error:         no NETLINK_NETFILTER",
+            ]
+        );
     }
 }

@@ -10,6 +10,9 @@ use std::sync::Mutex;
 
 use controllers_helpers::base64_text;
 use controllers_helpers::testing;
+use firewall_controller::firewall;
+use firewall_controller::firewall::firewall_controller_server::FirewallController;
+use firewall_controller::firewall::firewall_controller_server::FirewallControllerServer;
 use kubelet_controller::kubelet;
 use kubelet_controller::kubelet::kubelet_controller_server::KubeletController;
 use kubelet_controller::kubelet::kubelet_controller_server::KubeletControllerServer;
@@ -92,6 +95,10 @@ impl FakeControllers {
         fs::create_dir_all(Layer::Runtime.dir_in(fakes.dir.path())).unwrap();
         let fake = fakes.fake();
         let services = [
+            (
+                "firewall-controller",
+                Server::builder().add_service(FirewallControllerServer::new(fake.clone())),
+            ),
             (
                 "network-controller",
                 Server::builder().add_service(NetworkControllerServer::new(fake.clone())),
@@ -284,6 +291,47 @@ impl TimeController for Fake {
             }),
             ..time::Status::default()
         }))
+    }
+}
+
+#[tonic::async_trait]
+impl FirewallController for Fake {
+    async fn get_status(&self, _: Request<()>) -> Result<Response<firewall::Status>, Status> {
+        Ok(Response::new(firewall::Status {
+            state: firewall::State::Active.into(),
+            ..firewall::Status::default()
+        }))
+    }
+
+    async fn set_config(
+        &self,
+        request: Request<firewall::Config>,
+    ) -> Result<Response<firewall::Status>, Status> {
+        let config = request.into_inner();
+        self.record(format!(
+            "firewall-controller SetConfig enabled={} inbound={:?}",
+            config.enabled,
+            config.inbound()
+        ));
+        Ok(Response::new(firewall::Status {
+            config: Some(config),
+            ..firewall::Status::default()
+        }))
+    }
+
+    async fn reset_config(&self, _: Request<()>) -> Result<Response<firewall::Status>, Status> {
+        Err(Status::unimplemented("not faked"))
+    }
+
+    async fn reapply(&self, _: Request<()>) -> Result<Response<firewall::Status>, Status> {
+        Err(Status::unimplemented("not faked"))
+    }
+
+    async fn list_services(
+        &self,
+        _: Request<()>,
+    ) -> Result<Response<firewall::ServiceList>, Status> {
+        Err(Status::unimplemented("not faked"))
     }
 }
 

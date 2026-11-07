@@ -70,11 +70,13 @@ into `/run/hardened`.
    socket-activated ones on their first connection:
 
    ```text
+   firewall-controller       the image's default firewall (nftables), before the network
    network-controller        DHCPv4 on every physical NIC (IPv6 uses kernel SLAAC), resolv.conf
    └─ machine-controller     the platform (DMI, or hardened.platform=), metadata and user-data;
       │                      hostname, machine ID, sysctls, kernel modules, containerd's
       │                      configuration; then
       │                      configures, in order:
+      ├─ firewall-controller    user-data's firewall, the API's port let in
       ├─ network-controller     the DNS override
       ├─ storage-controller     /var: the state partition grown, unlocked with a key
       │                         trust-controller unseals (or formatted) when encrypted, mounted

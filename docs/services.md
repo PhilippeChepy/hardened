@@ -149,6 +149,36 @@ musl implements `send(2)` and `recv(2)` with `sendto` and `recvfrom`, and `clock
 Who starts when, and who configures whom, is in [Boot](architecture.md#boot);
 socket-activated services start on their first call.
 
+### firewall-controller
+
+The firewall: the nftables table `inet firewall-controller`, applied in one nf_tables transaction
+it speaks over netlink itself (no `nft`: its sandbox runs no other program). Its configuration is
+on or off and a policy (what comes in, what goes out, pings, logging); the table always lets in
+loopback, conntrack's replies, DHCP's and DHCPv6's replies and IPv6's neighbour and router
+discovery. At start it applies the configuration it kept
+(its runtime directory, or `/var/lib/firewall-controller` when the sandbox has it), else the
+image's default (`/usr/lib/firewall-controller/default.json`: off on hardened's targets), else its
+built-in one (on, nothing let in, drops logged). network-controller requires it, so the network fails
+closed: it is ready once the configuration is applied; a kept one the kernel refuses gives way to
+the default; if that fails too, it exits without being ready and is restarted, the network down.
+A kernel without nf_tables is the one exception: ready, its state `unavailable`.
+
+machine-controller sets [`settings.hardened.firewall`](user-data.md#settingshardenedfirewall)
+with `SetConfig` before anything else, adding the machine API's port. Its API also has
+`GetStatus` (the configuration, the table's rules read back with their counters, the packets
+blocked, what was blocked recently from its log rules' lines in `/dev/kmsg`), `ResetConfig`,
+`Reapply` (after `nft flush ruleset`) and `ListServices`. A configuration is validated, applied,
+then kept; if the kernel refuses it (`ABORTED`) or it cannot be kept (`INTERNAL`), the previous
+one stays, applied and kept. Changing methods are root's alone, as network-controller's are.
+
+- **Sandbox**: uid 65532 with `NET_ADMIN` (nf_tables' changes) and `SYSLOG` (reading `/dev/kmsg`
+  with `kernel.dmesg_restrict`). Families: `netlink`.
+- **System calls**: `bind` (its netlink sockets), `setsockopt` (their receive timeout), `rename`
+  (its state, replaced atomically). Netlink traffic uses `sendto` and `recvfrom`, granted with its
+  API.
+- **Binds**: its runtime directory; `/usr/lib/firewall-controller`, for the image's default;
+  `/dev/kmsg`, when there is one.
+
 ### network-controller
 
 DHCPv4 on every physical Ethernet interface, and `resolv.conf`. Ready after the first lease, or

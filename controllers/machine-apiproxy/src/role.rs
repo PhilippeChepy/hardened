@@ -53,6 +53,7 @@ impl Role {
             "/hardened.machine.v1.Machine/GetSettings",
             "/hardened.machine.v1.Machine/Storage",
             "/hardened.machine.v1.Machine/Time",
+            "/hardened.machine.v1.Machine/Firewall",
             "/hardened.services.v1.Services/List",
             "/hardened.services.v1.Services/Get",
             "/hardened.services.v1.Services/Logs",
@@ -97,6 +98,10 @@ mod tests {
         );
         assert_eq!(
             Role::required_for("/hardened.machine.v1.Machine/Time"),
+            Role::Reader
+        );
+        assert_eq!(
+            Role::required_for("/hardened.machine.v1.Machine/Firewall"),
             Role::Reader
         );
         assert_eq!(

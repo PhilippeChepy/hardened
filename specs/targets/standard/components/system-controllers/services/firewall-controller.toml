@@ -1,0 +1,31 @@
+description = "firewall-controller: the firewall's policy, applied as the nftables table inet firewall-controller"
+exec = ["/usr/bin/firewall-controller"]
+notify = true
+console = true
+runtime-directories = ["/run/firewall-controller"]
+
+[[sockets]]
+name = "api"
+path = "/run/firewall-controller/api.sock"
+allow = ["machine-controller"]
+
+[sandbox]
+user = 65532
+capabilities = ["NET_ADMIN", "SYSLOG"]
+socket-families = ["netlink"]
+syscalls = ["bind", "rename", "setsockopt", "socketpair"]
+limits.memory-mib = 32
+limits.tasks = 8
+limits.cpu-millicores = 100
+
+[[sandbox.binds]]
+path = "/run/firewall-controller"
+writable = true
+
+[[sandbox.binds]]
+path = "/usr/lib/firewall-controller"
+
+[[sandbox.binds]]
+path = "/dev/kmsg"
+device = true
+optional = true

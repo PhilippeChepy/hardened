@@ -7,6 +7,7 @@ package hardened.machine.v1;
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "hardened/apiproxy/v1/apiproxy.proto";
+import "hardened/firewall/v1/firewall.proto";
 import "hardened/kubelet/v1/kubelet.proto";
 import "hardened/network/v1/network.proto";
 import "hardened/nvidia/v1/nvidia.proto";
@@ -25,6 +26,8 @@ service Machine {
   rpc Storage(google.protobuf.Empty) returns (hardened.storage.v1.State);
   // Time synchronization: the clock's state, and the NTP client's last correction.
   rpc Time(google.protobuf.Empty) returns (hardened.time.v1.Status);
+  // The firewall: its configuration, the table's rules and counters, what was blocked recently.
+  rpc Firewall(google.protobuf.Empty) returns (hardened.firewall.v1.Status);
   rpc Reboot(google.protobuf.Empty) returns (google.protobuf.Empty);
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
@@ -81,6 +84,9 @@ message Settings {
   hardened.nvidia.v1.DevicePlugin nvidia_device_plugin = 13;
   // settings.hardened.nvidia-dra.
   hardened.nvidia.v1.Dra nvidia_dra = 14;
+  // settings.hardened.firewall, when set (otherwise firewall-controller applies the system's
+  // default).
+  optional hardened.firewall.v1.Config firewall = 15;
 }
 
 // settings.kernel.modules.<name>: the kernel never loads modules by itself.

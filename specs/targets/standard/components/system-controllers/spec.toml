@@ -1,6 +1,6 @@
 version = "workspace"
 kind = "application"
-summary = "The system controllers: network-controller, machine-controller, storage-controller, time-controller, trust-controller, workload-controller, workload-console and machine-apiproxy"
+summary = "The system controllers: firewall-controller, network-controller, machine-controller, storage-controller, time-controller, trust-controller, workload-controller, workload-console and machine-apiproxy"
 license = "Apache-2.0"
 homepage = "https://github.com/PhilippeChepy/hardened"
 purl = "pkg:github/PhilippeChepy/hardened@{version}#controllers"
@@ -12,6 +12,7 @@ depends-on = ["rust", "ca-certificates"]
 [[build]]
 cargo-build.workspace = "controllers"
 cargo-build.binaries = [
+    ["firewall-controller", "/usr/bin/firewall-controller"],
     ["network-controller", "/usr/bin/network-controller"],
     ["machine-controller", "/usr/bin/machine-controller"],
     ["storage-controller", "/usr/bin/storage-controller"],
@@ -21,6 +22,14 @@ cargo-build.binaries = [
     ["workload-console", "/usr/bin/workload-console"],
     ["machine-apiproxy", "/usr/bin/machine-apiproxy"],
 ]
+
+[[build]]
+write.to = "{dest}/usr/lib/serviced/services/firewall-controller.toml"
+write.file = "services/firewall-controller.toml"
+
+[[build]]
+write.to = "{dest}/usr/lib/firewall-controller/default.json"
+write.file = "files/usr/lib/firewall-controller/default.json"
 
 [[build]]
 write.to = "{dest}/usr/lib/serviced/services/network-controller.toml"

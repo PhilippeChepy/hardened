@@ -2,6 +2,7 @@ description = "network-controller: DHCPv4 on every physical Ethernet interface, 
 exec = ["/usr/bin/network-controller"]
 notify = true
 console = true
+requires = ["firewall-controller"]
 runtime-directories = ["/run/hardened", "/run/network-controller"]
 
 [[sockets]]

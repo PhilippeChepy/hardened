@@ -7,6 +7,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use controllers_helpers::Forwarder;
+use firewall_controller::firewall;
+use firewall_controller::firewall::firewall_controller_client::FirewallControllerClient;
 use libserviced::api;
 use libserviced::api::serviced_client::ServicedClient;
 use machine_controller::machine;
@@ -119,6 +121,11 @@ impl Machine for MachineService {
         TimeControllerClient::new(channel).get_status(()).await
     }
 
+    async fn firewall(&self, _: Request<()>) -> Result<Response<firewall::Status>, Status> {
+        let channel = self.controllers.firewall.channel();
+        FirewallControllerClient::new(channel).get_status(()).await
+    }
+
     async fn reboot(&self, _: Request<()>) -> Result<Response<()>, Status> {
         tracing::info!("reboot requested");
         self.serviced().reboot(()).await
@@ -203,6 +210,8 @@ mod tests {
         assert_eq!(storage.size_bytes, 1 << 30);
         let time = machine.time(()).await.unwrap().into_inner();
         assert!(time.clock.unwrap().synchronized);
+        let firewall = machine.firewall(()).await.unwrap().into_inner();
+        assert_eq!(firewall.state(), firewall::State::Active);
 
         let request = machine::LogsRequest {
             follow: true,

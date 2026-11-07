@@ -182,6 +182,50 @@ The PTP clock is the host's, read without the network: on KVM, it is as accurate
 own synchronization, and needs no server. Without one (another hypervisor), `ptp` leaves the clock
 unsynchronized.
 
+## `settings.hardened.firewall`
+
+The firewall: firewall-controller's nftables table `inet firewall-controller`, filtering what
+comes in (and, optionally, what goes out). Off unless set: the image's default
+(`/usr/lib/firewall-controller/default.json`) leaves it off, as inbound filtering on a server
+must name what the machine serves (its API, kubelet's, a CNI's tunnels).
+
+```toml
+[settings.hardened.firewall]
+enabled = true
+inbound = "drop"
+# kubelet's API, NodePorts, and flannel's VXLAN on a Kubernetes node.
+allowed-inbound = ["10250/tcp", "30000-32767/tcp", "8472/udp"]
+ping = true
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | boolean | (required) | `false`: no table, nothing filtered |
+| `inbound` | `drop`, `reject`, `accept` | `drop` | New incoming connections not allowed: dropped, refused (a TCP reset, an ICMP port unreachable), or accepted |
+| `allowed-inbound` | list of items | `[]` | What new incoming connections may reach, at most 64 |
+| `outbound` | `accept`, `drop` | `accept` | New outgoing connections not allowed |
+| `allowed-outbound` | list of items | `[]` | Where new outgoing connections may go with `outbound = "drop"`, at most 64 |
+| `ping` | boolean | `false` | Answer ICMP and ICMPv6 echo requests |
+| `log-drops` | boolean | `true` | Log what is blocked to the kernel's log (5 a second at most), which `hctl firewall` reports |
+
+An item is a service's name (`ssh`, `http`, `https`, `dns`, `ntp`, ...; their list is
+firewall-controller's `ListServices`) or ports: `PORT/PROTOCOL` or `FIRST-LAST/PROTOCOL`, with
+`tcp` or `udp` (`10250/tcp`, `30000-32767/tcp`). Each item appears once.
+
+Whatever the policy, the table lets in loopback, the replies to the machine's own connections
+(conntrack's established and related), DHCP's and DHCPv6's replies, ICMP errors and IPv6's
+neighbour and router discovery; it drops what conntrack finds invalid. **The machine's API is
+always let in**: machine-controller adds TCP to the port of
+[`settings.hardened.api`](#settingshardenedapi)'s `listen` to `allowed-inbound`, so no setting
+locks its operators out.
+
+The firewall is set once the network is up (machine-controller fetches user-data over it): the
+image's default applies from the first packet until then, network-controller starting only after
+it. On Kubernetes, the table filters what comes to the node itself (kubelet, NodePorts on the
+host's addresses, overlay tunnels), not what is forwarded to pods; kube-proxy's and the CNI's own
+tables still apply, and a packet must be accepted by every table. `hctl firewall` shows the state,
+the table's rules with their counters, and what was blocked recently.
+
 ## `settings.kubernetes`
 
 Present, kubelet runs, so the machine joins a Kubernetes cluster as a node. Only images that ship

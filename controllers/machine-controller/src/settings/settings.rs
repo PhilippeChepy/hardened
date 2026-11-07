@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use controllers_helpers::{Hostname, WorkloadName};
+use firewall_controller::FirewallConfig;
 use kubelet_controller::KubeletConfig;
 use machine_apiproxy::ApiConfig;
 use network_controller::DnsSettings;
@@ -71,6 +72,10 @@ pub struct HardenedSettings {
     /// `[settings.hardened.api]`: the API, served by machine-apiproxy when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiConfig>,
+    /// `[settings.hardened.firewall]`: the firewall, set by machine-controller once the network
+    /// is up; firewall-controller applies the system's default until then, and without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall: Option<FirewallConfig>,
     /// `[settings.hardened.storage]`: the state partition.
     #[serde(default)]
     pub storage: StorageSettings,

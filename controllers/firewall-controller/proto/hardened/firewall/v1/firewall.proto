@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+// firewall-controller's API (/run/firewall-controller/api.sock): the firewall's policy, which it
+// applies as the nftables table `inet firewall-controller`, and what that table counted and
+// blocked. Changes are taken from the root processes of the services the socket allows.
+package hardened.firewall.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service FirewallController {
+  // The configuration, the table's state and counters, and what was blocked recently.
+  rpc GetStatus(google.protobuf.Empty) returns (Status);
+  // Replaces the configuration, applied in one nf_tables transaction and kept. When it cannot be
+  // applied (ABORTED), the previous one stays, applied and kept.
+  rpc SetConfig(Config) returns (Status);
+  // Back to the default configuration (the system's, or the built-in one), applied the same way.
+  rpc ResetConfig(google.protobuf.Empty) returns (Status);
+  // Applies the kept configuration again: after `nft flush ruleset`, for instance.
+  rpc Reapply(google.protobuf.Empty) returns (Status);
+  // The services an Allowed may name, and their ports.
+  rpc ListServices(google.protobuf.Empty) returns (ServiceList);
+}
+
+// What happens to new incoming connections not allowed.
+enum Inbound {
+  INBOUND_UNSPECIFIED = 0;
+  // Dropped silently.
+  INBOUND_DROP = 1;
+  // Refused: a TCP reset, an ICMP port unreachable otherwise.
+  INBOUND_REJECT = 2;
+  // Accepted: the allowed list does not matter.
+  INBOUND_ACCEPT = 3;
+}
+
+// What happens to new outgoing connections not allowed.
+enum Outbound {
+  OUTBOUND_UNSPECIFIED = 0;
+  // Accepted: the allowed list does not matter.
+  OUTBOUND_ACCEPT = 1;
+  // Dropped (DHCP, IPv6's neighbour discovery and loopback still go out).
+  OUTBOUND_DROP = 2;
+}
+
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_TCP = 1;
+  PROTOCOL_UDP = 2;
+}
+
+// What the firewall lets through. Loopback, the replies to the machine's own connections
+// (conntrack's established and related), DHCP's and DHCPv6's replies and IPv6's neighbour and
+// router discovery always are; packets conntrack finds invalid never are. Without a kept
+// configuration (the first boot), the system's default applies, or else the built-in one: on,
+// nothing let in, drops logged.
+message Config {
+  // Off: the table is removed, nothing is filtered.
+  bool enabled = 1;
+  Inbound inbound = 2;
+  // What new incoming connections may reach, whatever `inbound` says; at most 64.
+  repeated Allowed allowed_inbound = 3;
+  Outbound outbound = 4;
+  // Where new outgoing connections may go with OUTBOUND_DROP; at most 64.
+  repeated Allowed allowed_outbound = 5;
+  // Answer pings (ICMP and ICMPv6 echo requests).
+  bool ping = 6;
+  // Log what is blocked (rate-limited) to the kernel's log, which the status reports.
+  bool log_drops = 7;
+}
+
+// A service by name, or ports.
+message Allowed {
+  oneof what {
+    // A name of ListServices: "ssh".
+    string service = 1;
+    Ports ports = 2;
+  }
+}
+
+// A port, or a range of them.
+message Ports {
+  Protocol protocol = 1;
+  // 1 to 65535, first <= last; first == last for one port.
+  uint32 first = 2;
+  uint32 last = 3;
+}
+
+// Where the firewall stands.
+enum State {
+  STATE_UNSPECIFIED = 0;
+  // Disabled: the table is absent.
+  STATE_OFF = 1;
+  // Enabled, and the kernel has the table as applied.
+  STATE_ACTIVE = 2;
+  // Enabled, but the table could not be applied or went missing (flushed): `error` says why.
+  STATE_NOT_APPLIED = 3;
+  // The kernel has no nf_tables (NETLINK_NETFILTER): nothing can be filtered.
+  STATE_UNAVAILABLE = 4;
+}
+
+message Status {
+  Config config = 1;
+  State state = 2;
+  // Why the configuration is not applied, or the last error reading the table.
+  optional string error = 3;
+  // When the configuration was last applied.
+  optional google.protobuf.Timestamp applied_at = 4;
+  // The table's rules as the kernel has them, in order, with their counters (those without a
+  // counter count 0). Empty when off.
+  repeated Rule rules = 5;
+  // The packets refused by the policy (the drop and reject rules' counters, both directions).
+  uint64 blocked_packets = 6;
+  // What was blocked recently, by the log lines of `log_drops`: each direction, protocol, source,
+  // destination and port once, the most recent first, up to 32.
+  repeated Blocked recent_blocked = 7;
+  // The ruleset applied, in nft's syntax: what `nft list table inet firewall-controller` shows,
+  // but the counters' values. Empty when off.
+  string ruleset = 8;
+  // nf_tables' generation after the last transaction.
+  uint32 generation = 9;
+}
+
+// A rule of the table.
+message Rule {
+  // input or output.
+  string chain = 1;
+  // What it is for: "loopback", "established", "invalid", "icmp", "icmpv6", "dhcp", "ping",
+  // a service's name ("ssh"), ports ("8080/tcp", "6000-6010/udp"), "log", "reject" or "drop".
+  string comment = 2;
+  uint64 packets = 3;
+  uint64 bytes = 4;
+  // The kernel's handle (`nft -a list table inet firewall-controller`).
+  uint64 handle = 5;
+}
+
+message Blocked {
+  // Incoming (input chain) or outgoing (output chain).
+  bool outbound = 1;
+  // The interface it came in on (incoming) or was to go out of (outgoing).
+  string interface = 2;
+  // "tcp", "udp", "icmp", "icmpv6", or another protocol's number.
+  string protocol = 3;
+  string source = 4;
+  string destination = 5;
+  // The destination port (TCP, UDP), if any.
+  optional uint32 port = 6;
+  // How many times, and the last one.
+  uint64 count = 7;
+  google.protobuf.Timestamp last = 8;
+}
+
+message Service {
+  // "ssh".
+  string name = 1;
+  // "Secure Shell (remote login)".
+  string description = 2;
+  repeated Ports ports = 3;
+}
+
+message ServiceList {
+  repeated Service services = 1;
+}
