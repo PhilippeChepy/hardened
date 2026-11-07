@@ -1,0 +1,16 @@
+Build the public malloc entry points that call the allocator's (free, realloc,
+calloc) without LTO: under LTO they are inlined into libc's own callers (fclose,
+getdelim...), which then bypass a program's replacement malloc, as musl allows,
+and hand its blocks to mimalloc.
+
+--- a/Makefile
++++ b/Makefile
+@@ -80,6 +80,8 @@
+ 
+ obj/ldso/dlstart.lo: CFLAGS_ALL += -fno-lto
+ 
++obj/src/malloc/free.lo obj/src/malloc/realloc.lo obj/src/malloc/calloc.lo: CFLAGS_ALL += -fno-lto
++
+ ifeq ($(ARCH),)
+ 
+ all:

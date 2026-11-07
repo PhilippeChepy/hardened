@@ -4,7 +4,8 @@
 # Patches: musl's fixes since 1.2.6 (`001`-`008`, upstream commits) and the CVE-2026-107891 fix
 # (regcomp), as Chimera carries them; Chimera's plumbing for an external allocator (`0001`) and
 # LTO exceptions (`lto.patch`); and ours for mimalloc 3: more per-thread pointers in musl
-# (`0100`), its object without LTO (`0101`) and a libc build of mimalloc
+# (`0100`), its object without LTO (`0101`), the public free/realloc/calloc without LTO so libc's
+# own calls reach a program's replacement malloc (`0102`), and a libc build of mimalloc
 # (`mimalloc-libc.patch`), with the glue in `files/mimalloc.c`. Chimera's are from
 # <https://github.com/chimera-linux/cports> at `c93640e5` (main/musl).
 
@@ -54,6 +55,7 @@ patch.files = [
     "patches/lto.patch",
     "patches/0100-malloc-tls-extra.patch",
     "patches/0101-mimalloc-no-lto.patch",
+    "patches/0102-malloc-wrappers-no-lto.patch",
     "patches/mimalloc-libc.patch",
 ]
 
